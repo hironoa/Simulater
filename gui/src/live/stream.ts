@@ -4,12 +4,15 @@ import type { SimState } from "./api";
 
 export interface HelloMessage { periodMs?: number; func?: string; names: string[] }
 export interface SamplesMessage { step0: number; names: string[]; rows: (number | null)[][] }
+export interface ValuesMessage { step: number; names: string[]; values: (number | null)[] }
 export type StateMessage = Partial<SimState> & { periodMs?: number; func?: string };
 
 export interface StreamHandlers {
   hello: (msg: HelloMessage) => void;
   samples: (msg: SamplesMessage) => void;
   state: (msg: StateMessage) => void;
+  /** 監視変数の現在値（ステップは進まない。記録や波形には足さない） */
+  values?: (msg: ValuesMessage) => void;
   error?: (message: string) => void;
 }
 
@@ -43,6 +46,16 @@ export function dispatchStreamEvent(event: string, data: string, handlers: Strea
       const rows = (msg.rows as unknown[]).filter(Array.isArray).map((row) =>
         (row as unknown[]).map((v) => (typeof v === "number" && Number.isFinite(v) ? v : null)));
       handlers.samples({ step0: msg.step0, names: msg.names.map(String), rows });
+      return true;
+    }
+    case "values": {
+      if (typeof msg.step !== "number" || !Array.isArray(msg.names) || !Array.isArray(msg.values)
+        || msg.names.length !== msg.values.length) {
+        handlers.error?.("values: 形式が違います");
+        return false;
+      }
+      const values = (msg.values as unknown[]).map((v) => (typeof v === "number" && Number.isFinite(v) ? v : null));
+      handlers.values?.({ step: msg.step, names: msg.names.map(String), values });
       return true;
     }
     case "state": {
@@ -81,7 +94,7 @@ export function openStream(
   create: (url: string) => EventSourceLike = (u) => new EventSource(u) as unknown as EventSourceLike,
 ) {
   const es = create(url);
-  for (const type of ["hello", "samples", "state"]) {
+  for (const type of ["hello", "samples", "state", "values"]) {
     es.addEventListener(type, (ev) => dispatchStreamEvent(type, String(ev.data), handlers));
   }
   es.onopen = () => handlers.open?.();

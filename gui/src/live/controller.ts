@@ -110,6 +110,11 @@ export function createLiveController(deps: LiveControllerDeps = {}) {
       if (res.restarted) waveform.setState({ cursors: [], hoverCursor: null });
       if (!store.getState().sim.running) scheduleCommit();
     },
+    values: (msg) => {
+      // 現在値の表示だけを更新する（記録・波形・ステップ番号は変えない）
+      msg.names.forEach((n, i) => { pendingValues[n] = msg.values[i] ?? null; });
+      if (msg.names.length) pendingDirty = true;
+    },
     state: (msg) => {
       const prev = store.getState().sim;
       const next = { ...prev, ...msg };

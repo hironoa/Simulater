@@ -166,16 +166,26 @@ function broadcastState(force = false) {
   broadcast("state", msg);
 }
 const helloMsg = () => ({ periodMs, func, names: watch });
+// 監視変数の現在値（ステップは進めない）。約 50ms ごとの送信でまとめ、最後の値だけを送る
+const valuesMsg = () => ({ step, names: watch, values: watch.map((n) => (leafIndex.has(n) ? get(n) : null)) });
+let valuesDirty = false;
+const markValues = () => { valuesDirty = true; };
 function flushSamples() {
-  if (!pendingRows.length) return;
-  broadcast("samples", { step0: pendingStep0, names: watch, rows: pendingRows });
-  pendingRows = [];
-  pendingStep0 = null;
+  if (pendingRows.length) {
+    broadcast("samples", { step0: pendingStep0, names: watch, rows: pendingRows });
+    pendingRows = [];
+    pendingStep0 = null;
+  }
+  if (valuesDirty) {
+    valuesDirty = false;
+    broadcast("values", valuesMsg());
+  }
 }
 function setWatch(names) {
   flushSamples();
   watch = names;
   broadcast("hello", helloMsg());
+  markValues();
 }
 
 // ---- 周期タイマ ----
@@ -288,7 +298,7 @@ const server = http.createServer(async (req, res) => {
         case "pause": running = false; stepBudget = 0; flushSamples(); break;
         case "step": running = true; stepBudget = Math.max(1, Math.floor(Number(body.steps ?? 1))); break;
         case "reset":
-          flushSamples(); resetValues(); step = 0; record = []; pending.clear(); csvPlay = null; prevButton = 0; rebase();
+          flushSamples(); resetValues(); step = 0; record = []; pending.clear(); csvPlay = null; prevButton = 0; rebase(); markValues();
           break;
         case undefined: break;
         default: return json(res, 400, { error: `cmd ${body.cmd} は使えません` });
@@ -313,7 +323,7 @@ const server = http.createServer(async (req, res) => {
       inputNames.add(body.name);
       if (body.hold) holds.set(body.name, body.value);
       else { holds.delete(body.name); pending.set(body.name, body.value); }
-      if (!running) writeVar(body.name, body.value); // 停止中も値が見えるように
+      if (!running) { writeVar(body.name, body.value); markValues(); } // 停止中も値が見えるように
       broadcastState();
       return json(res, 200, { ok: true });
     }
@@ -336,6 +346,7 @@ const server = http.createServer(async (req, res) => {
       clients.add(res);
       send(res, "hello", helloMsg());
       send(res, "state", stateMsg());
+      send(res, "values", valuesMsg());
       req.on("close", () => clients.delete(res));
       return;
     }

@@ -7,7 +7,7 @@ import { initialLiveState, useLiveStore } from "./liveStore";
 import { useWaveformStore, LIVE_FILE_NAME } from "../store/useWaveformStore";
 
 function handlers() {
-  return { hello: vi.fn(), samples: vi.fn(), state: vi.fn(), error: vi.fn() } satisfies StreamHandlers;
+  return { hello: vi.fn(), samples: vi.fn(), state: vi.fn(), values: vi.fn(), error: vi.fn() } satisfies StreamHandlers;
 }
 
 describe("dispatchStreamEvent", () => {
@@ -19,6 +19,17 @@ describe("dispatchStreamEvent", () => {
     expect(h.samples).toHaveBeenCalledWith({ step0: 10, names: ["a", "b"], rows: [[1, null], [2, null]] });
     dispatchStreamEvent("state", '{"running":true,"step":3,"speed":0,"holds":[{"name":"x","value":1}],"overrun":false}', h);
     expect(h.state).toHaveBeenCalledWith({ running: true, step: 3, speed: 0, holds: [{ name: "x", value: 1 }], overrun: false });
+  });
+
+  it("values を検証して渡し、形式が違えば捨てる", () => {
+    const h = handlers();
+    expect(dispatchStreamEvent("values", '{"step":4,"names":["a","b"],"values":[0,"x"]}', h)).toBe(true);
+    expect(h.values).toHaveBeenCalledWith({ step: 4, names: ["a", "b"], values: [0, null] });
+    expect(dispatchStreamEvent("values", '{"names":["a"],"values":[1]}', h)).toBe(false);
+    expect(dispatchStreamEvent("values", '{"step":1,"names":["a"],"values":[]}', h)).toBe(false);
+    expect(dispatchStreamEvent("values", '{"step":1,"names":"a","values":[1]}', h)).toBe(false);
+    expect(dispatchStreamEvent("values", "[1]", h)).toBe(false);
+    expect(h.values).toHaveBeenCalledTimes(1);
   });
 
   it("壊れたメッセージや未知のイベントは捨てる", () => {
@@ -135,6 +146,26 @@ describe("ライブ制御（SSE の取り込み）", () => {
     es.emit("samples", { step0: 1, names: ["a"], rows: [[6]] });
     await vi.advanceTimersByTimeAsync(300);
     expect(useWaveformStore.getState().chartData?.seriesMap.a).toEqual([5, 6]);
+    live.stop();
+  });
+
+  it("values は現在値だけを更新し、記録・波形・ステップ番号は変えない", async () => {
+    const live = makeController();
+    await live.start();
+    const es = FakeEventSource.last!;
+    es.emit("state", { running: false, step: 7 });
+    es.emit("samples", { step0: 0, names: ["a"], rows: [[1]] });
+    live.flushValues();
+    expect(useLiveStore.getState().values).toEqual({ a: 1 });
+    const stepBefore = useLiveStore.getState().sim.step;
+    es.emit("values", { step: 1, names: ["a", "b"], values: [0, 42] });
+    es.emit("values", { step: 1, names: ["a"], values: ["bad"] }); // 読めない値は null
+    es.emit("values", { names: ["a"], values: [9] }); // 形式違いは無視
+    await vi.advanceTimersByTimeAsync(300);
+    expect(useLiveStore.getState().values).toEqual({ a: null, b: 42 });
+    expect(record.length).toBe(1);
+    expect(useLiveStore.getState().sim.step).toBe(stepBefore);
+    expect(useWaveformStore.getState().chartData?.seriesMap.a).toEqual([1]);
     live.stop();
   });
 
