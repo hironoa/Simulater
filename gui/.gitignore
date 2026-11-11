@@ -1,0 +1,12 @@
+node_modules
+coverage/
+.DS_Store
+*.log
+.env*
+Icon?
+# ビルド成果物のうち、sim が配る単一 HTML（dist/sim_gui.html）だけはコミットする
+dist/*
+!dist/sim_gui.html
+
+# issue-watch などが作る作業用の worktree
+.claude/worktrees/

@@ -1,0 +1,45 @@
+# 波形比較の動作確認用の信号定義。engine_test_A.csv / engine_test_B.csv と一緒に使う。
+
+inactive:
+  signal: PIG
+  when: 0
+  label: IG OFF
+
+PIG:
+  alias: IG
+  0: OFF
+  1: ON
+
+EngineSpeed:
+  alias: エンジン回転数
+  lsb: 2^-2
+  unit: rpm
+
+WaterTemp:
+  alias: 水温
+  unit: degC
+
+JudgeFlag:
+  alias: 判定フラグ
+  0: OFF
+  1: ON
+
+CurrentGear:
+  alias: ギア段
+  1: 1st
+  2: 2nd
+  3: 3rd
+  4: 4th
+  5: 5th
+
+DriveMode:
+  alias: 走行モード
+  0: Eco
+  1: Normal
+  2: Sport
+
+DiagCounter:
+  alias: 診断カウンタ
+
+OldSignal:
+  alias: 旧信号

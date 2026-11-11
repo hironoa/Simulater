@@ -1,0 +1,498 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>波形比較UI案</title>
+  <script src="https://cdn.tailwindcss.com/3.4.16"></script>
+  <style>
+    body { font-family: ui-sans-serif, system-ui, sans-serif; }
+    .mono { font-family: ui-monospace, "SF Mono", Menlo, monospace; }
+    .tbtn { padding: 4px 10px; font-size: 12px; border-radius: 4px; white-space: nowrap; }
+    #tip { pointer-events: none; }
+  </style>
+</head>
+<body class="bg-slate-100 text-slate-800">
+
+<div class="max-w-[1400px] mx-auto p-4 space-y-3">
+  <div>
+    <h1 class="text-lg font-bold">波形比較（A と B の CSV）UI モック</h1>
+    <p class="text-xs text-gray-500 mt-1">
+      A（比較のもとにする CSV）と B（比べる CSV）を重ねて表示した画面のイメージです。データは架空で、判定フラグとギア段の判定時間を 50 ms 延ばした想定です。
+      ツールバーのボタン（比較・差分の移動・マーカー・ラベル）、差分へのマウスオーバー、波形上のマウス移動（Δ の表示と計測表の Hov 行）が動きます。
+    </p>
+  </div>
+
+  <!-- アプリ画面 -->
+  <div class="bg-white border border-gray-300 rounded overflow-hidden shadow-sm">
+    <!-- ツールバー -->
+    <div class="bg-[#1e2a44] text-white flex flex-wrap items-center gap-2 px-3 py-2">
+      <span class="font-bold text-sm mr-2">WinAMS 波形ビューア</span>
+      <span class="tbtn border border-slate-500">開く ▾</span>
+      <span class="tbtn border border-slate-500">保存 ▾</span>
+      <div class="flex items-center gap-1 bg-slate-900/60 rounded px-2 py-1 text-xs">
+        <span id="prevFile" class="flex items-center gap-1 mr-2 border-r border-slate-600 pr-2">
+          <span class="text-slate-400">A</span><span class="mono border-b border-dashed border-slate-400">engine_test_old.csv</span>
+          <span class="text-slate-400 cursor-pointer" title="比較を終了">✕</span>
+        </span>
+        <span class="text-slate-400">B</span><span class="mono">engine_test.csv</span>
+      </div>
+      <button id="cmpBtn" class="tbtn font-bold"></button>
+      <div id="cmpTools" class="flex items-center gap-1">
+        <button id="prevDiff" class="tbtn bg-slate-700 hover:bg-slate-600">◀</button>
+        <span id="diffPos" class="tbtn bg-slate-900/60 mono min-w-[92px] text-center"></span>
+        <button id="nextDiff" class="tbtn bg-slate-700 hover:bg-slate-600">▶</button>
+        <button id="fitAll" class="tbtn bg-slate-700 hover:bg-slate-600">全体</button>
+        <select id="filter" class="tbtn bg-slate-700 text-white border-0">
+          <option value="all">差分: すべて</option>
+          <option value="value">差分: 値の違いのみ</option>
+        </select>
+        <label class="tbtn bg-slate-700 flex items-center gap-1 cursor-pointer"><input id="onlyDiff" type="checkbox"> 差分のある信号だけ</label>
+      </div>
+      <span class="tbtn bg-blue-600 ml-auto">状態: ON</span>
+      <button id="markerBtn" class="tbtn"></button>
+      <button id="labelBtn" class="tbtn"></button>
+      <span class="tbtn bg-blue-600">計測表</span>
+    </div>
+
+    <div class="flex">
+      <!-- サイドバー -->
+      <div class="w-[250px] shrink-0 border-r border-gray-200 p-3 text-sm">
+        <div class="font-bold mb-2">信号設定</div>
+        <div id="sigList" class="space-y-0.5"></div>
+        <div id="diffSummary" class="mt-4 text-xs text-gray-500 border-t pt-2"></div>
+      </div>
+
+      <!-- チャート -->
+      <div class="flex-1 min-w-0 p-2">
+        <div id="legend" class="flex flex-wrap gap-4 text-[11px] text-gray-500 px-2 pb-1"></div>
+        <div id="chartWrap" class="relative">
+          <svg id="chart" class="block w-full"></svg>
+          <div id="tip" class="absolute hidden bg-slate-800 text-white text-xs rounded px-2 py-1 shadow mono whitespace-nowrap z-10"></div>
+        </div>
+        <div id="minimap" class="relative h-5 mx-[20px] ml-[150px] bg-slate-100 rounded mt-1"></div>
+      </div>
+    </div>
+
+    <!-- 計測表 -->
+    <div class="border-t border-gray-200 p-2 overflow-x-auto">
+      <table id="measure" class="text-xs mono border-collapse"></table>
+    </div>
+  </div>
+</div>
+
+<script>
+const T_END = 3000, DT = 5;
+const STATE_COLORS = ["#dcfce7", "#fef3c7", "#ffe4e6", "#dbeafe", "#ede9fe", "#ccfbf1"];
+const STATE_TEXT   = ["#166534", "#92400e", "#9f1239", "#1e40af", "#5b21b6", "#115e59"];
+
+const rpmBase = t => 1500 + 1100 * Math.sin(t / T_END * 2 * Math.PI * 2.2);
+const sigs = [
+  { id: "rpm", name: "エンジン回転数", unit: "rpm", kind: "analog", color: "#f59e0b", min: 0, max: 3000,
+    cur: rpmBase,
+    prev: t => rpmBase(t) - (t > 1100 && t < 1350 ? 180 * Math.sin((t - 1100) / 250 * Math.PI) : 0) },
+  { id: "wt", name: "水温", unit: "degC", kind: "analog", color: "#06b6d4", min: 70, max: 100,
+    cur: t => 80 + t / T_END * 14 + 1.5 * Math.sin(t / 37), prev: null },
+  { id: "judge", name: "判定フラグ", kind: "state", color: "#ec4899", states: { 0: "OFF", 1: "ON" },
+    cur: [[0, 0], [1050, 1], [2050, 0]], prev: [[0, 0], [1000, 1], [2000, 0]] },
+  { id: "gear", name: "ギア段", kind: "state", color: "#f97316",
+    states: { 1: "1st", 2: "2nd", 3: "3rd", 4: "4th", 5: "5th" },
+    cur: [[0, 1], [300, 2], [950, 3], [1650, 4], [2300, 5]],
+    prev: [[0, 1], [300, 2], [900, 3], [1600, 4], [2300, 5], [2700, 4]] },
+  { id: "mode", name: "走行モード", kind: "state", color: "#14b8a6", states: { 0: "Eco", 1: "Normal", 2: "Sport" },
+    cur: [[0, 0], [700, 1], [1400, 2], [2200, 1]], prev: null },
+  { id: "diag", name: "診断カウンタ", unit: "", kind: "analog", color: "#8b5cf6", min: 0, max: 12, onlyCur: true,
+    cur: t => Math.floor(t / 250), prev: null },
+];
+sigs.forEach(s => { if (s.prev === null && !s.onlyCur) s.prev = s.cur; });
+
+// タイミングのずれは t0 = A の切れ目、t1 = B の切れ目
+const diffs = [
+  { sig: "gear",  type: "t", t0: 900,  t1: 950,  text: "2nd → 3rd　A 900 ms → B 950 ms　50 ms 遅れ" },
+  { sig: "judge", type: "t", t0: 1000, t1: 1050, text: "OFF → ON　A 1000 ms → B 1050 ms　50 ms 遅れ" },
+  { sig: "rpm",   type: "v", t0: 1100, t1: 1350, text: "値の違い　1100〜1350 ms" },
+  { sig: "gear",  type: "t", t0: 1600, t1: 1650, text: "3rd → 4th　A 1600 ms → B 1650 ms　50 ms 遅れ" },
+  { sig: "judge", type: "t", t0: 2000, t1: 2050, text: "ON → OFF　A 2000 ms → B 2050 ms　50 ms 遅れ" },
+  { sig: "gear",  type: "v", t0: 2700, t1: 3000, label: "A 4th → B 5th", text: "値の違い　2700 ms〜終端　A 4 (4th) / B 5 (5th)" },
+];
+const shiftText = d => `${Math.abs(d.t1 - d.t0)} ms ${d.t1 >= d.t0 ? "遅れ" : "早い"}`;
+
+const st = { compare: true, filter: "all", onlyDiff: false, view: [0, T_END], focus: -1, hov: null,
+             markers: false, labels: "off" };
+const cursors = [{ name: "C1", t: 1025 }, { name: "C2", t: 1225 }, { name: "C3", t: 2850 }];
+
+const stepVal = (arr, t) => { let v = arr[0][1]; for (const [tt, vv] of arr) if (t >= tt) v = vv; return v; };
+const valAt = (s, which, t) => {
+  const src = s[which]; if (!src) return null;
+  return s.kind === "state" ? stepVal(src, t) : src(t);
+};
+const visibleDiffs = () => diffs.filter(d => st.filter === "all" || d.type === "v");
+const sigDiffs = id => visibleDiffs().filter(d => d.sig === id);
+const visibleSigs = () => sigs.filter(s => !(st.compare && st.onlyDiff) || s.onlyCur || sigDiffs(s.id).length);
+const round2 = v => Math.round(v * 100) / 100;
+
+// ---------- chart ----------
+const svg = document.getElementById("chart"), NS = "http://www.w3.org/2000/svg";
+const PX = 150, PR = 20;
+function el(tag, attrs, parent = svg, text) {
+  const e = document.createElementNS(NS, tag);
+  for (const k in attrs) e.setAttribute(k, attrs[k]);
+  if (text !== undefined) e.textContent = text;
+  parent.appendChild(e); return e;
+}
+// 文字の後ろに白い下地を敷く。stroke を渡すと枠付きの札になる
+function tag(parent, px, cy, text, color, { stroke = null, bold = false, size = 11, center = false } = {}) {
+  const g = el("g", {}, parent);
+  const r = el("rect", { y: cy - 8, height: 16, rx: stroke ? 8 : 2, fill: "#fff", "fill-opacity": stroke ? 1 : 0.85,
+    stroke: stroke || "none", "stroke-width": 1 }, g);
+  const t = el("text", { x: px, y: cy + 4, "font-size": size, fill: color, "font-weight": bold ? 600 : 400 }, g, text);
+  const pad = stroke ? 7 : 3, w = t.getComputedTextLength() + pad * 2;
+  const W = svg.clientWidth || 1000, left = Math.max(PX, Math.min(center ? px - w / 2 : px, W - PR - w));
+  t.setAttribute("x", left + pad);
+  r.setAttribute("x", left); r.setAttribute("width", w);
+}
+function render() {
+  const W = document.getElementById("chartWrap").clientWidth;
+  const PW = W - PX - PR, [v0, v1] = st.view;
+  const x = t => PX + (t - v0) / (v1 - v0) * PW;
+  svg.innerHTML = "";
+  const defs = el("defs", {});
+  defs.innerHTML = `<clipPath id="clip"><rect x="${PX}" y="0" width="${PW}" height="2000"/></clipPath>
+    <pattern id="hatch" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+      <rect width="6" height="6" fill="rgba(239,68,68,0.10)"/><line x1="0" y1="0" x2="0" y2="6" stroke="#ef4444" stroke-width="1.4" opacity=".55"/></pattern>
+    <pattern id="hatchL" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+      <line x1="0" y1="0" x2="0" y2="6" stroke="#ef4444" stroke-width="1" opacity=".3"/></pattern>
+    <marker id="dim" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M1 1L9 5L1 9z" fill="#b45309"/></marker>
+    <marker id="dimC" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M1 1L9 5L1 9z" fill="#475569"/></marker>`;
+
+  // マーカー表示中は、上にカーソル間の Δt を出す余白を取る
+  const TOP = st.markers ? 40 : 8;
+  let y = TOP;
+  const lanes = [];
+  for (const s of visibleSigs()) {
+    // 状態は比較中、A と B を同じ高さの上下 2 段にする（上が A、下が B）
+    const strip = st.compare && s.kind === "state" && s.prev ? 24 : 0;
+    const h = s.kind === "analog" ? 66 : strip ? 22 : 44;
+    const dTrack = st.compare && s.kind === "analog" && sigDiffs(s.id).some(d => d.type === "v") ? 20 : 0;
+    const dimRow = st.compare && sigDiffs(s.id).some(d => d.type === "t") ? 26 : 0;
+    lanes.push({ s, top: y, strip, y0: y + strip, h, dTrack, dimRow });
+    y += strip + h + 14 + dTrack + dimRow;
+  }
+  const H = y + 22;
+  svg.setAttribute("height", H);
+  const plot = el("g", { "clip-path": "url(#clip)" });
+  const over = el("g", {});
+  const labels = el("g", {});
+
+  for (const L of lanes) {
+    const { s, top, strip, y0, h } = L;
+    const yv = v => y0 + h - (v - s.min) / (s.max - s.min) * (h - 6) - 3;
+    const keys = s.states ? Object.keys(s.states).map(Number) : [];
+    const pad = strip ? 3 : 4;
+    const ys = (v, base = y0) => base + h - pad - (keys.indexOf(v) / Math.max(1, keys.length - 1)) * (h - pad * 2);
+    L.yOf = (which, t) => { const v = valAt(s, which, t); return s.kind === "analog" ? yv(v) : ys(v, which === "prev" && strip ? top : y0); };
+
+    // 信号名
+    el("text", { x: 8, y: (top + y0 + h) / 2 + 4, "font-size": 12, fill: s.color, "font-weight": 600 }, over,
+       s.name + (s.unit ? ` [${s.unit}]` : ""));
+    if (s.onlyCur && st.compare) el("text", { x: 8, y: y0 + h / 2 + 19, "font-size": 10, fill: "#64748b" }, over, "B のみ");
+    el("line", { x1: PX, x2: PX + PW, y1: y0 + h, y2: y0 + h, stroke: "#e5e7eb" }, plot);
+
+    // 差分: 薄い下地（波形の下に敷く）
+    if (st.compare) for (const d of sigDiffs(s.id)) {
+      const isFocus = visibleDiffs()[st.focus] === d;
+      if (s.kind === "state" && strip) {}
+      else if (d.type === "t") el("rect", { x: x(d.t0), y: top, width: Math.max(2, x(d.t1) - x(d.t0)), height: strip + h, fill: "rgba(245,158,11,0.14)" }, plot);
+      else if (s.kind === "state") el("rect", { x: x(d.t0), y: y0, width: Math.max(2, x(d.t1) - x(d.t0)), height: h, fill: "url(#hatch)" }, plot);
+      if (isFocus) el("rect", { x: x(d.t0) - 4, y: top - 4, width: Math.max(2, x(d.t1) - x(d.t0)) + 8, height: strip + h + L.dimRow + 8, fill: "none", stroke: "#1e293b", "stroke-width": 1.5, "stroke-dasharray": "4 2", rx: 3 }, plot);
+    }
+
+    if (s.kind === "analog") {
+      const pts = f => { const a = []; for (let t = Math.max(0, v0 - DT); t <= Math.min(T_END, v1 + DT); t += DT) a.push(`${x(t).toFixed(1)},${yv(f(t)).toFixed(1)}`); return a.join(" "); };
+      if (st.compare && s.prev) el("polyline", { points: pts(s.prev), fill: "none", stroke: s.color, "stroke-width": 2.4, "stroke-dasharray": "6 4", opacity: 0.45 }, plot);
+      el("polyline", { points: pts(s.cur), fill: "none", stroke: s.color, "stroke-width": 1.6 }, plot);
+    } else {
+      const segs = arr => arr.map(([t, v], i) => [t, i + 1 < arr.length ? arr[i + 1][0] : T_END, v]);
+      const ci = v => keys.indexOf(v) % STATE_COLORS.length;
+      // 背景と文字、段差の線。比較中は上の段に A、下の段に B を同じ描き方で並べる
+      const row = (arr, base, isA) => {
+        for (const [a, b, v] of segs(arr)) {
+          el("rect", { x: x(a), y: base, width: Math.max(0, x(b) - x(a)), height: h, fill: STATE_COLORS[ci(v)], opacity: 0.75 }, plot);
+          const w = x(b) - x(a), cx = (Math.max(x(a), PX) + Math.min(x(b), PX + PW)) / 2;
+          if (w > 34) el("text", { x: cx, y: base + h / 2 + 4, "font-size": 11, "text-anchor": "middle", fill: STATE_TEXT[ci(v)] }, plot, s.states[v]);
+        }
+        let p = []; segs(arr).forEach(([a, b, v]) => { p.push(`${x(a)},${ys(v, base)}`, `${x(b)},${ys(v, base)}`); });
+        el("polyline", { points: p.join(" "), fill: "none", stroke: s.color, "stroke-width": isA ? 1.2 : 1.5, opacity: isA ? 0.6 : 1 }, plot);
+      };
+      if (st.compare && strip) {
+        row(s.prev, top, true);
+        el("text", { x: PX - 6, y: top + h / 2 + 4, "font-size": 10, fill: "#94a3b8", "text-anchor": "end" }, over, "A");
+        el("text", { x: PX - 6, y: y0 + h / 2 + 4, "font-size": 10, fill: "#94a3b8", "text-anchor": "end" }, over, "B");
+      }
+      row(s.cur, y0, false);
+    }
+
+    // 差分: 印（波形の上に描く）
+    if (st.compare) for (const d of sigDiffs(s.id)) {
+      if (d.t1 <= v0 || d.t0 >= v1) continue;
+      const hit = el("rect", { x: x(d.t0) - 4, y: top, width: Math.max(2, x(d.t1) - x(d.t0)) + 8, height: strip + h + L.dimRow + 6, fill: "transparent" }, over);
+      hit.dataset.tip = `${s.name}　${d.text}`;
+      if (s.kind === "state" && strip) {
+        // 上下 2 段: A と B が食い違う区間を、2 段まとめて斜線と赤い枠で囲む
+        const w = Math.max(2, x(d.t1) - x(d.t0));
+        // 枠と斜線は薄くして、状態の切れ目（段差の線）が埋もれないようにする
+        el("rect", { x: x(d.t0), y: top, width: w, height: strip + h, fill: "url(#hatchL)" }, plot);
+        el("rect", { x: x(d.t0), y: top, width: w, height: strip + h, fill: "none", stroke: "#f87171", "stroke-width": 0.8, "stroke-opacity": 0.6 }, plot);
+      }
+      if (d.type === "t") {
+        // 寸法線: A と B の切れ目から補助線を下ろし、その間に両矢印と「50 ms 遅れ」
+        const dy = y0 + h + 8;
+        el("line", { x1: x(d.t0), x2: x(d.t0), y1: top, y2: dy + 4, stroke: "#d97706", "stroke-width": 1.3, "stroke-dasharray": "3 2" }, plot);
+        el("line", { x1: x(d.t1), x2: x(d.t1), y1: y0 + h, y2: dy + 4, stroke: "#d97706", "stroke-width": 1, "stroke-dasharray": "2 2" }, plot);
+        el("line", { x1: x(d.t0) + 1, x2: x(d.t1) - 1, y1: dy, y2: dy, stroke: "#b45309", "stroke-width": 1.2, "marker-start": "url(#dim)", "marker-end": "url(#dim)" }, plot);
+        tag(over, (x(d.t0) + x(d.t1)) / 2, dy + 13, shiftText(d), "#92400e", { center: true });
+      } else if (s.kind === "state" && strip) {
+        // 上下 2 段では状態名がそのまま読めるので、札は出さない
+      } else if (s.kind === "state") {
+        // A の細い帯の該当部分を赤枠で囲み、A→Bを添える
+        if (strip) el("rect", { x: x(d.t0), y: top, width: Math.max(2, x(d.t1) - x(d.t0)), height: 10, fill: "none", stroke: "#dc2626", "stroke-width": 1.5 }, plot);
+        tag(over, Math.max(x(d.t0), PX) + 4, y0 + h - 9, d.label, "#b91c1c", { stroke: "#dc2626", bold: true });
+        el("rect", { x: x(d.t0), y: y0 + h + 3, width: Math.max(3, x(d.t1) - x(d.t0)), height: 4, rx: 1, fill: "#ef4444" }, plot);
+      } else {
+        // アナログ: 2 本の線の間を塗る
+        const ts = []; for (let t = d.t0; t <= d.t1; t += DT) ts.push(t);
+        const pts = ts.map(t => `${x(t)},${yv(s.cur(t))}`).concat(ts.slice().reverse().map(t => `${x(t)},${yv(s.prev(t))}`));
+        el("polygon", { points: pts.join(" "), fill: "rgba(239,68,68,0.35)", stroke: "none" }, plot);
+      }
+    }
+
+    // アナログ: 差（B − A）を小さな波形で描く。値の差が小さくても形が分かる
+    if (st.compare && L.dTrack) {
+      const ty = y0 + h + 4, th = 18, mid = ty + th / 2;
+      const ts = []; for (let t = Math.max(0, v0); t <= Math.min(T_END, v1); t += DT) ts.push(t);
+      const dv = t => s.cur(t) - s.prev(t);
+      const amp = Math.max(...ts.map(t => Math.abs(dv(t))), 1e-9);
+      el("line", { x1: PX, x2: PX + PW, y1: mid, y2: mid, stroke: "#e2e8f0" }, plot);
+      const pts = [`${x(ts[0])},${mid}`, ...ts.map(t => `${x(t)},${mid - dv(t) / amp * (th / 2 - 1)}`), `${x(ts[ts.length - 1])},${mid}`];
+      el("polygon", { points: pts.join(" "), fill: "rgba(239,68,68,0.45)", stroke: "none" }, plot);
+      el("text", { x: PX - 6, y: mid + 4, "font-size": 9, fill: "#94a3b8", "text-anchor": "end" }, over, "Δ");
+    }
+
+    // マウス位置の差（V2）: Hov の線に合わせて Δ を出す
+    if (st.compare && st.hov !== null && s.kind === "analog" && !s.onlyCur) {
+      const dv = round2(s.cur(st.hov) - s.prev(st.hov));
+      if (dv !== 0) tag(labels, x(st.hov) + 6, y0 + 9, `Δ ${dv > 0 ? "+" : ""}${dv} ${s.unit}`, "#0369a1", { stroke: "#38bdf8", bold: true });
+    }
+  }
+
+  // 時間軸
+  const axisY = y + 2;
+  const span = v1 - v0, stepT = span > 2000 ? 250 : span > 800 ? 100 : 50;
+  for (let t = Math.ceil(v0 / stepT) * stepT; t <= v1; t += stepT) {
+    el("line", { x1: x(t), x2: x(t), y1: axisY - 4, y2: axisY, stroke: "#94a3b8" });
+    el("text", { x: x(t), y: axisY + 12, "font-size": 10, fill: "#64748b", "text-anchor": "middle" }, svg, t);
+  }
+  el("text", { x: PX - 6, y: axisY + 12, "font-size": 10, fill: "#64748b", "text-anchor": "end" }, svg, "ms");
+
+  // マーカー: カーソルの縦線と、カーソル間の Δt
+  const inView = cursors.filter(c => c.t >= v0 && c.t <= v1);
+  if (st.markers) {
+    for (const c of inView) {
+      el("line", { x1: x(c.t), x2: x(c.t), y1: 14, y2: axisY - 4, stroke: "#475569", "stroke-dasharray": "4 3" }, over);
+      el("rect", { x: x(c.t) - 11, y: 0, width: 22, height: 13, rx: 2, fill: "#475569" }, over);
+      el("text", { x: x(c.t), y: 10, "font-size": 10, fill: "#fff", "text-anchor": "middle" }, over, c.name);
+    }
+    for (let i = 1; i < cursors.length; i++) {
+      const a = cursors[i - 1], b = cursors[i];
+      if (b.t < v0 || a.t > v1) continue;
+      const xa = Math.max(x(a.t), PX), xb = Math.min(x(b.t), PX + PW), yy = 31;
+      el("line", { x1: xa + 1, x2: xb - 1, y1: yy, y2: yy, stroke: "#475569", "stroke-width": 1, "stroke-dasharray": "3 2",
+        "marker-start": x(a.t) >= PX ? "url(#dimC)" : "", "marker-end": x(b.t) <= PX + PW ? "url(#dimC)" : "" }, over);
+      el("text", { x: (xa + xb) / 2, y: yy - 4, "font-size": 11, fill: "#334155", "text-anchor": "middle" }, over, `${b.t - a.t} ms`);
+    }
+  }
+
+  // ラベル: カーソル位置の値。A と B が違うときは「A …」「B …」の 2 行にする
+  if (st.labels !== "off") for (const c of inView) for (const L of lanes) {
+    const s = L.s, cx = x(c.t);
+    const cv = valAt(s, "cur", c.t), pv = st.compare && !s.onlyCur ? valAt(s, "prev", c.t) : null;
+    const differ = pv !== null && Math.abs(cv - pv) > 1e-9;
+    const txt = v => s.kind === "state"
+      ? (st.labels === "full" ? `${v} : ${s.states[v]}` : `${v}`)
+      : `${round2(v)}${st.labels === "full" && s.unit ? " " + s.unit : ""}`;
+    const cy = L.yOf("cur", c.t);
+    el("circle", { cx, cy, r: 3, fill: "#fff", stroke: s.color, "stroke-width": 1.5 }, labels);
+    let ly = s.kind === "state" ? L.y0 + 10 : Math.min(Math.max(cy - 8, L.y0 + 8), L.y0 + L.h - 22);
+    if (s.kind === "state" && L.strip) {
+      // 上下 2 段: 違うときは A の段と B の段にそれぞれ出す。同じときは 2 段の境目に 1 つだけ出す
+      if (differ) {
+        el("circle", { cx, cy: L.yOf("prev", c.t), r: 3, fill: "#fff", stroke: "#b91c1c", "stroke-width": 1.5 }, labels);
+        tag(labels, cx + 5, L.top + L.h / 2, `A ${txt(pv)}`, "#b91c1c", { bold: true });
+        tag(labels, cx + 5, L.y0 + L.h / 2, `B ${txt(cv)}`, "#334155", { bold: true });
+      } else {
+        tag(labels, cx + 5, L.y0 - 1, txt(cv), "#334155", { bold: true });
+      }
+    } else if (differ) {
+      if (s.kind === "analog") el("circle", { cx, cy: L.yOf("prev", c.t), r: 3, fill: "#fff", stroke: s.color, "stroke-width": 1.2, "stroke-dasharray": "2 1.5", opacity: 0.8 }, labels);
+      tag(labels, cx + 5, ly, `A ${txt(pv)}`, "#b91c1c");
+      tag(labels, cx + 5, ly + 15, `B ${txt(cv)}`, s.kind === "state" ? "#334155" : s.color, { bold: true });
+    } else {
+      tag(labels, cx + 5, ly, txt(cv), s.kind === "state" ? "#334155" : s.color, { bold: true });
+    }
+  }
+
+  if (st.hov !== null) el("line", { x1: x(st.hov), x2: x(st.hov), y1: 2, y2: axisY - 4, stroke: "#0ea5e9" }, over);
+  svg.appendChild(labels);
+
+  svg.onmousemove = e => {
+    const r = svg.getBoundingClientRect(), mx = e.clientX - r.left;
+    const tip = document.getElementById("tip");
+    if (e.target.dataset && e.target.dataset.tip) {
+      tip.textContent = e.target.dataset.tip; tip.classList.remove("hidden");
+      tip.style.left = Math.min(mx + 12, r.width - tip.offsetWidth - 4) + "px"; tip.style.top = (e.clientY - r.top + 14) + "px";
+    } else tip.classList.add("hidden");
+    if (mx >= PX && mx <= PX + PW) { st.hov = Math.round((v0 + (mx - PX) / PW * (v1 - v0)) / DT) * DT; renderLight(); }
+  };
+  svg.onmouseleave = () => { document.getElementById("tip").classList.add("hidden"); st.hov = null; renderLight(); };
+}
+let raf = 0;
+function renderLight() { cancelAnimationFrame(raf); raf = requestAnimationFrame(() => { render(); renderTable(); }); }
+
+// ---------- サイドバー ----------
+function renderSide() {
+  const list = document.getElementById("sigList");
+  list.innerHTML = "";
+  for (const s of sigs) {
+    const ds = st.compare ? sigDiffs(s.id) : [];
+    const nv = ds.filter(d => d.type === "v").length, nt = ds.filter(d => d.type === "t").length;
+    let badge = "";
+    if (st.compare) {
+      if (s.onlyCur) badge = `<span class="text-[10px] px-1.5 rounded border border-gray-300 text-gray-500">B のみ</span>`;
+      else {
+        if (nv) badge += `<span class="text-[10px] px-1.5 rounded bg-red-100 text-red-700">≠ ${nv}</span>`;
+        if (nt) badge += `<span class="text-[10px] px-1.5 rounded bg-amber-100 text-amber-800">⏱ ${nt}</span>`;
+        if (!nv && !nt) badge = `<span class="text-[10px] px-1.5 rounded bg-green-100 text-green-700">=</span>`;
+      }
+    }
+    const hidden = !visibleSigs().includes(s);
+    list.insertAdjacentHTML("beforeend",
+      `<div class="flex items-center gap-1.5 py-1 ${hidden ? "opacity-40" : ""}">
+        <input type="checkbox" ${hidden ? "" : "checked"} disabled>
+        <span class="flex-1 truncate" style="color:${s.color}">${s.name}</span>${badge}</div>`);
+  }
+  const vd = visibleDiffs();
+  const sum = (arr) => arr.reduce((a, d) => a + d.t1 - d.t0, 0);
+  document.getElementById("diffSummary").innerHTML = st.compare
+    ? `<div class="font-bold text-gray-600 mb-1">比較の結果</div>
+       <div><span class="inline-block w-2.5 h-2.5 bg-red-300 mr-1"></span>値の違い ${vd.filter(d => d.type === "v").length} 区間 / ${sum(vd.filter(d => d.type === "v"))} ms</div>
+       ${st.filter === "all" ? `<div><span class="inline-block w-2.5 h-2.5 bg-amber-300 mr-1"></span>タイミングのずれ ${vd.filter(d => d.type === "t").length} 区間（すべて 50 ms 遅れ）</div>` : ""}
+       <div class="mt-1">判定: 生値 / 許容誤差 0 / 無効区間は除外</div>`
+    : `<div class="text-gray-400">比較なし</div>`;
+}
+
+// ---------- ミニマップ ----------
+function renderMini() {
+  const m = document.getElementById("minimap");
+  m.innerHTML = "";
+  const [v0, v1] = st.view;
+  m.insertAdjacentHTML("beforeend", `<div class="absolute top-0 bottom-0 bg-blue-200/60 border border-blue-400 rounded" style="left:${v0 / T_END * 100}%;width:${(v1 - v0) / T_END * 100}%"></div>`);
+  if (!st.compare) return;
+  visibleDiffs().forEach((d, i) => {
+    const b = document.createElement("div");
+    b.className = "absolute top-0.5 bottom-0.5 w-1.5 rounded-sm cursor-pointer " + (d.type === "t" ? "bg-amber-500" : "bg-red-500");
+    b.style.left = `calc(${d.t0 / T_END * 100}% - 3px)`;
+    b.title = d.text;
+    b.onclick = () => goDiff(i);
+    m.appendChild(b);
+  });
+}
+
+// ---------- 計測表 ----------
+function fmt(s, v) {
+  if (v === null || v === undefined) return "—";
+  if (s.kind === "state") return `${v} (${s.states[v]})`;
+  return round2(v).toString();
+}
+function renderTable() {
+  const tbl = document.getElementById("measure");
+  const vs = visibleSigs();
+  const th = "px-2 py-1 border border-gray-200 bg-gray-50 font-normal text-gray-600";
+  const sub = s => st.compare && !s.onlyCur ? (s.kind === "analog" ? ["A", "B", "Δ"] : ["A", "B"]) : ["B"];
+  let h = `<tr><th class="${th}" rowspan="2">No.</th><th class="${th}" rowspan="2">時間(ms)</th><th class="${th}" rowspan="2">Δt</th>` +
+    vs.map(s => `<th class="${th}" colspan="${sub(s).length}" style="color:${s.color}">${s.name}${s.unit ? ` [${s.unit}]` : ""}</th>`).join("") + "</tr><tr>" +
+    vs.map(s => sub(s).map(c => `<th class="${th} text-[10px]">${c}</th>`).join("")).join("") + "</tr>";
+  const rows = [{ name: "Hov", t: st.hov }, ...cursors.map((c, i) => ({ ...c, dt: i ? c.t - cursors[i - 1].t : null }))];
+  for (const r of rows) {
+    h += `<tr><td class="px-2 py-1 border border-gray-200">${r.name}</td><td class="px-2 py-1 border border-gray-200 text-right">${r.t ?? "—"}</td>` +
+      `<td class="px-2 py-1 border border-gray-200 text-right text-red-500">${r.dt ?? "—"}</td>`;
+    for (const s of vs) {
+      const c = r.t === null ? null : valAt(s, "cur", r.t);
+      const p = r.t === null || !st.compare || s.onlyCur ? null : valAt(s, "prev", r.t);
+      const differ = st.compare && !s.onlyCur && c !== null && p !== null && Math.abs(c - p) > 1e-9;
+      const red = differ ? "text-red-600 font-bold bg-red-50" : "";
+      const cmp = st.compare && !s.onlyCur;
+      if (cmp) h += `<td class="px-2 py-1 border border-gray-200 text-right text-gray-500 ${s.kind === "state" ? red : ""}">${fmt(s, p)}</td>`;
+      h += `<td class="px-2 py-1 border border-gray-200 text-right ${s.kind === "state" ? red : ""}">${fmt(s, c)}</td>`;
+      if (cmp) {
+        if (s.kind === "analog") {
+          const dv = c === null || p === null ? null : round2(c - p);
+          h += `<td class="px-2 py-1 border border-gray-200 text-right ${dv ? "text-red-600 font-bold" : "text-gray-400"}">${dv === null ? "—" : (dv > 0 ? "+" : "") + dv}</td>`;
+        }
+      }
+    }
+    h += "</tr>";
+  }
+  tbl.innerHTML = h;
+}
+
+// ---------- 操作 ----------
+function goDiff(i) {
+  const vd = visibleDiffs(); if (!vd.length) return;
+  st.focus = (i + vd.length) % vd.length;
+  const d = vd[st.focus], c = (d.t0 + d.t1) / 2, half = Math.max(250, (d.t1 - d.t0) * 1.5);
+  let a = c - half, b = c + half;
+  if (a < 0) { b -= a; a = 0; } if (b > T_END) { a -= b - T_END; b = T_END; }
+  st.view = [Math.max(0, a), b];
+  all();
+}
+const LABEL_TEXT = { off: "ラベル: OFF", value: "ラベル: 値のみ", full: "ラベル: ON" };
+function all() {
+  const cb = document.getElementById("cmpBtn");
+  cb.textContent = st.compare ? "比較: ON" : "比較: OFF";
+  cb.className = "tbtn font-bold " + (st.compare ? "bg-violet-600" : "bg-slate-600");
+  document.getElementById("cmpTools").style.display = st.compare ? "" : "none";
+  document.getElementById("prevFile").style.opacity = st.compare ? 1 : 0.4;
+  const mb = document.getElementById("markerBtn");
+  mb.textContent = "マーカー"; mb.className = "tbtn " + (st.markers ? "bg-blue-600" : "bg-slate-600 text-slate-300");
+  const lb = document.getElementById("labelBtn");
+  lb.textContent = LABEL_TEXT[st.labels]; lb.className = "tbtn " + (st.labels !== "off" ? "bg-blue-600" : "bg-slate-600 text-slate-300");
+  const vd = visibleDiffs();
+  document.getElementById("diffPos").textContent = st.focus >= 0 && st.focus < vd.length ? `差分 ${st.focus + 1} / ${vd.length}` : `差分 – / ${vd.length}`;
+  document.getElementById("legend").innerHTML = st.compare ? `
+    <span><svg width="24" height="6"><line x1="0" y1="3" x2="24" y2="3" stroke="#f59e0b" stroke-width="2.4" stroke-dasharray="6 4" opacity=".45"/></svg> A（同じ色の薄い破線・状態は上の段）</span>
+    <span><svg width="24" height="6"><line x1="0" y1="3" x2="24" y2="3" stroke="#f59e0b" stroke-width="2"/></svg> B（実線）</span>
+    <span><svg width="34" height="10"><line x1="3" y1="0" x2="3" y2="10" stroke="#d97706" stroke-dasharray="2 2"/><line x1="31" y1="0" x2="31" y2="10" stroke="#d97706" stroke-dasharray="2 2"/><line x1="5" y1="6" x2="29" y2="6" stroke="#b45309"/><path d="M5 6l4-3v6zM29 6l-4-3v6z" fill="#b45309"/></svg> タイミングのずれ（左 = A の切れ目、右 = B）</span>
+    <span><span class="inline-block w-3.5 h-2.5 align-middle" style="background:rgba(239,68,68,.35)"></span> 値の違い（Δ = B − A。マウス位置の値を表示）</span>` : "";
+  render(); renderSide(); renderMini(); renderTable();
+}
+document.getElementById("cmpBtn").onclick = () => { st.compare = !st.compare; st.focus = -1; all(); };
+document.getElementById("prevDiff").onclick = () => goDiff(st.focus < 0 ? visibleDiffs().length - 1 : st.focus - 1);
+document.getElementById("nextDiff").onclick = () => goDiff(st.focus + 1);
+document.getElementById("fitAll").onclick = () => { st.view = [0, T_END]; st.focus = -1; all(); };
+document.getElementById("filter").onchange = e => { st.filter = e.target.value; st.focus = -1; all(); };
+document.getElementById("onlyDiff").onchange = e => { st.onlyDiff = e.target.checked; all(); };
+document.getElementById("markerBtn").onclick = () => { st.markers = !st.markers; all(); };
+document.getElementById("labelBtn").onclick = () => { st.labels = { off: "value", value: "full", full: "off" }[st.labels]; all(); };
+window.addEventListener("resize", all);
+
+// 画面写真を撮るための初期状態: #diff=N（N 番目の差分を開く）、markers、labels=value|full、hov=時刻
+const hash = location.hash;
+if (/markers/.test(hash)) st.markers = true;
+const lm = hash.match(/labels=(value|full)/); if (lm) st.labels = lm[1];
+const hm = hash.match(/hov=(\d+)/); if (hm) st.hov = Number(hm[1]);
+all();
+const dm = hash.match(/diff=(\d+)/);
+if (dm) goDiff(Number(dm[1]) - 1);
+</script>
+</body>
+</html>
