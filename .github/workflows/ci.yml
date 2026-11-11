@@ -1,0 +1,47 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: ビルド（本物のバックエンド）
+        run: ./build.sh
+      - name: テスト（モックと本物のバックエンド）
+        run: tests/run_tests.sh
+
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: clang の確認
+        shell: cmd
+        run: |
+          where clang || set "PATH=C:\Program Files\LLVM\bin;%PATH%"
+          clang --version
+      - name: ビルド（本物のバックエンド）
+        shell: cmd
+        run: |
+          where clang >nul 2>nul || set "PATH=C:\Program Files\LLVM\bin;%PATH%"
+          call build.bat
+      - name: テスト（モックと本物のバックエンド）
+        shell: cmd
+        run: |
+          where clang >nul 2>nul || set "PATH=C:\Program Files\LLVM\bin;%PATH%"
+          call tests\run_tests.bat
+      - name: 配布物をまとめる
+        shell: cmd
+        run: |
+          mkdir dist
+          copy build\sim\sim.exe dist\
+          if exist build\sim\sim_gui.html copy build\sim\sim_gui.html dist\
+          copy example\sim.cfg dist\sim.cfg.example
+          copy README.md dist\
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sim-windows-x64
+          path: dist/
