@@ -88,10 +88,10 @@ check "Shift_JIS のコメント行がバイトそのまま" cmp -s "$WORK/sj_in
 head -1 "$T/csv/sjis_comment.csv" > "$WORK/sj_mod_in.txt"
 head -1 "$WORK/out_sjis_comment/sjis_comment.csv" > "$WORK/sj_mod_out.txt"
 check "Shift_JIS の mod 行（題名と右のセル）がそのまま" cmp -s "$WORK/sj_mod_in.txt" "$WORK/sj_mod_out.txt"
-CR_IN=$(tr -cd '\r' < "$T/csv/sjis_comment.csv" | wc -c | tr -d ' ')
-CR_OUT=$(tr -cd '\r' < "$WORK/out_sjis_comment/sjis_comment.csv" | wc -c | tr -d ' ')
+CR_IN=$(LC_ALL=C tr -cd '\r' < "$T/csv/sjis_comment.csv" | wc -c | tr -d ' ')
+CR_OUT=$(LC_ALL=C tr -cd '\r' < "$WORK/out_sjis_comment/sjis_comment.csv" | wc -c | tr -d ' ')
 check "CRLF の改行が保たれる（$CR_IN 個）" test "$CR_IN" -eq "$CR_OUT" -a "$CR_IN" -gt 0
-CR_U=$(tr -cd '\r' < "$WORK/out_unit_all/unit_all.csv" | wc -c | tr -d ' ')
+CR_U=$(LC_ALL=C tr -cd '\r' < "$WORK/out_unit_all/unit_all.csv" | wc -c | tr -d ' ')
 check "LF の改行は LF のまま" test "$CR_U" -eq 0
 
 echo "== エラー系（終了コード 2 と分かるメッセージ）"
