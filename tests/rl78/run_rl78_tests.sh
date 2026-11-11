@@ -28,7 +28,7 @@ rl78_run() {
     "$RS" run "$@" -o "$WORK/r_out" > "$WORK/r.log" 2>&1
     _rc=$?
     if [ "$_rc" -eq "$_code" ] && grep -F -q -- "$_sum" "$WORK/r.log"; then ok "$_name"
-    else ng "$_name" "終了コード $_rc（期待 $_code）、$(grep -E '合計|エラー' "$WORK/r.log" | head -3)"; fi
+    else ng "$_name" "終了コード ${_rc}（期待 ${_code}）、$(grep -E '合計|エラー' "$WORK/r.log" | head -3)"; fi
 }
 
 echo "== 本物の .abs（ルネサス公式サンプル、CC-RL V1.12）"
@@ -189,7 +189,7 @@ perf() {
     _rc=$?
     _line=$(grep "^実行命令数" "$WORK/perf.log")
     _sec=$(grep "^実行時間" "$WORK/perf.log")
-    if [ "$_rc" -eq 0 ] && [ -n "$_line" ]; then ok "性能: $_label（すべて OK）"; else ng "性能: $_label" "$(tail -3 "$WORK/perf.log")"; fi
+    if [ "$_rc" -eq 0 ] && [ -n "$_line" ]; then ok "性能: ${_label}（すべて OK）"; else ng "性能: $_label" "$(tail -3 "$WORK/perf.log")"; fi
     echo "        $_line"
     echo "        $_sec"
     PERF_SUMMARY="${PERF_SUMMARY:-}性能: $_label: $_line

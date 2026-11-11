@@ -100,7 +100,7 @@ err_case() {
     "$SIM" run "$T/csv/err/$_f" -o "$WORK/oerr" --quiet > "$WORK/err.log" 2>&1
     _rc=$?
     if [ "$_rc" -eq 2 ] && grep -F -q -- "$_msg" "$WORK/err.log"; then ok "$_f"
-    else ng "$_f" "終了コード $_rc、出力: $(head -2 "$WORK/err.log")"; fi
+    else ng "$_f" "終了コード ${_rc}、出力: $(head -2 "$WORK/err.log")"; fi
 }
 err_case unknown_var.csv "変数 'g_engx' が見つかりません（候補: g_eng）"
 err_case unknown_func.csv "関数 'no_such_func' が見つかりません"
@@ -220,7 +220,7 @@ data: {"periodMs":2,"func":"TEST_cycle","names":["g_eng.state","TEST_cycle_cnt",
     check "CSV の再生が 4 ステップで止まる" contains "$WORK/info3.json" '"step":4'
     curl -s "$U/api/export.csv" | tr -d '\r' > "$WORK/play_export.csv"
     STATES=$(awk -F, 'NR==2{for(i=1;i<=NF;i++) if($i=="g_eng.state") c=i} NR>2{printf "%s ", $c}' "$WORK/play_export.csv")
-    check "再生した入力で状態が STOP->CRANK->IDLE->RUN（$STATES）" test "$STATES" = "0 1 2 3 "
+    check "再生した入力で状態が STOP->CRANK->IDLE->RUN（${STATES}）" test "$STATES" = "0 1 2 3 "
 
     CODE=$(post bad_cmd.json bad.out /api/control)
     check "不明な cmd は 400" test "$CODE" = 400

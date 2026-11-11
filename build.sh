@@ -37,7 +37,7 @@ else
 $ROOT/rl78/src/rl78_exec.c $ROOT/rl78/src/rl78_sys.c $ROOT/rl78/src/rl78_disasm.c"
 fi
 
-echo "build.sh: $CC で $OUT/sim をビルドします（バックエンド: $MODE）"
+echo "build.sh: $CC で $OUT/sim をビルドします（バックエンド: ${MODE}）"
 # shellcheck disable=SC2086
 "$CC" $CFLAGS $SRCS -o "$OUT/sim" $LIBS
 
