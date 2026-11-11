@@ -73,10 +73,7 @@ static int hook_at(const rl78_cpu *c, uint32_t a)
 
 static int bp_at(const rl78_cpu *c, uint32_t a)
 {
-    int i;
-    for (i = 0; i < c->nbps; i++)
-        if (c->bps[i].addr == a) return i;
-    return -1;
+    return c->bpbits && (c->bpbits[a >> 3] & (1u << (a & 7u)));
 }
 
 void rl78__rebuild_pages(rl78_cpu *c)
@@ -93,8 +90,7 @@ void rl78__rebuild_pages(rl78_cpu *c)
         if (c->cfg.mdu && pg == (MDCL >> 8)) slow = 1;    /* MDCL/MDCH/MDUC */
         for (i = 0; i < c->nhooks; i++)
             if (c->hooks[i].start < end && c->hooks[i].end > base) slow = 1;
-        for (i = 0; i < c->nbps; i++)
-            if ((c->bps[i].addr >> 8) == pg) slow = 1;
+        if (c->bppage[pg]) slow = 1;
         if (c->cfg.mirror_end != 0 && c->cfg.mirror_start < end && c->cfg.mirror_end > base) {
             if (c->cfg.mirror_start <= base && c->cfg.mirror_end >= end) {
                 r = c->mem + mirror_src(c, base);
@@ -192,7 +188,6 @@ static int is_mdu_reg(const rl78_cpu *c, uint32_t a)
 /* raw (no hook) read with SFR semantics */
 static uint8_t sys_rd8(rl78_cpu *c, uint32_t a)
 {
-    int b;
     switch (a) {
     case 0xFFFF8u: return (uint8_t)c->sp;
     case 0xFFFF9u: return (uint8_t)(c->sp >> 8);
@@ -202,19 +197,16 @@ static uint8_t sys_rd8(rl78_cpu *c, uint32_t a)
     case 0xFFFFEu: return c->pmc;
     default: break;
     }
-    b = bp_at(c, a);
-    if (b >= 0) return c->bps[b].orig;
+    if (bp_at(c, a)) return c->bporig[a];
     if (in_mirror(c, a)) {
         uint32_t s = mirror_src(c, a);
-        b = bp_at(c, s);
-        return b >= 0 ? c->bps[b].orig : c->mem[s];
+        return bp_at(c, s) ? c->bporig[s] : c->mem[s];
     }
     return c->mem[a];
 }
 
 static void sys_wr8(rl78_cpu *c, uint32_t a, uint8_t v, int mdu_trigger)
 {
-    int b;
     switch (a) {
     case 0xFFFF8u: c->sp = (uint16_t)((c->sp & 0xFF00u) | (v & 0xFEu)); return;
     case 0xFFFF9u: c->sp = (uint16_t)((c->sp & 0x00FFu) | ((unsigned)v << 8)); return;
@@ -237,8 +229,7 @@ static void sys_wr8(rl78_cpu *c, uint32_t a, uint8_t v, int mdu_trigger)
     default: break;
     }
     if (is_rom(c, a) || in_mirror(c, a)) return; /* read-only */
-    b = bp_at(c, a);
-    if (b >= 0) { c->bps[b].orig = v; return; }
+    if (bp_at(c, a)) { c->bporig[a] = v; return; }
     if (is_mdu_reg(c, a)) {
         if (a == MDUC) {
             /* bits 1,2 (MACSF, MACOF) are read-only */
@@ -252,6 +243,18 @@ static void sys_wr8(rl78_cpu *c, uint32_t a, uint8_t v, int mdu_trigger)
         return;
     }
     c->mem[a] = v;
+}
+
+void rl78__write_macr(rl78_cpu *c, uint32_t v)
+{
+    uint32_t i;
+    for (i = 0; i < 4; i++) {
+        uint32_t a = 0xFFFF0u + i;
+        int h = hook_at(c, a);
+        uint8_t b = (uint8_t)(v >> (8 * i));
+        if (h >= 0 && c->hooks[h].wr) c->hooks[h].wr(c->hooks[h].ctx, c, a, b, 1);
+        else c->mem[a] = b;
+    }
 }
 
 uint8_t rl78__rd8_slow(rl78_cpu *c, uint32_t a)
@@ -310,7 +313,8 @@ rl78_cpu *rl78_create(const rl78_config *cfg)
     memset(c->mem + RL78_MEM_SIZE, 0xFF, RL78_MEM_PAD); /* run-off traps as undefined */
     if (cfg) c->cfg = *cfg;
     else rl78_default_config(&c->cfg, RL78_CORE_S3);
-    if (c->cfg.core < RL78_CORE_S1 || c->cfg.core > RL78_CORE_S3) c->cfg.core = RL78_CORE_S3;
+    if (c->cfg.core < RL78_CORE_S1 || c->cfg.core > RL78_CORE_AUTO) c->cfg.core = RL78_CORE_S3;
+    if (c->cfg.core == RL78_CORE_AUTO) c->cfg.mdu = 1;
     c->skip_bp_pc = NO_BP;
     rl78__rebuild_pages(c);
     rl78_reset(c);
@@ -321,6 +325,9 @@ void rl78_destroy(rl78_cpu *c)
 {
     if (!c) return;
     free(c->mem);
+    free(c->bplist);
+    free(c->bpbits);
+    free(c->bporig);
     free(c);
 }
 
@@ -354,8 +361,7 @@ void rl78_load(rl78_cpu *c, uint32_t addr, const void *data, size_t len)
     size_t i;
     for (i = 0; i < len; i++) {
         uint32_t a = (addr + (uint32_t)i) & 0xFFFFFu;
-        int b = bp_at(c, a);
-        if (b >= 0) c->bps[b].orig = d[i];
+        if (bp_at(c, a)) c->bporig[a] = d[i];
         else c->mem[a] = d[i];
     }
 }
@@ -561,7 +567,7 @@ rl78_stop_reason rl78_run(rl78_cpu *c, uint64_t max_insns)
         lim = remaining;
         if (c->hold_irq && c->nirqs) lim = 1; /* run the instruction after a hold insn */
         c->hold_irq = 0;
-        c->skip_bp_pc = (c->nbps && bp_at(c, c->pc) >= 0) ? c->pc : NO_BP;
+        c->skip_bp_pc = (c->nbps && bp_at(c, c->pc)) ? c->pc : NO_BP;
         n = rl78__exec(c, lim, &why);
         c->skip_bp_pc = NO_BP;
         c->insns += n;
@@ -595,31 +601,59 @@ const rl78_fault *rl78_last_fault(const rl78_cpu *c) { return &c->fault; }
 int rl78_add_breakpoint(rl78_cpu *c, uint32_t addr)
 {
     addr &= 0xFFFFFu;
-    if (bp_at(c, addr) >= 0) return 0;
-    if (c->nbps >= RL78_MAX_BREAKPOINTS) return -1;
-    c->bps[c->nbps].addr = addr;
-    c->bps[c->nbps].orig = c->mem[addr];
+    if (!c->bpbits) {
+        c->bpbits = (uint8_t *)calloc(RL78_MEM_SIZE / 8u, 1);
+        c->bporig = (uint8_t *)malloc(RL78_MEM_SIZE);
+        if (!c->bpbits || !c->bporig) {
+            free(c->bpbits); free(c->bporig);
+            c->bpbits = NULL; c->bporig = NULL;
+            return -1;
+        }
+    }
+    if (bp_at(c, addr)) return 0;
+    if (c->nbps == c->bpcap) {
+        int ncap = c->bpcap ? c->bpcap * 2 : 64;
+        uint32_t *nl = (uint32_t *)realloc(c->bplist, sizeof(uint32_t) * (size_t)ncap);
+        if (!nl) return -1;
+        c->bplist = nl;
+        c->bpcap = ncap;
+    }
+    c->bplist[c->nbps++] = addr;
+    c->bporig[addr] = c->mem[addr];
     c->mem[addr] = BP_OPCODE;
-    c->nbps++;
-    rl78__rebuild_pages(c);
+    c->bpbits[addr >> 3] = (uint8_t)(c->bpbits[addr >> 3] | (1u << (addr & 7u)));
+    if (c->bppage[addr >> 8]++ == 0) rl78__rebuild_pages(c);
     return 0;
 }
 
 int rl78_remove_breakpoint(rl78_cpu *c, uint32_t addr)
 {
-    int b = bp_at(c, addr & 0xFFFFFu);
-    if (b < 0) return -1;
-    c->mem[c->bps[b].addr] = c->bps[b].orig;
-    c->bps[b] = c->bps[c->nbps - 1];
-    c->nbps--;
-    rl78__rebuild_pages(c);
+    int i;
+    addr &= 0xFFFFFu;
+    if (!bp_at(c, addr)) return -1;
+    for (i = 0; i < c->nbps; i++)
+        if (c->bplist[i] == addr) break;
+    c->bplist[i] = c->bplist[--c->nbps];
+    c->mem[addr] = c->bporig[addr];
+    c->bpbits[addr >> 3] = (uint8_t)(c->bpbits[addr >> 3] & ~(1u << (addr & 7u)));
+    if (--c->bppage[addr >> 8] == 0) rl78__rebuild_pages(c);
     return 0;
 }
 
 void rl78_clear_breakpoints(rl78_cpu *c)
 {
-    while (c->nbps) rl78_remove_breakpoint(c, c->bps[0].addr);
+    int i;
+    for (i = 0; i < c->nbps; i++) {
+        uint32_t a = c->bplist[i];
+        c->mem[a] = c->bporig[a];
+        c->bpbits[a >> 3] = 0;
+    }
+    c->nbps = 0;
+    memset(c->bppage, 0, sizeof c->bppage);
+    rl78__rebuild_pages(c);
 }
+
+int rl78_breakpoint_count(const rl78_cpu *c) { return c->nbps; }
 
 /* ---- hooks ------------------------------------------------------------------ */
 
@@ -660,7 +694,7 @@ void rl78_snapshot_update(rl78_cpu *c, rl78_snapshot *s)
 {
     int i;
     memcpy(s->mem, c->mem, RL78_MEM_SIZE);
-    for (i = 0; i < c->nbps; i++) s->mem[c->bps[i].addr] = c->bps[i].orig;
+    for (i = 0; i < c->nbps; i++) s->mem[c->bplist[i]] = c->bporig[c->bplist[i]];
     s->pc = c->pc;
     s->sp = c->sp;
     s->psw = c->psw;
@@ -690,8 +724,8 @@ void rl78_snapshot_restore(rl78_cpu *c, const rl78_snapshot *s)
     int i;
     memcpy(c->mem, s->mem, RL78_MEM_SIZE);
     for (i = 0; i < c->nbps; i++) {
-        c->bps[i].orig = c->mem[c->bps[i].addr];
-        c->mem[c->bps[i].addr] = BP_OPCODE;
+        c->bporig[c->bplist[i]] = c->mem[c->bplist[i]];
+        c->mem[c->bplist[i]] = BP_OPCODE;
     }
     c->pc = s->pc;
     c->sp = s->sp;

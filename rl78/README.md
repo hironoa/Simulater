@@ -16,7 +16,9 @@ rl78\tests\run_tests.bat            # Windows（clang / LLVM）
 
 ## 公開 API（`include/rl78.h`）
 
-- 生成: `rl78_default_config` / `rl78_create` / `rl78_destroy`。`rl78_config` でコア種別、
+- 生成: `rl78_default_config` / `rl78_create` / `rl78_destroy`。`rl78_config` でコア種別
+  （S1 / S2 / S3 と、品種不明時の上位互換 `RL78_CORE_AUTO` = S3 の命令と G13 乗除算器 SFR の両方。
+  MACH/MACHU による MACR（FFFF0H〜、MDAL/MDAH と同じ番地）の更新では乗算器は動かない）、
   コードフラッシュ容量（書き込み無視・フラッシュ読みのクロック）、データフラッシュ範囲、ミラー領域
   （開始・終了・転送元。PMC.MAA で +10000H）、G13 乗除算器の有無、HALT/STOP 時の挙動、割り込み受付クロック。
 - メモリ: `rl78_load`（イメージ書き込み）、`rl78_peek8/peek`（副作用なし）、`rl78_read8/16`、
@@ -26,13 +28,14 @@ rl78\tests\run_tests.bat            # Windows（clang / LLVM）
 - 実行: `rl78_reset`（リセットベクタから）、`rl78_run(cpu, 最大命令数)` → 停止理由
   （上限 / ブレーク / HALT / STOP / 未定義命令 / 停止要求）、`rl78_step`、`rl78_request_stop`、
   `rl78_insn_count` / `rl78_clock_count` / `rl78_clear_counters` / `rl78_add_clocks`、`rl78_last_fault`。
-- ブレーク: `rl78_add_breakpoint` など（最大 16）。コードを未定義オペコード FFH に差し替える方式で、
+- ブレーク: `rl78_add_breakpoint` / `rl78_remove_breakpoint` / `rl78_clear_breakpoints` / `rl78_breakpoint_count`（個数の上限なし。1 MB のビットマップを初回に確保）。コードを未定義オペコード FFH に差し替える方式で、
   命令ごとのコストはない。データとしての読み出しには元のバイトが見える。ブレーク位置から実行を始めるとその命令を実行する。
 - 割り込み: `rl78_request_interrupt(cpu, ベクタ番地, 優先度)` は保留され、IE=1 かつ優先度 ≤ ISP のとき
   命令の境界で受け付ける（PSW・PC 退避、IE=0、ISP=max(優先度-1,0)、割り込み保留命令の次の 1 命令後）。
   保留中の要求は HALT/STOP を解除する。`rl78_force_interrupt`、`rl78_cancel_interrupts`。
 - フック: `rl78_add_hook(cpu, 開始, 終了, read, write, ctx)`。フックのない領域は配列直接の高速経路。
-- スナップショット: `rl78_snapshot_create/update/restore/free`（メモリ・レジスタ・カウンタ・保留割り込み）。
+- スナップショット: `rl78_snapshot_create/update/restore/free`（メモリ・レジスタ・保留割り込みに加えて
+  命令数・クロック数のカウンタも戻る。ブレークとフックは含まない）。
 - 逆アセンブル: `rl78_disasm_buf` / `rl78_disasm`（マニュアル表記。saddr は 4 桁、sfr は 5 桁か名前）。
 
 ## 正確さの検証
@@ -70,7 +73,10 @@ GNU 側の誤り（または未規定）と判断した既知の差：
 - ADDW/SUBW/CMPW の AC はマニュアルで不定。ビット 3/4 間の桁上がり・借りを返している
 - CALL/CALLT の SP-1 への 00H 書き込み（図 3-5 に従ったが、操作一覧には記載がない）
 - 奇数番地への 16 ビットアクセスはビット 0 を 0 にして扱う（表 5-1 注 1 を全 16 ビットアクセスに適用）
-- ES: を付けられない命令に ES: が付いたものは未定義命令として止める
+- 未定義として止めるもの: 命令マップの灰色セル（例 `21`、`31 x7`〜`31 xF` のシフト数 0、`61 81`・`61 A1`
+  などの 2nd MAP 1 列目 8〜F 行、`61 88`、`FF`）と、表 5-8 に ES: 形式のない命令に付いた ES:（例 `11 00`）。
+  objdump はこれらを `add a,[hl+b]`、`xch a,x`、`nop` などと読むが、マニュアル上は定義がないため実機の動作は不明。
+  `FF` は objdump では `brk1`（マニュアル未記載）で、本コアはブレークポイントの差し込みに使っている
 - 割り込みの受付条件（優先度 ≤ ISP、受付後 ISP=優先度-1）は G13 ハードウェアマニュアル 16.3.5 による。受付に 9 クロック（設定可）
 - G13 乗除算器: 8 ビット書き込みでも積を再計算する、MACOF は直近の積和で更新、除算は即時完了（DIVST はすぐ 0）、0 除算の結果は未定義のため商 FFFFFFFFH・余り＝被除数とした
 - 計測していないクロック要因: RAM からの命令フェッチ（7.2.2）、パイプラインハザード（7.2.3）

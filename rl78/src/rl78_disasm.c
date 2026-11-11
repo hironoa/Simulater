@@ -355,7 +355,7 @@ int rl78_disasm_buf(rl78_core core, const uint8_t *buf, size_t avail, uint32_t p
             t = map4(o, gen, sizeof gen);
         }
         pos += 2;
-    } else if (op == 0xCE && core == RL78_CORE_S3 && avail >= pos + 3 && buf[pos + 1] == 0xFBu) {
+    } else if (op == 0xCE && (core == RL78_CORE_S3 || core == RL78_CORE_AUTO) && avail >= pos + 3 && buf[pos + 1] == 0xFBu) {
         switch (buf[pos + 2]) {
         case 0x01: t = "MULHU"; break;
         case 0x02: t = "MULH"; break;

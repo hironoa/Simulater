@@ -273,7 +273,7 @@ static void es_sets(void)
 void suite_decode(void)
 {
     rl78_core c;
-    for (c = RL78_CORE_S1; c <= RL78_CORE_S3; c = (rl78_core)(c + 1)) sweep(c);
+    for (c = RL78_CORE_S1; c <= RL78_CORE_AUTO; c = (rl78_core)(c + 1)) sweep(c);
     printf("  decode sweep: %lu defined encodings (%lu with ES:), %lu undefined\n", n_defined,
            n_es_defined, n_undefined);
     table_roundtrip();

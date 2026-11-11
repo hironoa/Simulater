@@ -32,7 +32,12 @@ typedef struct rl78_snapshot rl78_snapshot;
 typedef enum {
     RL78_CORE_S1 = 1, /* RL78/G10 etc.: no register banks, slower 16-bit ops */
     RL78_CORE_S2 = 2, /* RL78/G13 etc. */
-    RL78_CORE_S3 = 3  /* RL78/G14, G23 etc.: MULHU/MULH/DIVHU/DIVWU/MACHU/MACH */
+    RL78_CORE_S3 = 3, /* RL78/G14, G23 etc.: MULHU/MULH/DIVHU/DIVWU/MACHU/MACH */
+    RL78_CORE_AUTO = 4 /* superset for an unknown product: S3 instruction set and
+                          clocks plus the G13 multiplier/divider SFRs (cfg.mdu is
+                          forced on).  MACH/MACHU update MACR (FFFF0H-FFFF3H, the
+                          same addresses as MDAL/MDAH) without triggering the
+                          multiplier; program writes to MDAL/MDAH still do. */
 } rl78_core;
 
 /* What to do when HALT / STOP is executed. */
@@ -159,9 +164,12 @@ const rl78_fault *rl78_last_fault(const rl78_cpu *cpu);
 /* ---- breakpoints (address reached -> stop before executing it) ----------
    Implemented by code patching, so there is no per-instruction cost.  The
    address must be the first byte of an instruction (or of its ES: prefix).
-   Data reads of that byte still return the original value. */
-#define RL78_MAX_BREAKPOINTS 16
-int rl78_add_breakpoint(rl78_cpu *cpu, uint32_t addr);    /* 0 ok, -1 full */
+   Data reads of that byte still return the original value.  There is no
+   fixed limit (a 1 MB bitmap is allocated on first use); any number of
+   addresses may be set. */
+#define RL78_MAX_BREAKPOINTS 0x100000 /* kept for source compatibility */
+int rl78_add_breakpoint(rl78_cpu *cpu, uint32_t addr);    /* 0 ok, -1 out of memory */
+int rl78_breakpoint_count(const rl78_cpu *cpu);
 int rl78_remove_breakpoint(rl78_cpu *cpu, uint32_t addr); /* 0 ok, -1 not found */
 void rl78_clear_breakpoints(rl78_cpu *cpu);
 
@@ -195,6 +203,10 @@ int rl78_add_hook(rl78_cpu *cpu, uint32_t start, uint32_t end,
 void rl78_clear_hooks(rl78_cpu *cpu);
 
 /* ---- snapshots ------------------------------------------------------------ */
+/* A snapshot holds memory, registers, HALT/STOP state, pending interrupts and
+   also the instruction and clock counters: restore puts the counters back to
+   their values at capture time.  Breakpoints and hooks are not part of a
+   snapshot (the current ones stay in effect). */
 rl78_snapshot *rl78_snapshot_create(rl78_cpu *cpu);   /* captures state */
 void rl78_snapshot_update(rl78_cpu *cpu, rl78_snapshot *snap);
 void rl78_snapshot_restore(rl78_cpu *cpu, const rl78_snapshot *snap);

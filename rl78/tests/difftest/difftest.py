@@ -781,8 +781,17 @@ def main():
             sys.stdout.flush()
         print()
 
+    # ---- encodings this core treats as undefined, checked against objdump
+    undef_dec = undefined_vs_objdump(tool, args.rl78dt, work)
+
     # ---- report
     print('\n==== difftest summary ====')
+    grey = [t for k, t in undef_dec if k == 'grey']
+    esx = [t for k, t in undef_dec if k == 'es']
+    print('encodings undefined here but decoded by objdump (kept undefined; documented):')
+    print('  [grey] %d grey cells of the instruction maps (Tables 5-9..5-12): %s' % (len(grey), '; '.join(grey)))
+    print('  [es] %d ES: prefixes before instructions without an ES: form in Table 5-8, e.g. %s' %
+          (len(esx), '; '.join(esx[:4])))
     print('cases: %d, state agreed: %d, disassembled insns compared: %d, clock comparisons: %d' %
           (stats['cases'], stats['state_ok'], stats['dis'], stats['clk']))
     print('known differences (GNU simulator deviations / documented interpretations):')
@@ -847,6 +856,39 @@ def initial_full_state(c, lt):
     for base, n in REGIONS:
         out += [mem.get(base + i, 0) for i in range(n)]
     return regs + out
+
+
+def undefined_vs_objdump(tool, rl78dt, work):
+    """All 1-byte / map-prefixed 2-byte encodings and ES:-prefixed ones that
+    this core rejects: list those that objdump nevertheless decodes."""
+    seqs = []
+    for op in range(256):
+        if op in (0x61, 0x71, 0x31):
+            seqs += [bytes([op, o, 0x20, 0xFE, 0x05]) for o in range(256)]
+            seqs += [bytes([0x11, op, o, 0x20, 0xFE]) for o in range(256)]
+        elif op != 0x11:
+            seqs.append(bytes([op, 0x20, 0xFE, 0x05, 0x06]))
+            seqs.append(bytes([0x11, op, 0x20, 0xFE, 0x05]))
+    raw = b''.join(sq.ljust(8, b'\x00') for sq in seqs)
+    binp = os.path.join(work, 'undef.bin')
+    open(binp, 'wb').write(raw)
+    addrs = os.path.join(work, 'undef.addrs')
+    open(addrs, 'w').write('\n'.join('%x' % (i * 8) for i in range(len(seqs))) + '\n')
+    ours = {}
+    for line in run([rl78dt, 'dis', 'S3', binp, '0', addrs], text=True).stdout.splitlines():
+        a, l, _t = line.split(' ', 2)
+        ours[int(a, 16)] = int(l)
+    out = []
+    for i, sq in enumerate(seqs):
+        if ours.get(i * 8, 1) != 0:
+            continue
+        p = run([tool('objdump'), '-D', '-b', 'binary', '-m', 'rl78', '--start-address=%d' % (i * 8),
+                 '--stop-address=%d' % (i * 8 + 1), binp], text=True)
+        m = re.search(r'^\s*0*%x:\s+((?:[0-9a-f]{2} )+)\s*(.*)$' % (i * 8), p.stdout, re.M)
+        if m and m.group(2) and 'illegal' not in m.group(2) and '.byte' not in m.group(2) and 'unknown' not in m.group(2):
+            kind = 'es' if sq[0] == 0x11 else 'grey'
+            out.append((kind, '%s -> %s' % (sq[:2].hex(' '), m.group(2).strip())))
+    return out
 
 
 def write_vectors(path, vectors, per_form=2):

@@ -64,8 +64,13 @@ struct rl78_cpu {
 
     rl78_hook hooks[RL78_MAX_HOOKS];
     int nhooks;
-    rl78_bp bps[RL78_MAX_BREAKPOINTS];
-    int nbps;
+    /* breakpoints: address list (for iteration), a 1 MB bitmap and the
+       saved original bytes (allocated on first use), per-page counts */
+    uint32_t *bplist;
+    int nbps, bpcap;
+    uint8_t *bpbits;   /* 1 bit per address */
+    uint8_t *bporig;   /* original byte per address (valid where bit set) */
+    uint16_t bppage[RL78_NPAGES];
     rl78_irq irqs[RL78_MAX_PENDING_IRQ];
     int nirqs;
     uint32_t irq_seq;
@@ -82,6 +87,7 @@ void rl78__wr16_slow(rl78_cpu *c, uint32_t a, uint16_t v);
 void rl78__rebuild_pages(rl78_cpu *c);
 void rl78__set_psw(rl78_cpu *c, uint8_t v);
 int rl78__insn_len(rl78_cpu *c, uint32_t pc);
+void rl78__write_macr(rl78_cpu *c, uint32_t v);
 
 static inline uint8_t rl78__rd8(rl78_cpu *c, uint32_t a)
 {

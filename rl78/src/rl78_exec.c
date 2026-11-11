@@ -345,7 +345,7 @@ uint64_t rl78__exec(rl78_cpu *C, uint64_t lim, int *why)
     uint64_t n = 0;
     unsigned F = C->psw;
     const int s1 = (C->cfg.core == RL78_CORE_S1);
-    const int s3 = (C->cfg.core == RL78_CORE_S3);
+    const int s3 = (C->cfg.core == RL78_CORE_S3 || C->cfg.core == RL78_CORE_AUTO);
     uint32_t seg;
     unsigned op;
 
@@ -586,8 +586,11 @@ uint64_t rl78__exec(rl78_cpu *C, uint64_t lim, int *why)
                             ((sum > 0x7FFFFFFFLL || sum < -0x80000000LL) ? F_CY : 0u) |
                             ((res & 0x80000000u) ? F_AC : 0u);
                     }
-                    WR16(0xFFFF0u, res & 0xFFFFu);
-                    WR16(0xFFFF2u, res >> 16);
+                    /* MACR shares FFFF0H-FFFF3H with MDAL/MDAH of the G13
+                       multiplier: write it without multiplier side effects */
+                    SYNC_OUT();
+                    rl78__write_macr(C, res);
+                    SYNC_IN();
                     CK(3); pc += 3; break;
                 }
                 /* other CE FB xx: plain MOV to the reserved SFR FFFFBH */
@@ -1200,13 +1203,10 @@ uint64_t rl78__exec(rl78_cpu *C, uint64_t lim, int *why)
 
         /* ================================================================ */
         case BP_OPCODE: {
-            int i, hit = -1;
-            for (i = 0; i < C->nbps; i++)
-                if (C->bps[i].addr == pc) { hit = i; break; }
-            if (hit < 0) UNDEF();
+            if (!C->bpbits || !(C->bpbits[pc >> 3] & (1u << (pc & 7u)))) UNDEF();
             if (C->skip_bp_pc == pc && seg == 0xF0000u) {
                 C->skip_bp_pc = 0xFFFFFFFFu;
-                op = C->bps[hit].orig;
+                op = C->bporig[pc];
                 if (op == BP_OPCODE) UNDEF();
                 goto dispatch;
             }

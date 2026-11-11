@@ -88,13 +88,27 @@ static void test_breakpoints(void)
         rl78_clear_breakpoints(c);
         CHECK_EQ(rl78_memory(c)[0xFFD01], 0x51);
     }
-    /* capacity */
+    /* no fixed limit: 3000 breakpoints on consecutive NOPs, each one hit */
     {
-        int i, ok = 0;
-        for (i = 0; i < RL78_MAX_BREAKPOINTS + 2; i++)
-            if (rl78_add_breakpoint(c, 0x5000u + (uint32_t)i * 2u) == 0) ok++;
-        CHECK_EQ(ok, RL78_MAX_BREAKPOINTS);
+        static uint8_t nops[3001];
+        int i, ok = 0, hits = 0;
+        memset(nops, 0, sizeof nops);
+        rl78_load(c, 0x4FFF, nops, sizeof nops);
+        for (i = 0; i < 3000; i++)
+            if (rl78_add_breakpoint(c, 0x5000u + (uint32_t)i) == 0) ok++;
+        CHECK_EQ(ok, 3000);
+        CHECK_EQ(rl78_breakpoint_count(c), 3000);
+        rl78_set_reg(c, RL78_REG_PC, 0x4FFF);
+        for (i = 0; i < 3000; i++)
+            if (rl78_run(c, 10) == RL78_STOP_BREAKPOINT && rl78_get_reg(c, RL78_REG_PC) == 0x5000u + (uint32_t)i) hits++;
+        CHECK_EQ(hits, 3000);
+        CHECK_EQ(rl78_peek8(c, 0x5123), 0x00);         /* original bytes visible */
+        CHECK_EQ(rl78_remove_breakpoint(c, 0x5123), 0);
+        CHECK_EQ(rl78_breakpoint_count(c), 2999);
         rl78_clear_breakpoints(c);
+        CHECK_EQ(rl78_breakpoint_count(c), 0);
+        for (i = 0, ok = 0; i < 3000; i++) ok += rl78_memory(c)[0x5000 + i] == 0x00;
+        CHECK_EQ(ok, 3000);
     }
     rl78_destroy(c);
 }
@@ -341,6 +355,38 @@ static void test_mdu(void)
     rl78_destroy(c);
 }
 
+/* RL78_CORE_AUTO: S3 instructions and G13 multiplier SFRs together */
+static void test_auto_core(void)
+{
+    rl78_config cfg;
+    rl78_cpu *c;
+    char t[64];
+    uint8_t mulhu[3] = {0xCE, 0xFB, 0x01};
+    static const char *src =
+        ".org 0\n.dw start\n.org 100H\nstart:\n"
+        "  MOV A, #0\n  MOV !00E8H, A\n"            /* MDUC = 0 */
+        "  MOVW AX, #0003H\n  MOVW 0FFFF0H, AX\n"   /* MDAL */
+        "  MOVW AX, #0005H\n  MOVW 0FFFF2H, AX\n"   /* MDAH -> MDB = 15 */
+        "  MOVW AX, #1000H\n  MOVW BC, #0010H\n"
+        "  MACHU\n"                                  /* MACR = 00050003H + 10000H */
+        "  MULHU\n"                                  /* BCAX = 1000H * 10H */
+        "  HALT\n";
+    rl78_default_config(&cfg, RL78_CORE_AUTO);
+    c = rl78_create(&cfg);
+    CHECK_EQ(rl78_get_config(c)->mdu, 1);
+    if (t_load(c, src)) return;
+    CHECK_EQ(rl78_run(c, 100), RL78_STOP_HALT);
+    CHECK_EQ(rl78_read16(c, 0xFFFF6), 15);           /* MDBL kept: MACH did not trigger the multiplier */
+    CHECK_EQ(rl78_read16(c, 0xFFFF4), 0);
+    CHECK_EQ(rl78_read16(c, 0xFFFF0), 0x0003);       /* MACR low */
+    CHECK_EQ(rl78_read16(c, 0xFFFF2), 0x0006);       /* MACR high: 0005H + 1 */
+    CHECK_EQ(rl78_get_reg(c, RL78_REG_AX), 0x0000);
+    CHECK_EQ(rl78_get_reg(c, RL78_REG_BC), 0x0001);
+    CHECK_EQ(rl78_disasm_buf(RL78_CORE_AUTO, mulhu, 3, 0, t, sizeof t), 3);
+    CHECK(strcmp(t, "MULHU") == 0);
+    rl78_destroy(c);
+}
+
 static void test_misc(void)
 {
     rl78_cpu *c = t_cpu(RL78_CORE_S3);
@@ -413,5 +459,6 @@ void suite_api(void)
     test_snapshot();
     test_sleep_policy();
     test_mdu();
+    test_auto_core();
     test_misc();
 }
