@@ -837,9 +837,22 @@ static int set_func_locked(const char *name, char *err, size_t errlen)
     return 0;
 }
 
+/* 未消化の単発書き込みを捨てる（リセット前の入力が次のステップに混ざらないように） */
+static void discard_pending_locked(void)
+{
+    int i;
+    for (i = 0; i < G.npend; i++) {
+        free(G.pend[i].name);
+        sim_ref_free(G.pend[i].ref);
+        sim_cellval_free(&G.pend[i].val);
+    }
+    G.npend = 0;
+}
+
 static void reset_locked(void)
 {
     char err[1024];
+    discard_pending_locked();
     if (G.b->reset(G.b, err, sizeof err)) set_error(err);
     sim_ctx_clear_args(G.c);
     G.step = 0;

@@ -208,6 +208,13 @@ data: {"periodMs":2,"func":"TEST_cycle","names":["g_eng.state","TEST_cycle_cnt",
     curl -s "$U/api/export.csv" | tr -d '\r' | sed -n '3p' > "$WORK/after_reset.txt"
     check "reset で変数が初期値に戻る（TEST_cycle_cnt 1, g_ms_tick 10）" grep -q ',1,10,' "$WORK/after_reset.txt"
 
+    printf '{"name":"AMSTB_adc_read@AMIN_adc[0]","value":800}' > "$WORK/w800.json"
+    curl -s -X POST --data-binary "@$WORK/w800.json" "$U/api/write" > /dev/null
+    curl -s -X POST --data-binary "@$T/gui/reset.json" "$U/api/control" > /dev/null
+    curl -s -X POST --data-binary "@$WORK/step1.json" "$U/api/control" > /dev/null
+    curl -s "$U/api/export.csv" | tr -d '\r' | sed -n '3p' > "$WORK/after_reset2.txt"
+    check "reset は未消化の単発書き込みを捨てる" sh -c "! grep -q '800' '$WORK/after_reset2.txt'"
+
     CODE=$(curl -s -o "$WORK/load.out" -w '%{http_code}' -X POST --data-binary "@$T/gui/play.csv" "$U/api/load-csv")
     check "/api/load-csv が 200" test "$CODE" = 200
     check "/api/load-csv の応答" contains "$WORK/load.out" '{"rows":4,"names":["AMSTB_adc_read@AMIN_adc[0]","P2_bit.no0","g_eng.state","TEST_cycle_cnt"]}'
