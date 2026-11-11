@@ -1,0 +1,9 @@
+mod,f_loop,無限ループは命令数の上限でその行を NG にして続ける,0,1
+#COMMENT,g_out
+,0
+mod,f_undef,未定義命令はその行を NG にする,0,1
+#COMMENT,g_out
+,0
+mod,f_neg,異常のあとも呼び出せる,0,1
+#COMMENT,f_neg@@
+,-3

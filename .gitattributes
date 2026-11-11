@@ -1,0 +1,10 @@
+# テスト CSV と期待する結果はバイト単位で比べるので、改行コードを変換しない
+*.csv -text
+tests/gui/*.json -text
+# Windows のバッチファイルは CRLF で取り出す
+*.bat text eol=crlf
+*.sh text eol=lf
+# ロードモジュールとリンクマップ、比較用の一覧はバイト列のまま
+*.abs binary
+*.map -text
+tests/rl78/expected/*.txt -text

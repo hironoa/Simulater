@@ -1,0 +1,13 @@
+mod,f_bits,8 ビットのビットフィールド（LSB から fa:3、fb:4、fc:1）,3,3
+#COMMENT,g_st.fa,g_st.fb,g_st.fc,g_out,0xFE13E,g_st.fb
+,5,9,1,9,0xCD,9,OK,0.0000ms
+,0,15,0,15,0x78,15,OK,0.0000ms
+mod,f_bits,16 ビットのビットフィールド・共用体・匿名メンバ,6,9
+#COMMENT,g_w16.lo,g_w16.mid,g_w16.hi,g_u.w,g_cal.word,g_cal.off,0xFE144:2,g_w16.mid,g_u.b[0],g_u.b[1],g_cal.lo,g_cal.hi,g_cal.off,0xFE15A:2,&g_u.b
+,0x1F,0x2A,0x13,0xA1B2,0x1234,-5,0x9D5F,0x2A,0xB2,0xA1,0x34,0x12,-5,0xFFFB,0xB2|0xA1,OK,0.0000ms
+mod,f_bits,enum・_Bool・2 次元配列・const・初期値つき変数・saddr 変数,4,11
+#COMMENT,g_e,g_e2,g_bool,&g_mat,g_e,g_e2,g_mat[1][2],0xFE154,g_lut[3],&g_name,g_init16,&g_initarr,g_sd,gp_init[2],gfp_init[0]
+,200,-1,1,1|2|3|4|5|6,200,-1,6,6,800,'RL78SIM',0x1234,1|2|3,0x5A5A,3,100,OK,0.0000ms
+mod,f_bits,volatile と構造体ポインタの変数,2,3
+#COMMENT,g_vd,gp_st,g_vd,gp_st->w,gp_st[0].fb
+,0xBEEF,0xE13E,0xBEEF,0,0,OK,0.0000ms

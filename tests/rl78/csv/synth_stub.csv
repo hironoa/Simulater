@@ -1,0 +1,7 @@
+mod,use_io,read_io を AMSTB_read_io に置き換える（ADCR ではなく g_stub_val + 1）,2,2
+#COMMENT,0xFFF1E:2,g_stub_val,use_io@@,0xFFF1E:2
+,0x0100,0x0222,0x0223,0x0100
+,0x0300,0x0444,0x0445,0x0300
+mod,read_io,対象関数そのものが置き換え元でもスタブへ,2,1
+#COMMENT,0xFFF1E:2,g_stub_val,read_io@@
+,0x0100,0x0555,0x0555

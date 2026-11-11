@@ -1,0 +1,320 @@
+
+/var/folders/q0/zwcbvnzs6lsdfyq_6khy350h0000gn/T//testprog.73zTM7/t.elf:     file format elf32-rl78
+
+
+Disassembly of section .text:
+
+00000000 <_vect>:
+       0:	00                            	nop
+       1:	01                            	addw	ax, ax
+	...
+
+00000100 <_start>:
+     100:	cb f8 20 fe                   	movw	sp, #0xfe20
+     104:	36 00 e1                      	movw	hl, #0xe100
+     107:	17                            	movw	ax, hl
+     108:	44 60 e1                      	cmpw	ax, #0xe160
+     10b:	dd 06                         	bz	$113 <_start+0x13>
+     10d:	cc 00 00                      	mov	[hl+0], #0
+     110:	a7                            	incw	hl
+     111:	ef f4                         	br	$107 <_start+0x7>
+     113:	41 00                         	mov	es, #0
+     115:	32 0c 00                      	movw	bc, #12
+     118:	f6                            	clrw	ax
+     119:	43                            	cmpw	ax, bc
+     11a:	dd 0a                         	bz	$126 <_start+0x26>
+     11c:	b3                            	decw	bc
+     11d:	11 49 00 18                   	mov	a, es:6144[bc]
+     121:	48 00 e0                      	mov	57344[bc], a
+     124:	ef f2                         	br	$118 <_start+0x18>
+     126:	32 02 00                      	movw	bc, #2
+     129:	f6                            	clrw	ax
+     12a:	43                            	cmpw	ax, bc
+     12b:	dd 0a                         	bz	$137 <_start+0x37>
+     12d:	b3                            	decw	bc
+     12e:	11 49 40 18                   	mov	a, es:6208[bc]
+     132:	48 40 fe                      	mov	65088[bc], a
+     135:	ef f2                         	br	$129 <_start+0x29>
+     137:	fc 3d 01 00                   	call	!!13d <_main>
+
+0000013b <_exit>:
+     13b:	ef fe                         	br	$13b <_exit>
+
+0000013d <_main>:
+     13d:	ef fe                         	br	$13d <_main>
+
+0000013f <_f_mix>:
+     13f:	9f 00 e1                      	mov	!fe100 <BSS>, a
+     142:	60                            	mov	a, x
+     143:	9f 01 e1                      	mov	!fe101 <g_c>, a
+     146:	13                            	movw	ax, bc
+     147:	bf 02 e1                      	movw	!fe102 <g_b>, ax
+     14a:	a1                            	incw	ax
+     14b:	d7                            	ret
+
+0000014c <_f_long>:
+     14c:	bf 04 e1                      	movw	!fe104 <g_l>, ax
+     14f:	33                            	xchw	ax, bc
+     150:	bf 06 e1                      	movw	!fe106 <g_l+0x2>, ax
+     153:	33                            	xchw	ax, bc
+     154:	15                            	movw	ax, de
+     155:	bf 08 e1                      	movw	!fe108 <g_w>, ax
+     158:	af 04 e1                      	movw	ax, !fe104 <g_l>
+     15b:	05                            	addw	ax, de
+     15c:	61 d8                         	sknc
+     15e:	a3                            	incw	bc
+     15f:	d7                            	ret
+
+00000160 <_f_stack>:
+     160:	bf 0a e1                      	movw	!fe10a <g_sa>, ax
+     163:	13                            	movw	ax, bc
+     164:	bf 0c e1                      	movw	!fe10c <g_sb>, ax
+     167:	15                            	movw	ax, de
+     168:	bf 0e e1                      	movw	!fe10e <g_sc>, ax
+     16b:	a8 04                         	movw	ax, [sp+4]
+     16d:	bf 10 e1                      	movw	!fe110 <g_sdd>, ax
+     170:	88 06                         	mov	a, [sp+6]
+     172:	9f 12 e1                      	mov	!fe112 <g_se>, a
+     175:	a8 08                         	movw	ax, [sp+8]
+     177:	bf 14 e1                      	movw	!fe114 <g_sf>, ax
+     17a:	a8 0a                         	movw	ax, [sp+10]
+     17c:	bf 16 e1                      	movw	!fe116 <g_sf+0x2>, ax
+     17f:	a8 04                         	movw	ax, [sp+4]
+     181:	d7                            	ret
+
+00000182 <_f_args8>:
+     182:	9f 1a e1                      	mov	!fe11a <g_b8>, a
+     185:	60                            	mov	a, x
+     186:	9f 1b e1                      	mov	!fe11b <g_b8+0x1>, a
+     189:	62                            	mov	a, c
+     18a:	9f 1c e1                      	mov	!fe11c <g_b8+0x2>, a
+     18d:	63                            	mov	a, b
+     18e:	9f 1d e1                      	mov	!fe11d <g_b8+0x3>, a
+     191:	64                            	mov	a, e
+     192:	9f 1e e1                      	mov	!fe11e <g_b8+0x4>, a
+     195:	65                            	mov	a, d
+     196:	9f 1f e1                      	mov	!fe11f <g_b8+0x5>, a
+     199:	88 04                         	mov	a, [sp+4]
+     19b:	9f 20 e1                      	mov	!fe120 <g_b8+0x6>, a
+     19e:	88 06                         	mov	a, [sp+6]
+     1a0:	9f 21 e1                      	mov	!fe121 <g_b8+0x7>, a
+     1a3:	d7                            	ret
+
+000001a4 <_f_mix2>:
+     1a4:	9f 22 e1                      	mov	!fe122 <g_m_a>, a
+     1a7:	60                            	mov	a, x
+     1a8:	9f 23 e1                      	mov	!fe123 <g_m_d>, a
+     1ab:	13                            	movw	ax, bc
+     1ac:	bf 24 e1                      	movw	!fe124 <g_m_b>, ax
+     1af:	15                            	movw	ax, de
+     1b0:	bf 26 e1                      	movw	!fe126 <g_m_b+0x2>, ax
+     1b3:	a8 04                         	movw	ax, [sp+4]
+     1b5:	bf 28 e1                      	movw	!fe128 <g_m_c>, ax
+     1b8:	d7                            	ret
+
+000001b9 <_f_far_read>:
+     1b9:	9e fd                         	mov	es, a
+     1bb:	11 89                         	mov	a, es:[de]
+     1bd:	d7                            	ret
+
+000001be <_f_far_write>:
+     1be:	9e fd                         	mov	es, a
+     1c0:	60                            	mov	a, x
+     1c1:	11 99                         	mov	es:[de], a
+     1c3:	8e fd                         	mov	a, es
+     1c5:	d7                            	ret
+
+000001c6 <_f_far2>:
+     1c6:	9f 22 e1                      	mov	!fe122 <g_m_a>, a
+     1c9:	60                            	mov	a, x
+     1ca:	9f 2c e1                      	mov	!fe12c <g_fp+0x2>, a
+     1cd:	13                            	movw	ax, bc
+     1ce:	bf 28 e1                      	movw	!fe128 <g_m_c>, ax
+     1d1:	15                            	movw	ax, de
+     1d2:	bf 2a e1                      	movw	!fe12a <g_fp>, ax
+     1d5:	d7                            	ret
+
+000001d6 <_f_far3>:
+     1d6:	bf 0a e1                      	movw	!fe10a <g_sa>, ax
+     1d9:	13                            	movw	ax, bc
+     1da:	bf 0c e1                      	movw	!fe10c <g_sb>, ax
+     1dd:	a8 04                         	movw	ax, [sp+4]
+     1df:	bf 2a e1                      	movw	!fe12a <g_fp>, ax
+     1e2:	88 06                         	mov	a, [sp+6]
+     1e4:	9f 2c e1                      	mov	!fe12c <g_fp+0x2>, a
+     1e7:	d7                            	ret
+
+000001e8 <_f_sum>:
+     1e8:	16                            	movw	hl, ax
+     1e9:	f6                            	clrw	ax
+     1ea:	bf 18 e1                      	movw	!fe118 <g_sum>, ax
+     1ed:	62                            	mov	a, c
+     1ee:	73                            	mov	b, a
+     1ef:	63                            	mov	a, b
+     1f0:	d1                            	cmp0	a
+     1f1:	dd 0d                         	bz	$200 <_f_sum+0x18>
+     1f3:	8b                            	mov	a, [hl]
+     1f4:	70                            	mov	x, a
+     1f5:	f1                            	clrb	a
+     1f6:	02 18 e1                      	addw	ax, !fe118 <g_sum>
+     1f9:	bf 18 e1                      	movw	!fe118 <g_sum>, ax
+     1fc:	a7                            	incw	hl
+     1fd:	93                            	dec	b
+     1fe:	ef ef                         	br	$1ef <_f_sum+0x7>
+     200:	af 18 e1                      	movw	ax, !fe118 <g_sum>
+     203:	d7                            	ret
+
+00000204 <_f_neg>:
+     204:	51 fd                         	mov	a, #253
+     206:	d7                            	ret
+
+00000207 <_f_float>:
+     207:	32 c0 3f                      	movw	bc, #0x3fc0
+     20a:	f6                            	clrw	ax
+     20b:	d7                            	ret
+
+0000020c <_f_ll>:
+     20c:	16                            	movw	hl, ax
+     20d:	30 ef cd                      	movw	ax, #0xcdef
+     210:	bb                            	movw	[hl], ax
+     211:	30 ab 89                      	movw	ax, #0x89ab
+     214:	bc 02                         	movw	[hl+2], ax
+     216:	30 67 45                      	movw	ax, #0x4567
+     219:	bc 04                         	movw	[hl+4], ax
+     21b:	30 23 01                      	movw	ax, #291
+     21e:	bc 06                         	movw	[hl+6], ax
+     220:	d7                            	ret
+
+00000221 <_f_ptr_struct>:
+     221:	14                            	movw	de, ax
+     222:	aa 02                         	movw	ax, [de+2]
+     224:	d7                            	ret
+
+00000225 <_f_bits>:
+     225:	8f 3e e1                      	mov	a, !fe13e <g_st>
+     228:	31 3a                         	shr	a, 3
+     22a:	5c 0f                         	and	a, #15
+     22c:	9f 13 e1                      	mov	!fe113 <g_out>, a
+     22f:	d7                            	ret
+
+00000230 <_f_mulhu>:
+     230:	ce fb 01                      	mulhu
+     233:	d7                            	ret
+
+00000234 <_f_mdu>:
+     234:	bf f0 ff                      	movw	!ffff0 <MDAL>, ax
+     237:	13                            	movw	ax, bc
+     238:	bf f2 ff                      	movw	!ffff2 <MDAH>, ax
+     23b:	af f6 ff                      	movw	ax, !ffff6 <MDBL>
+     23e:	d7                            	ret
+
+0000023f <_read_io>:
+     23f:	af 1e ff                      	movw	ax, !fff1e <ADCR>
+     242:	d7                            	ret
+
+00000243 <_AMSTB_read_io>:
+     243:	af 2e e1                      	movw	ax, !fe12e <g_stub_val>
+     246:	d7                            	ret
+
+00000247 <_use_io>:
+     247:	fc 3f 02 00                   	call	!!23f <_read_io>
+     24b:	a1                            	incw	ax
+     24c:	d7                            	ret
+
+0000024d <_TEST_cycle>:
+     24d:	f6                            	clrw	ax
+     24e:	bf 3a e1                      	movw	!fe13a <s_i>, ax
+     251:	af 30 e1                      	movw	ax, !fe130 <TEST_time_us>
+     254:	04 0a 00                      	addw	ax, #10
+     257:	bf 30 e1                      	movw	!fe130 <TEST_time_us>, ax
+     25a:	de 03                         	bnc	$25f <_TEST_cycle+0x12>
+     25c:	a2 32 e1                      	incw	!fe132 <TEST_time_us+0x2>
+     25f:	a0 3c e1                      	inc	!fe13c <sub_cnt>
+     262:	40 3c e1 64                   	cmp	!fe13c <sub_cnt>, #100
+     266:	df 08                         	bnz	$270 <_TEST_cycle+0x23>
+     268:	cf 3c e1 00                   	mov	!fe13c <sub_cnt>, #0
+     26c:	fc 7f 02 00                   	call	!!27f <_intr_tm00>
+     270:	a2 3a e1                      	incw	!fe13a <s_i>
+     273:	af 3a e1                      	movw	ax, !fe13a <s_i>
+     276:	44 e8 03                      	cmpw	ax, #0x3e8
+     279:	df d6                         	bnz	$251 <_TEST_cycle+0x4>
+     27b:	a2 38 e1                      	incw	!fe138 <TEST_cycle_cnt>
+     27e:	d7                            	ret
+
+0000027f <_intr_tm00>:
+     27f:	af 34 e1                      	movw	ax, !fe134 <g_ms_tick>
+     282:	04 01 00                      	addw	ax, #1
+     285:	bf 34 e1                      	movw	!fe134 <g_ms_tick>, ax
+     288:	de 03                         	bnc	$28d <_intr_tm00+0xe>
+     28a:	a2 36 e1                      	incw	!fe136 <g_ms_tick+0x2>
+     28d:	d7                            	ret
+
+0000028e <_cnt_call>:
+     28e:	a2 48 e1                      	incw	!fe148 <calls>
+     291:	af 48 e1                      	movw	ax, !fe148 <calls>
+     294:	d7                            	ret
+
+00000295 <_engine_inc>:
+     295:	a0 46 e1                      	inc	!fe146 <eng_s_cnt>
+     298:	d7                            	ret
+
+00000299 <_sensor_inc>:
+     299:	a0 47 e1                      	inc	!fe147 <sen_s_cnt>
+     29c:	a0 47 e1                      	inc	!fe147 <sen_s_cnt>
+     29f:	d7                            	ret
+
+000002a0 <_intr_reti>:
+     2a0:	a0 3d e1                      	inc	!fe13d <g_isr_cnt>
+     2a3:	61 fc                         	reti
+
+000002a5 <_f_loop>:
+     2a5:	ef fe                         	br	$2a5 <_f_loop>
+
+000002a7 <_f_undef>:
+     2a7:	61 19                         	*unknown*
+     2a9:	d7                            	ret
+
+000002aa <_f_halt>:
+     2aa:	61 ed                         	halt
+     2ac:	cf 13 e1 77                   	mov	!fe113 <g_out>, #119
+     2b0:	d7                            	ret
+
+000002b1 <_code_end>:
+	...
+
+00001800 <_data_rom>:
+    1800:	34 12 56                      	movw	de, #0x5612
+    1803:	01                            	addw	ax, ax
+    1804:	02 03 03                      	addw	ax, !f0303 <_const_end+0xee2f3>
+    1807:	e0                            	oneb	x
+    1808:	00                            	nop
+    1809:	20 00                         	subw	sp, #0
+	...
+
+0000180c <_data_rom_end>:
+	...
+
+00001840 <_sdata_rom>:
+    1840:	Address 0x1842 is out of bounds.
+
+
+00001842 <_sdata_rom_end>:
+	...
+
+00002000 <_const_rom>:
+    2000:	64                            	mov	a, e
+    2001:	00                            	nop
+    2002:	c8 00 90                      	mov	[sp+0], #144
+    2005:	01                            	addw	ax, ax
+    2006:	20 03                         	subw	sp, #3
+    2008:	52 4c                         	mov	c, #76
+    200a:	37                            	xchw	ax, hl
+    200b:	38 53 49 4d                   	mov	18771[c], #77
+	...
+
+Disassembly of section .plt:
+
+00002010 <.plt>:
+    2010:	00                            	nop
+    2011:	00                            	nop
+	...

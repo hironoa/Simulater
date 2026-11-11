@@ -1,0 +1,6 @@
+mod,TEST_cycle,GUI 再生,2,2
+#COMMENT,AMSTB_adc_read@AMIN_adc[0],P2_bit.no0,g_eng.state,TEST_cycle_cnt
+,0,1,,
+,300,,,
+,800,,,
+,1300,,,

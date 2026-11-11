@@ -1,0 +1,3 @@
+mod,R_SAU0_Set_PowerOn,スタートアップ後の bss（ram_fill = 0xA5 で始めて 0 になっているか）,0,5
+#COMMENT,g_tx_data,g_num,&g_rx_data_stored,g_rx_data_stored[62],gp_csi00_rx_address
+,0,0,0|0|0|0|0|0|0|0,0,0

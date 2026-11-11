@@ -1,0 +1,32 @@
+mod,R_Config_CSI00_Send_Receive,CSI00 送受信の開始（near ポインタ 2 個と uint16 の引数、MD_STATUS の戻り値）,6,6
+#COMMENT,g_tx_data,@tx_buf,@tx_num,@rx_buf,0xFFFE5,g_rx_data,R_Config_CSI00_Send_Receive@@,g_csi00_tx_count,gp_csi00_tx_address,gp_csi00_rx_address,0xFFF10,0xFFFE5
+;,tx_buf = &g_tx_data（0xFBF00 の near ポインタ）、rx_buf = &g_rx_data。SIO00 (0xFFF10) に送信データ、CSIMK00 (0xFFFE5 の bit5) が 0 に戻る
+,0x5A,0xBF00,1,0xBF01,0xFF,0x11,0,0,0xBF01,0xBF01,0x5A,0xDF,OK,0.0000ms
+;,tx_num = 0 は MD_ARGERROR（0x81）。変数は前の行のまま
+,0x66,0xBF00,0,0xBF01,0xFF,,0x81,0,0xBF01,0xBF01,0x5A,0xFF,OK,0.0000ms
+;,tx_buf = NULL なら SIO00 に 0xFF。送信ポインタは進まない
+,,0,3,0xBF04,,,0,2,0,0xBF04,0xFF,0xDF,OK,0.0000ms
+mod,R_Config_CSI00_Send_Receive,near ポインタの先を読む（0xF0000 を基準に解決）,5,5
+#COMMENT,g_tx_data,g_rx_data,@tx_buf,@tx_num,@rx_buf,gp_csi00_tx_address[0],*gp_csi00_rx_address,gp_csi00_tx_address[1],gp_csi00_rx_address[0],0xFFF10
+;,送信ポインタは 1 進んで g_rx_data（0xFBF01）を指す。その次は g_mode_check（bss なので 0）
+,0x12,0x34,0xBF00,1,0xBF01,0x34,0x34,0,0x34,0x12,OK,0.0000ms
+mod,R_Config_CSI00_Send_Receive,$ で確保した領域を tx_buf に渡す,3,3
+#COMMENT,$@tx_buf,@tx_buf[0],@tx_num,R_Config_CSI00_Send_Receive@@,0xFFF10,g_csi00_tx_count
+,2,0x77,2,0,0x77,1,OK,0.0000ms
+,1,0x99,1,0,0x99,0,OK,0.0000ms
+mod,CSI00_Send_Receive,HALT を読み飛ばして g_num+1 回送受信する,2,4
+#COMMENT,g_num,g_rx_data,&g_rx_data_stored,g_tx_data,0xFFF10,g_rx_data_stored[3]
+,2,0x33,0x33|0x33|0x33,0x42,0x42,0,OK,0.0000ms
+,3,0x44,0x44|0x44|0x44|0x44,0x43,0x43,0x44,OK,0.0000ms
+mod,get_fclk_freq_hz,uint32_t の戻り値（BC-AX）。CKC と HOCODIV/MOCODIV と ROM のオプションバイトから決まる,3,2
+#COMMENT,0xFFFA4,0xF00A8,0xF00F2,get_fclk_freq_hz@@,0xC2
+,0x00,0,,32000000,0xE8,OK,0.0000ms
+,0x00,1,,16000000,0xE8,OK,0.0000ms
+,0x00,3,,4000000,0xE8,OK,0.0000ms
+,0x00,5,,1000000,0xE8,OK,0.0000ms
+,0x02,,0,4000000,0xE8,OK,0.0000ms
+,0x02,,1,2000000,0xE8,OK,0.0000ms
+,0x02,,2,1000000,0xE8,OK,0.0000ms
+mod,get_fclk_freq_hz,ROM の const（ミラーと far アクセス）,0,6
+#COMMENT,TX_NUM,RX_NUM,data_length,TX_DATA[5],&TX_DATA,g_fih_hz[9]
+,32,32,1,0x45,'@ABCDEFG',16000000,OK,0.0000ms

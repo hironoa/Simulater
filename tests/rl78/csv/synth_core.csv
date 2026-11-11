@@ -1,0 +1,6 @@
+mod,f_mulhu,core = S2 では CE FB 01 は MULHU ではなく MOV sfr（0FFFFBH）、#01H なので BC-AX は引数のまま,2,1
+#COMMENT,@a,@b,f_mulhu@@
+,2,3,0x00030002
+mod,f_mdu,core = S2 では乗除算器 SFR が使える,2,1
+#COMMENT,@a,@b,f_mdu@@
+,300,300,24464
