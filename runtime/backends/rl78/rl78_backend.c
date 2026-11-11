@@ -708,7 +708,7 @@ static void b_close(sim_backend *b)
 static int setup_core(be_t *z, char *err, size_t errlen)
 {
     const char *s = sim_cfg_get(&z->cfg, "core");
-    rl78_core core = RL78_CORE_S3;
+    rl78_core core = RL78_CORE_AUTO;
     int mdu = 1, on;
     int is_auto = 1;
     if (s && strcmp(s, "auto") != 0) {
