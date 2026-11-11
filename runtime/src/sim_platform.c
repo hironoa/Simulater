@@ -195,6 +195,27 @@ void sim_console_utf8(void)
     SetConsoleOutputCP(CP_UTF8);
 }
 
+/* fopen と同じ ANSI コードページでパスを解釈するため CreateFileA を使う。
+ * フォルダも開けるよう FILE_FLAG_BACKUP_SEMANTICS、ほかが開いていても開けるよう共有はすべて許す */
+static int file_id(const char *path, BY_HANDLE_FILE_INFORMATION *fi)
+{
+    HANDLE h = CreateFileA(path, 0, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING,
+                           FILE_FLAG_BACKUP_SEMANTICS, NULL);
+    BOOL ok;
+    if (h == INVALID_HANDLE_VALUE) return -1;
+    ok = GetFileInformationByHandle(h, fi);
+    CloseHandle(h);
+    return ok ? 0 : -1;
+}
+
+int sim_same_file(const char *a, const char *b)
+{
+    BY_HANDLE_FILE_INFORMATION fa, fb;
+    if (file_id(a, &fa) || file_id(b, &fb)) return 0;
+    return fa.dwVolumeSerialNumber == fb.dwVolumeSerialNumber && fa.nFileIndexHigh == fb.nFileIndexHigh &&
+           fa.nFileIndexLow == fb.nFileIndexLow;
+}
+
 #else /* POSIX */
 
 #include <errno.h>
@@ -204,6 +225,7 @@ void sim_console_utf8(void)
 #include <pthread.h>
 #include <signal.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <sys/time.h>
 #include <time.h>
 #include <unistd.h>
@@ -406,5 +428,12 @@ void sim_open_browser(const char *url)
 }
 
 void sim_console_utf8(void) {}
+
+int sim_same_file(const char *a, const char *b)
+{
+    struct stat sa, sb;
+    if (stat(a, &sa) != 0 || stat(b, &sb) != 0) return 0;
+    return sa.st_dev == sb.st_dev && sa.st_ino == sb.st_ino;
+}
 
 #endif

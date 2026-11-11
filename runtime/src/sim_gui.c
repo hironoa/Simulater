@@ -720,7 +720,8 @@ static void api_write(sim_sock s, req_t *r)
 {
     sj_value *v = parse_body(s, r), *val;
     const char *name;
-    char err[1024], text[256];
+    char err[1024], num[64];
+    const char *text = num;   /* 文字列はそのまま使う（長さで切り詰めない） */
     sim_ref *ref;
     sim_cellval cv;
     int hold, release, i;
@@ -752,10 +753,10 @@ static void api_write(sim_sock s, req_t *r)
         sj_free(v);
         return;
     }
-    if (val->type == SJ_STR) snprintf(text, sizeof text, "%s", val->str);
-    else if (val->type == SJ_BOOL) snprintf(text, sizeof text, "%d", val->num != 0);
-    else if (val->num == floor(val->num) && fabs(val->num) < 9e18) snprintf(text, sizeof text, "%lld", (long long)val->num);
-    else snprintf(text, sizeof text, "%.17g", val->num);
+    if (val->type == SJ_STR) text = val->str;
+    else if (val->type == SJ_BOOL) snprintf(num, sizeof num, "%d", val->num != 0);
+    else if (val->num == floor(val->num) && fabs(val->num) < 9e18) snprintf(num, sizeof num, "%lld", (long long)val->num);
+    else snprintf(num, sizeof num, "%.17g", val->num);
     ref = sim_ref_parse(G.c, name, err, sizeof err);
     if (!ref) { sim_mutex_unlock(G.mu); send_error(s, 400, err); sj_free(v); return; }
     if (!sim_ref_writable(ref)) {
@@ -828,12 +829,34 @@ static void reresolve_locked(void)
     G.watch_ver++;
 }
 
-static int set_func_locked(const char *name, char *err, size_t errlen)
+/* 関数を探して対象にできるか確かめる（状態は変えない）。できなければ NULL と err */
+static const sim_func *check_func_locked(const char *name, char *err, size_t errlen)
 {
-    const sim_func *f = sim_ctx_find_func(G.c, name, err, errlen);
-    if (!f || sim_ctx_set_func(G.c, f, err, errlen)) return -1;
+    const sim_func *f;
+    if (strlen(name) >= sizeof G.func) {
+        snprintf(err, errlen, "関数名 '%.64s...' が長すぎます（%u 文字まで）", name, (unsigned)sizeof G.func - 1);
+        return NULL;
+    }
+    f = sim_ctx_find_func(G.c, name, err, errlen);
+    if (!f || sim_ctx_check_func(f, err, errlen)) return NULL;
+    return f;
+}
+
+/* 検証済みの関数に差し替える */
+static void commit_func_locked(const char *name, const sim_func *f)
+{
+    char err[1024];
+    if (sim_ctx_set_func(G.c, f, err, sizeof err)) { set_error(err); return; }  /* 検証済みなので起きない */
     snprintf(G.func, sizeof G.func, "%s", name);
     reresolve_locked();
+}
+
+/* 失敗したら以前の関数・引数・表示名をそのまま残す */
+static int set_func_locked(const char *name, char *err, size_t errlen)
+{
+    const sim_func *f = check_func_locked(name, err, errlen);
+    if (!f) return -1;
+    commit_func_locked(name, f);
     return 0;
 }
 
@@ -872,9 +895,28 @@ static void api_control(sim_sock s, req_t *r)
     char err[1024];
     sim_buf b;
     sj_value *x;
+    const sim_func *nf = NULL;
     if (!v) return;
     cmd = sj_get_str(v, "cmd", "");
+    /* 先に全部確かめる。400 を返すときは何も変えない */
+    if (cmd[0] && strcmp(cmd, "run") != 0 && strcmp(cmd, "pause") != 0 && strcmp(cmd, "step") != 0 &&
+        strcmp(cmd, "reset") != 0) {
+        snprintf(err, sizeof err, "cmd '%s' は分かりません（run / pause / step / reset）", cmd);
+        send_error(s, 400, err);
+        sj_free(v);
+        return;
+    }
     sim_mutex_lock(G.mu);
+    fn = sj_get_str(v, "func", NULL);
+    if (fn && strcmp(fn, G.func) != 0) {
+        nf = check_func_locked(fn, err, sizeof err);
+        if (!nf) {
+            sim_mutex_unlock(G.mu);
+            send_error(s, 400, err);
+            sj_free(v);
+            return;
+        }
+    }
     G.error[0] = 0;
     if ((x = sj_get(v, "speed")) && x->type == SJ_NUM) {
         double sp = x->num;
@@ -886,15 +928,7 @@ static void api_control(sim_sock s, req_t *r)
     if ((x = sj_get(v, "periodMs")) && x->type == SJ_NUM && x->num > 0) {
         G.period_ms = x->num < 0.01 ? 0.01 : (x->num > 60000 ? 60000 : x->num);
     }
-    fn = sj_get_str(v, "func", NULL);
-    if (fn && strcmp(fn, G.func) != 0) {
-        if (set_func_locked(fn, err, sizeof err)) {
-            sim_mutex_unlock(G.mu);
-            send_error(s, 400, err);
-            sj_free(v);
-            return;
-        }
-    }
+    if (nf) commit_func_locked(fn, nf);
     if (strcmp(cmd, "run") == 0) G.running = 1;
     else if (strcmp(cmd, "pause") == 0) { G.running = 0; G.budget = 0; }
     else if (strcmp(cmd, "step") == 0) {
@@ -904,12 +938,6 @@ static void api_control(sim_sock s, req_t *r)
     } else if (strcmp(cmd, "reset") == 0) {
         G.running = 0;
         reset_locked();
-    } else if (cmd[0]) {
-        sim_mutex_unlock(G.mu);
-        snprintf(err, sizeof err, "cmd '%s' は分かりません（run / pause / step / reset）", cmd);
-        send_error(s, 400, err);
-        sj_free(v);
-        return;
     }
     state_changed();
     /* step はその場で終わるまで待って結果を返す（最大 5 秒） */
@@ -944,34 +972,46 @@ static void api_load_csv(sim_sock s, req_t *r)
     char err[1024];
     int i;
     sim_buf b;
+    const sim_func *nf = NULL, *f;
+    sim_ref **refs;
     if (sim_csv_load_table(r->body, r->body_len, &t, err, sizeof err)) { send_error(s, 400, err); return; }
     sim_mutex_lock(G.mu);
-    G.running = 0;
-    G.budget = 0;
-    if (t.func[0] && strcmp(t.func, G.func) != 0 && set_func_locked(t.func, err, sizeof err)) {
-        sim_mutex_unlock(G.mu);
-        sim_csv_table_free(&t);
-        send_error(s, 400, err);
-        return;
+    /* 関数と入力列をすべて確かめてから差し替える。400 を返すときは以前の関数・再生・実行状態をそのまま残す */
+    if (t.func[0] && strcmp(t.func, G.func) != 0) {
+        nf = check_func_locked(t.func, err, sizeof err);
+        if (!nf) {
+            sim_mutex_unlock(G.mu);
+            sim_csv_table_free(&t);
+            send_error(s, 400, err);
+            return;
+        }
     }
-    free_play_locked();
-    G.play = t;
-    G.play_cols = t.nin;
-    G.play_refs = sim_xcalloc((size_t)t.nin + 1, sizeof *G.play_refs);
-    G.play_col_ids = sim_xcalloc((size_t)t.nin + 1, sizeof *G.play_col_ids);
+    f = nf ? nf : sim_ctx_func(G.c);
+    refs = sim_xcalloc((size_t)t.nin + 1, sizeof *refs);
     for (i = 0; i < t.nin; i++) {
-        G.play_refs[i] = sim_ref_parse(G.c, t.names[i], err, sizeof err);
-        if (!G.play_refs[i] || !sim_ref_writable(G.play_refs[i])) {
+        refs[i] = sim_ref_parse_for(G.c, f, t.names[i], err, sizeof err);
+        if (!refs[i] || !sim_ref_writable(refs[i])) {
             char m[1200];
-            if (G.play_refs[i]) snprintf(err, sizeof err, "'%s' には書き込めません", t.names[i]);
+            int k;
+            if (refs[i]) snprintf(err, sizeof err, "'%s' には書き込めません", t.names[i]);
             snprintf(m, sizeof m, "入力 %d 列目: %s", i + 2, err);
-            free_play_locked();
+            for (k = 0; k <= i; k++) sim_ref_free(refs[k]);
+            free(refs);
+            sim_csv_table_free(&t);
             sim_mutex_unlock(G.mu);
             send_error(s, 400, m);
             return;
         }
-        G.play_col_ids[i] = col_index(&G.in_cols, &G.nin_cols, t.names[i]);
     }
+    G.running = 0;
+    G.budget = 0;
+    if (nf) commit_func_locked(t.func, nf);
+    free_play_locked();
+    G.play = t;
+    G.play_cols = t.nin;
+    G.play_refs = refs;
+    G.play_col_ids = sim_xcalloc((size_t)t.nin + 1, sizeof *G.play_col_ids);
+    for (i = 0; i < t.nin; i++) G.play_col_ids[i] = col_index(&G.in_cols, &G.nin_cols, t.names[i]);
     set_watch_locked((const char *const *)t.names, t.nin + t.nout, 1, NULL);
     reset_locked();
     G.play_active = 1;

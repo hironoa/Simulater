@@ -30,7 +30,10 @@ sim_backend *sim_ctx_backend(sim_ctx *c);
 
 /* 関数を名前（"func" または "file.c/func"）で探す。見つからなければ NULL と err */
 const sim_func *sim_ctx_find_func(sim_ctx *c, const char *name, char *err, size_t errlen);
-/* 対象関数を設定する（引数を 0 に戻す）。対応外の引数・戻り値ならエラー。f = NULL で解除 */
+/* 対象関数にできるか（引数・戻り値が対応内か）だけを確かめる。文脈は変えない。f = NULL は常に成功 */
+int sim_ctx_check_func(const sim_func *f, char *err, size_t errlen);
+/* 対象関数を設定する（引数を 0 に戻す）。対応外の引数・戻り値ならエラーで、そのときは
+ * 以前の関数と引数をそのまま残す。f = NULL で解除 */
 int sim_ctx_set_func(sim_ctx *c, const sim_func *f, char *err, size_t errlen);
 const sim_func *sim_ctx_func(sim_ctx *c);
 /* 対象関数を呼ぶ */
@@ -46,6 +49,8 @@ int sim_ctx_sym_const(sim_ctx *c, size_t i);
 
 /* 式を解析して解決する。失敗なら NULL と err */
 sim_ref *sim_ref_parse(sim_ctx *c, const char *text, char *err, size_t errlen);
+/* 対象関数が f だったものとして式を解決する（引数 @x を f の引数として解く）。文脈の対象関数と引数は変えない */
+sim_ref *sim_ref_parse_for(sim_ctx *c, const sim_func *f, const char *text, char *err, size_t errlen);
 void sim_ref_free(sim_ref *r);
 const char *sim_ref_text(const sim_ref *r);
 int sim_ref_prefix(const sim_ref *r);           /* '$' '&' '*' または 0 */

@@ -454,16 +454,18 @@ int sim_csv_run_file(sim_ctx *c, const char *path, const sim_csv_opts *o, sim_cs
     }
     opath = sim_path_join(o->outdir, sim_basename(path));
     {
-        size_t olen;
-        char *existing = sim_read_file(opath, &olen);
-        /* 入力そのものを上書きしない */
-        if (existing && olen == len && memcmp(existing, data, len) == 0 && strcmp(opath, path) == 0) {
-            fprintf(stderr, "エラー: 結果の出力先 %s が入力と同じです。-o で別のフォルダを指定してください\n", opath);
-            free(existing); free(opath); free_lines(ls, n); free(data); sim_buf_free(&out);
+        /* 入力（この実行で渡した他の入力も）を上書きしない。パスの表記ではなくファイルそのもので比べる。
+         * 出力先がまだなければ同じファイルではありえないので、そのまま書く */
+        const char *same = sim_same_file(opath, path) ? path : NULL;
+        int k;
+        for (k = 0; !same && o->inputs && k < o->ninputs; k++)
+            if (sim_same_file(opath, o->inputs[k])) same = o->inputs[k];
+        if (same) {
+            fprintf(stderr, "エラー: 結果の出力先 %s が入力と同じです（入力: %s）。-o で別のフォルダを指定してください\n", opath, same);
+            free(opath); free_lines(ls, n); free(data); sim_buf_free(&out);
             st->errors++;
             return -1;
         }
-        free(existing);
     }
     if (sim_write_file(opath, out.p ? out.p : "", out.len)) {
         fprintf(stderr, "エラー: %s を書けません\n", opath);

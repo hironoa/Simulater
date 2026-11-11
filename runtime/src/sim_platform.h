@@ -48,4 +48,9 @@ void sim_open_browser(const char *url);
 /* 標準出力を UTF-8 で表示できるようにする（Windows のコンソール） */
 void sim_console_utf8(void);
 
+/* a と b が同じファイルを指すなら 1、違う（またはどちらかが存在しない・開けない）なら 0。
+ * パスの表記（./、..、相対・絶対、シンボリックリンク、ハードリンク、大文字小文字）ではなく
+ * ファイルそのもので比べる。POSIX は st_dev/st_ino、Windows はボリュームシリアルとファイルインデックス */
+int sim_same_file(const char *a, const char *b);
+
 #endif

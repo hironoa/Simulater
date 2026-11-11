@@ -156,11 +156,9 @@ static int scalar_kind(const sim_type *t)
                  t->kind == SIM_T_PTR || t->kind == SIM_T_FLOAT);
 }
 
-int sim_ctx_set_func(sim_ctx *c, const sim_func *f, char *err, size_t errlen)
+int sim_ctx_check_func(const sim_func *f, char *err, size_t errlen)
 {
     int i;
-    c->func = NULL;
-    sim_ctx_clear_args(c);
     if (!f) return 0;
     if (f->nparams > SIM_MAX_ARGS) {
         snprintf(err, errlen, "関数 '%s' の引数が %d 個あります。対応は %d 個までです", f->name, f->nparams, SIM_MAX_ARGS);
@@ -182,8 +180,26 @@ int sim_ctx_set_func(sim_ctx *c, const sim_func *f, char *err, size_t errlen)
         snprintf(err, errlen, "関数 '%s' の戻り値は構造体などです。void/整数/ポインタ/float/double にだけ対応しています", f->name);
         return -1;
     }
-    c->func = f;
     return 0;
+}
+
+int sim_ctx_set_func(sim_ctx *c, const sim_func *f, char *err, size_t errlen)
+{
+    /* 検証が済んでから差し替える。失敗したら以前の関数と引数をそのまま残す */
+    if (sim_ctx_check_func(f, err, errlen)) return -1;
+    c->func = f;
+    sim_ctx_clear_args(c);
+    return 0;
+}
+
+sim_ref *sim_ref_parse_for(sim_ctx *c, const sim_func *f, const char *text, char *err, size_t errlen)
+{
+    const sim_func *saved = c->func;
+    sim_ref *r;
+    c->func = f;
+    r = sim_ref_parse(c, text, err, errlen);
+    c->func = saved;
+    return r;
 }
 
 int sim_ctx_call(sim_ctx *c, char *err, size_t errlen)
@@ -1156,20 +1172,21 @@ int sim_ref_check(sim_ctx *c, const sim_ref *r, const sim_cellval *expected, con
     {
         const sim_type *e = r->elem;
         int n, i, as_string, all = 1;
-        uint64_t raws[4096];
+        uint64_t *raws;
         if (L.kind != RB_MEM) { snprintf(err, errlen, "'%s': 読み出し先がメモリではありません", r->text); return -1; }
-        if (has_exp) n = expected->n;
-        else if (r->count > 0) n = (int)r->count;
-        else n = 1;
-        if (n > (int)(sizeof raws / sizeof raws[0])) n = (int)(sizeof raws / sizeof raws[0]);
         if (has_exp && r->count > 0 && (uint32_t)expected->n > r->count) {
             snprintf(err, errlen, "'%s': 期待値が %d 個ありますが、要素数は %u です", r->text, expected->n, r->count);
             return -1;
         }
+        /* 期待値（または配列の要素数）の全要素を読んで比べる。途中で打ち切らない */
+        if (has_exp) n = expected->n;
+        else if (r->count > 0) n = (int)r->count;
+        else n = 1;
+        raws = sim_xmalloc(sizeof *raws * (size_t)n);
         for (i = 0; i < n; i++) {
             loc_t Li = L;
             Li.addr = L.addr + (uint64_t)i * e->size;
-            if (read_raw(c, &Li, e, -1, 0, &raws[i], err, errlen)) return -1;
+            if (read_raw(c, &Li, e, -1, 0, &raws[i], err, errlen)) { free(raws); return -1; }
         }
         if (has_exp) {
             for (i = 0; i < n; i++) if (!item_match(e, 0, raws[i], &expected->items[i])) all = 0;
@@ -1186,6 +1203,7 @@ int sim_ref_check(sim_ctx *c, const sim_ref *r, const sim_cellval *expected, con
                 sim_buf_addc(out, '\'');
                 for (i = 0; i < len; i++) sim_buf_addc(out, (char)raws[i]);
                 sim_buf_addc(out, '\'');
+                free(raws);
                 return 0;
             }
         }
@@ -1193,6 +1211,7 @@ int sim_ref_check(sim_ctx *c, const sim_ref *r, const sim_cellval *expected, con
             if (i) sim_buf_addc(out, '|');
             format_num(e, 0, raws[i], fmt, out);
         }
+        free(raws);
         return 0;
     }
 }

@@ -125,6 +125,39 @@ RC=$?
 check "入力と同じ場所には書かない" test "$RC" -eq 2
 check "入力が上書きされていない" grep -q "^mod,eng_judge_gear,ギア段判定,4,2,右のセルも保つ,x$" "$T/csv/unit_all.csv"
 
+echo "== 入力と同じファイルには書かない（パスの表記が違っても）"
+mkdir -p "$WORK/same" "$WORK/other"
+ln -s "$WORK/same" "$WORK/same_link" 2>/dev/null
+# 入力を作り直し、sim run を実行して「終了コード 2 で入力がそのまま」かを確かめる
+same_case() {
+    _name=$1; shift
+    cp "$T/csv/unit_all.csv" "$WORK/same/unit_all.csv"
+    (cd "$WORK/same" && "$SIM" run "$@" --quiet > "$WORK/same.log" 2>&1)
+    _rc=$?
+    if [ "$_rc" -eq 2 ] && cmp -s "$WORK/same/unit_all.csv" "$T/csv/unit_all.csv" && contains "$WORK/same.log" "入力と同じです"; then ok "$_name"
+    else ng "$_name" "終了コード ${_rc}、出力: $(head -2 "$WORK/same.log")"; fi
+}
+same_case "入力を ./ 付きで指定（/x/./a.csv -o /x）" "$WORK/same/./unit_all.csv" -o "$WORK/same"
+same_case "入力を相対、出力を絶対で指定" unit_all.csv -o "$WORK/same"
+same_case "出力を相対（.）で指定" "$WORK/same/unit_all.csv" -o .
+same_case "出力を .. を含むパスで指定" "$WORK/same/unit_all.csv" -o "$WORK/same/sub/.."
+same_case "出力をシンボリックリンク経由で指定" "$WORK/same/unit_all.csv" -o "$WORK/same_link"
+same_case "後の入力を前の結果で上書きしない（複数の入力）" "$T/csv/unit_all.csv" "$WORK/same/unit_all.csv" -o "$WORK/same"
+rm -rf "$WORK/fresh"
+"$SIM" run "$WORK/same/./unit_all.csv" -o "$WORK/fresh/./" --fixed-time --quiet > "$WORK/fresh.log" 2>&1
+RC=$?
+check "出力先にまだファイルがなければ書く（終了コード 0）" test "$RC" -eq 0 -a -f "$WORK/fresh/unit_all.csv"
+cp "$T/csv/unit_all.csv" "$WORK/other/unit_all.csv"
+"$SIM" run "$T/csv/unit_all.csv" -o "$WORK/other" --fixed-time --quiet > "$WORK/other.log" 2>&1
+RC=$?
+check "入力と同じ内容の別ファイルは上書きする（終了コード 0）" sh -c "[ $RC -eq 0 ] && cmp -s '$WORK/other/unit_all.csv' '$T/expected/unit_all.csv'"
+
+echo "== 配列・ポインタの長い値（4096 要素を超える）"
+"$SIM" run "$T/csv/long_array.csv" -o "$WORK/olong" --quiet > "$WORK/long.log" 2>&1
+RC=$?
+check "4097 要素目の不一致を NG にする（終了コード 1）" test "$RC" -eq 1
+check "4096 要素を超える期待値と入力を全部比べる（OK 2, NG 1）" contains "$WORK/long.log" "合計: 総数 3, OK 2, NG 1, NO Check 0"
+
 echo "== GUI サーバの API"
 if ! command -v curl > /dev/null 2>&1; then
     ng "curl がありません"
@@ -235,6 +268,33 @@ data: {"periodMs":2,"func":"TEST_cycle","names":["g_eng.state","TEST_cycle_cnt",
     check "不明な API は 404" test "$CODE" = 404
     CODE=$(curl -s -o "$WORK/badjson.out" -w '%{http_code}' -X POST --data-binary '{"names":' "$U/api/watch")
     check "壊れた JSON は 400" test "$CODE" = 400
+
+    # 関数の変更が失敗したら、以前の関数・引数・設定をそのまま保つ
+    post watch_call_cnt.json wcc.out /api/watch > /dev/null
+    post reset.json rs.out /api/control > /dev/null
+    post step1.json s1.out /api/control > /dev/null
+    CODE=$(post func_bad.json fb.out /api/control)
+    check "未対応の引数の関数への変更は 400" test "$CODE" = 400
+    post step1.json s2.out /api/control > /dev/null
+    curl -s "$U/api/export.csv" | tr -d '\r' > "$WORK/fb_export.csv"
+    CALLS=$(awk -F, 'NR==2{for(i=1;i<=NF;i++) if($i=="eng_update@call_cnt") c=i} NR>2&&c{printf "%s ", $c}' "$WORK/fb_export.csv")
+    check "変更が失敗しても以前の関数が呼ばれ続ける（eng_update@call_cnt: ${CALLS}）" test "$CALLS" = "1 2 "
+    curl -s "$U/api/info" > "$WORK/fb_info.json"
+    check "変更が失敗しても /api/info の関数は TEST_cycle" contains "$WORK/fb_info.json" '"func":"TEST_cycle"'
+    SP0=$(grep -o '"speed":[^,]*,"holds"' "$WORK/fb_info.json"; grep -o '"periodMs":[^,]*' "$WORK/fb_info.json")
+    CODE=$(post func_bad_speed.json fbs.out /api/control)
+    curl -s "$U/api/info" > "$WORK/fbs_info.json"
+    SP1=$(grep -o '"speed":[^,]*,"holds"' "$WORK/fbs_info.json"; grep -o '"periodMs":[^,]*' "$WORK/fbs_info.json")
+    check "関数の変更が 400 なら speed / periodMs も変えない" test "$CODE" = 400 -a "$SP0" = "$SP1"
+    # 256 文字を超える値を黙って切り詰めない（"1<空白 254 個>|2" が "1" に切り詰められて 200 になっていた）
+    CODE=$(post long_value.json longval.out /api/write)
+    check "/api/write の長い値は切り詰めずにエラー（400）" test "$CODE" = 400
+    CODE=$(post func_bad_cmd.json fbc.out /api/control)
+    curl -s "$U/api/info" > "$WORK/fbc_info.json"
+    check "不明な cmd で 400 なら関数も変えない" sh -c "[ '$CODE' = 400 ] && grep -q '\"func\":\"TEST_cycle\"' '$WORK/fbc_info.json'"
+    CODE=$(curl -s -o "$WORK/bp.out" -w '%{http_code}' -X POST --data-binary "@$T/gui/bad_play.csv" "$U/api/load-csv")
+    curl -s "$U/api/info" > "$WORK/bp_info.json"
+    check "/api/load-csv が 400 なら関数も変えない" sh -c "[ '$CODE' = 400 ] && grep -q '\"func\":\"TEST_cycle\"' '$WORK/bp_info.json'"
     curl -s "$U/" > "$WORK/index.html"
     check "sim_gui.html がなければ「GUI が未ビルド」のページ" contains "$WORK/index.html" "GUI が未ビルドです"
     if [ -f "$ROOT/gui/dist/sim_gui.html" ]; then

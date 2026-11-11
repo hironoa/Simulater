@@ -80,6 +80,31 @@ call :err_case overflow.csv "300"
 call :err_case null_deref.csv "NULL"
 call :err_case bad_mod.csv "'x'"
 
+echo == never overwrite an input, whatever the path spelling
+mkdir "%WORK%\same"
+mkdir "%WORK%\other"
+call :same_case "input given with .\ in the middle" "%WORK%\same\.\unit_all.csv" -o "%WORK%\same"
+call :same_case "relative input, absolute output" unit_all.csv -o "%WORK%\same"
+call :same_case "output given as ." "%WORK%\same\unit_all.csv" -o .
+call :same_case "output given with sub\.." "%WORK%\same\unit_all.csv" -o "%WORK%\same\sub\.."
+call :same_case "output given with other letter case and slashes" "%WORK%\same\unit_all.csv" -o "%WORK%/SAME"
+call :same_case "a later input is not overwritten by an earlier result" "%T%\csv\unit_all.csv" "%WORK%\same\unit_all.csv" -o "%WORK%\same"
+"%SIM%" run "%WORK%\same\.\unit_all.csv" -o "%WORK%\fresh\." --fixed-time --quiet > "%WORK%\fresh.log" 2>&1
+if errorlevel 1 (call :ng "output file not there yet is written") else if exist "%WORK%\fresh\unit_all.csv" (call :ok "output file not there yet is written") else (call :ng "output file not there yet is written")
+copy /y "%T%\csv\unit_all.csv" "%WORK%\other\unit_all.csv" >nul
+"%SIM%" run "%T%\csv\unit_all.csv" -o "%WORK%\other" --fixed-time --quiet > "%WORK%\other.log" 2>&1
+if errorlevel 1 (call :ng "another file with the same content is overwritten") else (
+    fc /b "%WORK%\other\unit_all.csv" "%T%\expected\unit_all.csv" >nul
+    if errorlevel 1 (call :ng "another file with the same content is overwritten") else (call :ok "another file with the same content is overwritten")
+)
+
+echo == arrays and pointers with more than 4096 elements
+"%SIM%" run "%T%\csv\long_array.csv" -o "%WORK%\olong" --quiet > "%WORK%\long.log" 2>&1
+set RC=%ERRORLEVEL%
+if "%RC%"=="1" (call :ok "mismatch at element 4097 is NG (exit code 1)") else (call :ng "mismatch at element 4097 is NG (exit code 1), got %RC%")
+findstr /l /c:"OK 2, NG 1, NO Check 0" "%WORK%\long.log" >nul
+if errorlevel 1 (call :ng "all elements beyond 4096 are compared (OK 2, NG 1)") else (call :ok "all elements beyond 4096 are compared (OK 2, NG 1)")
+
 echo == GUI server API
 where curl >nul 2>nul
 if errorlevel 1 (
@@ -139,6 +164,34 @@ if errorlevel 1 (call :ng "/api/control reset") else (call :ok "/api/control res
 curl -s -X POST --data-binary "@%T%\gui\play.csv" "%U%/api/load-csv" > "%WORK%\load.out"
 findstr /l /c:"\"rows\":4" "%WORK%\load.out" >nul
 if errorlevel 1 (call :ng "/api/load-csv") else (call :ok "/api/load-csv")
+rem a failed function change keeps the previous function, arguments and settings
+curl -s -X POST --data-binary "@%T%\gui\watch_call_cnt.json" "%U%/api/watch" > nul
+curl -s -X POST --data-binary "@%T%\gui\reset.json" "%U%/api/control" > nul
+curl -s -X POST --data-binary "@%T%\gui\step1.json" "%U%/api/control" > nul
+curl -s -X POST --data-binary "@%T%\gui\func_bad.json" "%U%/api/control" > "%WORK%\fb.out"
+findstr /l /c:"\"error\":" "%WORK%\fb.out" >nul
+if errorlevel 1 (call :ng "change to a function with unsupported arguments is rejected") else (call :ok "change to a function with unsupported arguments is rejected")
+curl -s -X POST --data-binary "@%T%\gui\step1.json" "%U%/api/control" > nul
+curl -s "%U%/api/export.csv" > "%WORK%\fb_export.csv"
+rem the last row ends with eng_update@call_cnt, which must be 2 after two steps
+set "LAST="
+for /f "usebackq delims=" %%L in ("%WORK%\fb_export.csv") do set "LAST=%%L"
+if "%LAST:~-2%"==",2" (call :ok "after a rejected change the previous function is still called") else (call :ng "after a rejected change the previous function is still called")
+curl -s -X POST --data-binary "@%T%\gui\func_bad_speed.json" "%U%/api/control" > nul
+curl -s "%U%/api/info" > "%WORK%\fbs_info.json"
+findstr /l /c:"\"speed\":7" /c:"\"periodMs\":9" "%WORK%\fbs_info.json" >nul
+if errorlevel 1 (call :ok "a rejected change keeps speed and periodMs") else (call :ng "a rejected change keeps speed and periodMs")
+curl -s -X POST --data-binary "@%T%\gui\long_value.json" "%U%/api/write" > "%WORK%\longval.out"
+findstr /l /c:"\"error\":" "%WORK%\longval.out" >nul
+if errorlevel 1 (call :ng "/api/write does not truncate long values") else (call :ok "/api/write does not truncate long values")
+curl -s -X POST --data-binary "@%T%\gui\func_bad_cmd.json" "%U%/api/control" > nul
+curl -s "%U%/api/info" > "%WORK%\fbc_info.json"
+findstr /l /c:"\"func\":\"TEST_cycle\"" "%WORK%\fbc_info.json" >nul
+if errorlevel 1 (call :ng "an unknown cmd does not change the function") else (call :ok "an unknown cmd does not change the function")
+curl -s -X POST --data-binary "@%T%\gui\bad_play.csv" "%U%/api/load-csv" > nul
+curl -s "%U%/api/info" > "%WORK%\bp_info.json"
+findstr /l /c:"\"func\":\"TEST_cycle\"" "%WORK%\bp_info.json" >nul
+if errorlevel 1 (call :ng "a rejected /api/load-csv does not change the function") else (call :ok "a rejected /api/load-csv does not change the function")
 curl -s "%U%/" > "%WORK%\index.html"
 findstr /l /c:"<html" "%WORK%\index.html" >nul
 if errorlevel 1 (call :ng "GET / returns a page") else (call :ok "GET / returns a page")
@@ -179,6 +232,17 @@ set RC=%ERRORLEVEL%
 if "%RC%"=="%~2" (call :ok "%~1: exit code %~2") else (call :ng "%~1: exit code %~2, got %RC%")
 fc /b "%WORK%\out_%~n1\%~1" "%T%\expected\%~1" >nul
 if errorlevel 1 (call :ng "%~1: result CSV matches expected bytes") else (call :ok "%~1: result CSV matches expected bytes")
+exit /b 0
+
+:same_case
+rem %1 = name, %2.. = arguments of sim run (run in %WORK%\same); expects exit code 2 and the input unchanged
+copy /y "%T%\csv\unit_all.csv" "%WORK%\same\unit_all.csv" >nul
+pushd "%WORK%\same"
+"%SIM%" run %2 %3 %4 %5 --quiet > "%WORK%\same.log" 2>&1
+set RC=%ERRORLEVEL%
+popd
+fc /b "%WORK%\same\unit_all.csv" "%T%\csv\unit_all.csv" >nul
+if errorlevel 1 (call :ng "%~1: input overwritten") else if "%RC%"=="2" (call :ok "%~1") else (call :ng "%~1: exit code 2, got %RC%")
 exit /b 0
 
 :err_case

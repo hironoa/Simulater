@@ -9,6 +9,8 @@ typedef struct {
     int expect_actual;      /* 読み直しで "実測?(期待)" の実測側を期待値にする */
     int fixed_time;         /* 実行時間を 0.0000ms に固定（テスト用） */
     int quiet;              /* NG の詳細を出さない */
+    const char *const *inputs;  /* 同じ実行で渡されたすべての入力（結果で上書きしないため。NULL 可） */
+    int ninputs;
 } sim_csv_opts;
 
 typedef struct {
