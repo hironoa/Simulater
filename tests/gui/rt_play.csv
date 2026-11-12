@@ -1,0 +1,5 @@
+mod,mul16,rt,3,1
+#COMMENT,P1_bit.no0,P1,@b,mul16@@
+,1,0x80,2,6
+,,0x0F,,6
+,0,,7,21

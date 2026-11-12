@@ -1085,38 +1085,67 @@ int sim_parse_cell(const char *text, size_t len, sim_cellval *out, char *err, si
 
 static const sim_type g_byte_type = {SIM_T_UINT, "unsigned char", 1, NULL, 0, NULL, 0};
 
+/* 値が書き込める形か（const・戻り値・'$' の値・要素数・型に収まるか）をメモリに触れずに確かめる。
+ * ポインタの先（NULL など）のようにその時のメモリで決まるものは確かめない */
+int sim_ref_check_value(const sim_ref *r, const sim_cellval *v, char *err, size_t errlen)
+{
+    int i;
+    if (!sim_cellval_present(v)) return 0;
+    if (r->is_const) { snprintf(err, errlen, "'%s' は const なので書き込めません", r->text); return -1; }
+    if (r->base == RB_RET && r->nsteps == 0) { snprintf(err, errlen, "'%s': 戻り値は入力にできません", r->text); return -1; }
+    if (r->prefix == '$') {
+        const sim_type *e = r->elem && r->elem->size ? r->elem : &g_byte_type;
+        if (v->n != 1 || v->is_string || v->items[0].kind != SIM_ITEM_INT || v->items[0].i < 0) {
+            snprintf(err, errlen, "'%s': '$' の値は確保する要素数（0 以上の整数）です", r->text);
+            return -1;
+        }
+        /* 要素数 × 要素サイズは 64 ビットで求め、size_t に収まらなければ（32 ビット環境）エラーにする */
+        if (v->items[0].i > 0x1000000 || (uint64_t)v->items[0].i * e->size > (uint64_t)SIZE_MAX) {
+            snprintf(err, errlen, "'%s': 要素数が大きすぎます", r->text);
+            return -1;
+        }
+        return 0;
+    }
+    if (r->multi) {
+        if (r->count > 0 && (uint32_t)v->n > r->count) {
+            snprintf(err, errlen, "'%s': 値が %d 個ありますが、要素数は %u です", r->text, v->n, r->count);
+            return -1;
+        }
+        for (i = 0; i < v->n; i++) {
+            uint64_t raw;
+            if (encode(r->elem, 0, &v->items[i], r->text, &raw, err, errlen)) return -1;
+        }
+        return 0;
+    }
+    if (v->n != 1) {
+        if (v->is_string) snprintf(err, errlen, "'%s' は 1 つの値の変数です。文字列は '&配列' や '*ポインタ' に書いてください", r->text);
+        else snprintf(err, errlen, "'%s' は 1 つの値の変数です。'|' で複数の値は書けません", r->text);
+        return -1;
+    }
+    {
+        uint64_t raw;
+        return encode(r->type, r->bit_off >= 0 ? r->bit_size : 0, &v->items[0], r->text, &raw, err, errlen);
+    }
+}
+
 int sim_ref_write(sim_ctx *c, const sim_ref *r, const sim_cellval *v, char *err, size_t errlen)
 {
     loc_t L;
     int i;
     /* 空セル（n = 0 で文字列でもない）は「設定しない」。空文字列 '' は終端の 0 を書く */
     if (!sim_cellval_present(v)) return 0;
-    if (r->is_const) { snprintf(err, errlen, "'%s' は const なので書き込めません", r->text); return -1; }
-    if (r->base == RB_RET && r->nsteps == 0) { snprintf(err, errlen, "'%s': 戻り値は入力にできません", r->text); return -1; }
+    if (sim_ref_check_value(r, v, err, errlen)) return -1;
     if (eval_loc(c, r, r->nsteps, &L, err, errlen)) return -1;
     if (r->prefix == '$') {
         const sim_type *e = r->elem && r->elem->size ? r->elem : &g_byte_type;
         uint64_t addr = 0;
-        if (v->n != 1 || v->is_string || v->items[0].kind != SIM_ITEM_INT || v->items[0].i < 0) {
-            snprintf(err, errlen, "'%s': '$' の値は確保する要素数（0 以上の整数）です", r->text);
-            return -1;
-        }
-        if (v->items[0].i > 0) {
-            /* 要素数 × 要素サイズは 64 ビットで求め、size_t に収まらなければ（32 ビット環境）エラーにする */
-            uint64_t bytes = (uint64_t)v->items[0].i * e->size;
-            if (v->items[0].i > 0x1000000 || bytes > (uint64_t)SIZE_MAX) { snprintf(err, errlen, "'%s': 要素数が大きすぎます", r->text); return -1; }
-            if (c->b->alloc(c->b, (size_t)bytes, &addr, err, errlen)) return -1;
-        }
+        if (v->items[0].i > 0 && c->b->alloc(c->b, (size_t)((uint64_t)v->items[0].i * e->size), &addr, err, errlen)) return -1;
         return write_raw(c, r, &L, r->type, -1, 0, addr, err, errlen);
     }
     if (r->multi) {
         const sim_type *e = r->elem;
         int n = v->n;
         if (L.kind != RB_MEM) { snprintf(err, errlen, "'%s': 書き込み先がメモリではありません", r->text); return -1; }
-        if (r->count > 0 && (uint32_t)n > r->count) {
-            snprintf(err, errlen, "'%s': 値が %d 個ありますが、要素数は %u です", r->text, n, r->count);
-            return -1;
-        }
         for (i = 0; i < n; i++) {
             uint64_t raw;
             loc_t Li = L;
@@ -1131,11 +1160,6 @@ int sim_ref_write(sim_ctx *c, const sim_ref *r, const sim_cellval *v, char *err,
             if (write_raw(c, r, &Li, e, -1, 0, 0, err, errlen)) return -1;
         }
         return 0;
-    }
-    if (v->n != 1) {
-        if (v->is_string) snprintf(err, errlen, "'%s' は 1 つの値の変数です。文字列は '&配列' や '*ポインタ' に書いてください", r->text);
-        else snprintf(err, errlen, "'%s' は 1 つの値の変数です。'|' で複数の値は書けません", r->text);
-        return -1;
     }
     {
         uint64_t raw;

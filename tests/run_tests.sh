@@ -172,6 +172,16 @@ check "'' は終端の 0 を書き、期待値の '' は空文字列と比べる
 check "入力 '' の行で g_eng_name[0] が 0（前の 'AB' が残らない）" contains "$WORK/oempty/empty_string.csv" ",'',0,'',OK,"
 check "期待値 '' は空でない文字列と不一致（'XY'?('')）" contains "$WORK/oempty/empty_string.csv" ",'XY',88,'XY'?(''),NG,"
 
+echo "== 不一致の結果セル（実測?(期待)）の CSV の引用"
+run_cmp expect_quote.csv 1
+"$SIM" run "$WORK/out_expect_quote/expect_quote.csv" -o "$WORK/oquote_rb" --fixed-time --quiet > "$WORK/quote_rb.log" 2>&1
+RC=$?
+check "引用した結果 CSV を読み直すと期待側を採る（終了コード 1、OK 1, NG 3）" sh -c "[ $RC -eq 1 ] && grep -F -q '合計: 総数 4, OK 1, NG 3, NO Check 0' '$WORK/quote_rb.log'"
+"$SIM" run "$WORK/out_expect_quote/expect_quote.csv" -o "$WORK/oquote_rb2" --fixed-time --expect-actual --quiet > "$WORK/quote_rb2.log" 2>&1
+RC=$?
+check "引用した結果 CSV を --expect-actual で読み直すと全行 OK（終了コード 0）" sh -c "[ $RC -eq 0 ] && grep -F -q '合計: 総数 4, OK 4, NG 0, NO Check 0' '$WORK/quote_rb2.log'"
+check "読み直した結果でも入力セル（\"'A,B'\"）はバイトそのまま" contains "$WORK/oquote_rb/expect_quote.csv" ",\"'A,B'\",65|44|66?('ABC'),NG,"
+
 echo "== GUI サーバの API"
 if ! command -v curl > /dev/null 2>&1; then
     ng "curl がありません"
@@ -415,7 +425,8 @@ data: {"periodMs":2,"func":"TEST_cycle","names":["g_eng.state","TEST_cycle_cnt",
     check "CSV の再生の記録を sim run で再実行すると全行 OK（終了コード 0）" sh -c "[ $RC -eq 0 ] && grep -F -q '合計: 総数 2, OK 2, NG 0, NO Check 0' '$WORK/lm_rerun.log'"
 
     # 同じメモリへの固定（P1）と単発書き込み（P1_bit.no0）: 1 ステップの入力は保存 CSV の入力列の順に適用する（sim run と同じ）。
-    # 止まっているときに固定してすぐ外した値（g_mode = 5）も次のステップの入力として記録する。'' は終端の 0 を書く
+    # 書き込みは次のステップの開始時にだけ反映するので、止まっているときに固定してすぐ外した値（g_mode = 5）や、
+    # 単発で書いてから固定を解除した値（g_mode = 7）は書かれず、記録にも残らない。'' は終端の 0 を書く
     post reset_func_mul16.json r16.out /api/control > /dev/null
     post watch_p1.json wp1.out /api/watch > /dev/null
     post write_p1_hold.json wp1h.out /api/write > /dev/null
@@ -424,6 +435,12 @@ data: {"periodMs":2,"func":"TEST_cycle","names":["g_eng.state","TEST_cycle_cnt",
     post release_p1.json rp1.out /api/write > /dev/null
     post write_mode_hold.json wmh.out /api/write > /dev/null
     post release_mode.json rmh.out /api/write > /dev/null
+    post write_mode7.json wm7.out /api/write > /dev/null
+    curl -s "$U/api/info" > "$WORK/m7_info.json"
+    check "反映待ちの単発書き込みを state の pending に出す（g_mode = 7）" contains "$WORK/m7_info.json" '"pending":[{"name":"g_mode","value":"7"}]'
+    post release_mode.json rmh.out /api/write > /dev/null
+    curl -s "$U/api/info" > "$WORK/m7r_info.json"
+    check "固定の解除（release）でその名前の反映待ちも消える" contains "$WORK/m7r_info.json" '"pending":[]'
     post step1.json s1.out /api/control > /dev/null
     post write_name_str.json wns.out /api/write > /dev/null
     post step1.json s1.out /api/control > /dev/null
@@ -435,14 +452,98 @@ data: {"periodMs":2,"func":"TEST_cycle","names":["g_eng.state","TEST_cycle_cnt",
     curl -s "$U/api/export.csv" | tr -d '\r' > "$WORK/ov_export.csv"
     # 出力列の値（同じ名前の入力列もあるので、最後に出てくる列を採る）
     outcol() { awk -F, -v n="$1" 'NR==2{for(i=1;i<=NF;i++) if($i==n) c=i} NR>2&&c{printf "%s ", $c}' "$WORK/ov_export.csv"; }
-    incol() { awk -F, -v n="$1" 'NR==2{for(i=NF;i>=1;i--) if($i==n) c=i} NR>2&&c{printf "%s ", $c}' "$WORK/ov_export.csv"; }
-    P1S=$(outcol P1); MODES=$(outcol g_mode); NAMES=$(outcol 'g_eng_name[0]'); MODEIN=$(incol g_mode)
+    P1S=$(outcol P1); MODES=$(outcol g_mode); NAMES=$(outcol 'g_eng_name[0]')
     check "P1 を固定して P1_bit.no0 = 0 を単発で書くと列の順に適用して P1 = 0（P1: ${P1S}）" test "$P1S" = "0 0 0 0 "
-    check "止まっているときに固定してすぐ外した値を次のステップの入力に記録する（入力 g_mode: ${MODEIN}、出力: ${MODES}）" test "$MODEIN" = " 5   " -a "$MODES" = "0 5 5 5 "
+    MODECOLS=$(sed -n 2p "$WORK/ov_export.csv" | tr ',' '\n' | grep -c '^g_mode$')
+    check "止まっているときに固定してすぐ外した値・解除した名前の反映待ちは書かない（g_mode の列 ${MODECOLS} 個（出力だけ）、出力: ${MODES}）" test "$MODECOLS" = 1 -a "$MODES" = "0 0 0 0 "
     check "'' を書くと g_eng_name[0] が 0（${NAMES}）" test "$NAMES" = "69 69 88 0 "
     "$SIM" run "$WORK/ov_export.csv" -o "$WORK/oov" --quiet > "$WORK/ov_rerun.log" 2>&1
     RC=$?
     check "重なる入力先の固定・単発書き込みの記録を sim run で再実行すると全行 OK（終了コード 0）" sh -c "[ $RC -eq 0 ] && grep -F -q '合計: 総数 4, OK 4, NG 0, NO Check 0' '$WORK/ov_rerun.log'"
+
+    # 停止中の書き込みはすぐには反映しない。次のステップの開始時に、列ごとに最後の 1 個だけを反映して記録する
+    # （'XYZ' に続けて 'A' を書くと、'A' だけが書かれて g_eng_name[2] は初期値 "ENG-A" の 'G' = 71 のまま）
+    post reset_func_name_len.json rfn2.out /api/control > /dev/null
+    post watch_name2.json wn2.out /api/watch > /dev/null
+    post write_name_str.json wns2.out /api/write > /dev/null
+    post write_name_a.json wna2.out /api/write > /dev/null
+    curl -s "$U/api/info" > "$WORK/pa_info.json"
+    check "同じ名前に書き直すと反映待ちが置き換わる（pending は 'A' の 1 個）" contains "$WORK/pa_info.json" "\"pending\":[{\"name\":\"&g_eng_name\",\"value\":\"'A'\"}]"
+    curl -s -N --max-time 1 "$U/api/stream" > "$WORK/pa_sse.txt" 2>/dev/null
+    check "停止中の書き込みでは values（メモリの値）は変わらない（g_eng_name[2] = 71）" contains "$WORK/pa_sse.txt" '"names":["g_eng_name[2]"],"values":[71]}'
+    check "SSE の state に pending" contains "$WORK/pa_sse.txt" "\"pending\":[{\"name\":\"&g_eng_name\",\"value\":\"'A'\"}]"
+    post step1.json pas.out /api/control > /dev/null
+    check "ステップで反映すると pending が空になる" contains "$WORK/pas.out" '"pending":[]'
+    curl -s "$U/api/export.csv" | tr -d '\r' > "$WORK/pa_export.csv"
+    check "最後の 'A' だけを入力として記録し、出力は 71" sh -c "sed -n 3p '$WORK/pa_export.csv' | grep -q \"^,'A',71\\\$\""
+    "$SIM" run "$WORK/pa_export.csv" -o "$WORK/opa" --quiet > "$WORK/pa_rerun.log" 2>&1
+    RC=$?
+    check "停止中に書き直した記録を sim run で再実行すると全行 OK（終了コード 0）" sh -c "[ $RC -eq 0 ] && grep -F -q '合計: 総数 1, OK 1, NG 0, NO Check 0' '$WORK/pa_rerun.log'"
+
+    # CSV の再生は、読み込んだ CSV の入力列の順に適用する（以前に GUI で P1、P1_bit.no0 の順に書いていても）
+    post reset_func_mul16.json r16b.out /api/control > /dev/null
+    post watch_p1only.json wpo.out /api/watch > /dev/null
+    post write_p1_one.json wp1o.out /api/write > /dev/null
+    post write_p1bit0.json wp1b2.out /api/write > /dev/null
+    post step1.json s1.out /api/control > /dev/null
+    CODE=$(curl -s -o "$WORK/po.out" -w '%{http_code}' -X POST --data-binary "@$T/gui/play_order.csv" "$U/api/load-csv")
+    i=0
+    while [ $i -lt 50 ]; do
+        curl -s "$U/api/info" | grep -q '"running":false' && break
+        i=$((i + 1)); sleep 0.1
+    done
+    curl -s "$U/api/export.csv" | tr -d '\r' > "$WORK/po_export.csv"
+    POP1=$(awk -F, 'NR==2{for(i=1;i<=NF;i++) if($i=="P1") c=i} NR>2&&c{printf "%s ", $c}' "$WORK/po_export.csv")
+    check "CSV の再生は CSV の入力列の順（P1_bit.no0, P1）に書く（P1: ${POP1}）" test "$CODE" = 200 -a "$POP1" = "1 "
+    check "再生の記録の入力列は CSV の順" sh -c "sed -n 2p '$WORK/po_export.csv' | grep -q '^#COMMENT,P1_bit.no0,P1,'"
+    "$SIM" run "$T/gui/play_order.csv" -o "$WORK/opo" --quiet > "$WORK/po_run.log" 2>&1
+    RC=$?
+    check "同じ CSV を sim run で実行しても P1 = 1（終了コード 0）" test "$RC" -eq 0
+
+    # 往復の性質: GUI で操作 -> /api/export.csv -> sim run（--expect-actual なし）で全行 OK。
+    # 重なる入力先・文字列/配列・$ptr・固定と単発の併用・固定の解除・途中のリセット・CSV の再生を混ぜる
+    post reset_func_mul16.json rt0.out /api/control > /dev/null
+    post rt_watch.json rtw.out /api/watch > /dev/null
+    post rt_p1_hold.json rt1.out /api/write > /dev/null
+    post write_p1bit0.json rt2.out /api/write > /dev/null
+    post step1.json s1.out /api/control > /dev/null
+    post write_name_str.json rt3.out /api/write > /dev/null
+    post rt_name_q.json rt4.out /api/write > /dev/null
+    post rt_a_hold.json rt5.out /api/write > /dev/null
+    post write_b2.json rt6.out /api/write > /dev/null
+    post step1.json s1.out /api/control > /dev/null
+    post reset.json rt7.out /api/control > /dev/null
+    post write_p1bit0.json rt8.out /api/write > /dev/null
+    post write_alloc.json rt9.out /api/write > /dev/null
+    post step1.json s1.out /api/control > /dev/null
+    post release_p1.json rt10.out /api/write > /dev/null
+    post rt_b5.json rt11.out /api/write > /dev/null
+    post write_name_arr.json rt12.out /api/write > /dev/null
+    post step1.json s1.out /api/control > /dev/null
+    curl -s "$U/api/export.csv" | tr -d '\r' > "$WORK/rt1_export.csv"
+    RTP1=$(awk -F, 'NR==2{for(i=1;i<=NF;i++) if($i=="P1") c=i} NR>2&&c{printf "%s ", $c}' "$WORK/rt1_export.csv")
+    RTMUL=$(awk -F, 'NR==2{for(i=1;i<=NF;i++) if($i=="mul16@@") c=i} NR>2&&c{printf "%s ", $c}' "$WORK/rt1_export.csv")
+    check "往復: リセット後も固定（P1 = 0xFF、@a = 3）を書き、列の順に P1_bit.no0 = 0 を重ねる（P1: ${RTP1}、mul16@@: ${RTMUL}）" test "$RTP1" = "254 254 " -a "$RTMUL" = "0 15 "
+    "$SIM" run "$WORK/rt1_export.csv" -o "$WORK/ort1" --quiet > "$WORK/rt1_rerun.log" 2>&1
+    RC=$?
+    check "往復: 途中でリセットした記録を sim run で再実行すると全行 OK（終了コード 0）" sh -c "[ $RC -eq 0 ] && grep -F -q '合計: 総数 2, OK 2, NG 0, NO Check 0' '$WORK/rt1_rerun.log'"
+    curl -s -o /dev/null -X POST --data-binary "@$T/gui/rt_play.csv" "$U/api/load-csv"
+    i=0
+    while [ $i -lt 50 ]; do
+        curl -s "$U/api/info" | grep -q '"running":false' && break
+        i=$((i + 1)); sleep 0.1
+    done
+    post rt_p1_16.json rt13.out /api/write > /dev/null
+    post write_name_a.json rt14.out /api/write > /dev/null
+    post write_alloc.json rt15.out /api/write > /dev/null
+    post step1.json s1.out /api/control > /dev/null
+    post rt_release_a.json rt16.out /api/write > /dev/null
+    post write_b2.json rt17.out /api/write > /dev/null
+    post step1.json s1.out /api/control > /dev/null
+    curl -s "$U/api/export.csv" | tr -d '\r' > "$WORK/rt2_export.csv"
+    "$SIM" run "$WORK/rt2_export.csv" -o "$WORK/ort2" --quiet > "$WORK/rt2_rerun.log" 2>&1
+    RC=$?
+    check "往復: CSV の再生に続けて操作した記録を sim run で再実行すると全行 OK（終了コード 0）" sh -c "[ $RC -eq 0 ] && grep -F -q '合計: 総数 5, OK 5, NG 0, NO Check 0' '$WORK/rt2_rerun.log'"
 
     PORT_USED_LOG="$WORK/gui2.log"
     "$SIM" gui --no-browser --port "$PORT" > "$PORT_USED_LOG" 2>&1

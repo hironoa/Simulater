@@ -175,7 +175,8 @@ if command -v curl > /dev/null 2>&1; then
     check "GUI: step で TEST_cycle を 3 回" contains "$WORK/rstep.json" '"step":3'
     check "GUI: 接続時に event: values（現在値、ステップは進めない）" contains "$WORK/rsse.txt" 'event: values
 data: {"step":0,"names":["TEST_cycle_cnt","g_ms_tick","g_st.fb"],"values":[0,0,0]}'
-    check "GUI: 停止中の書き込みの後に event: values" contains "$WORK/rsse.txt" 'data: {"step":0,"names":["TEST_cycle_cnt","g_ms_tick","g_st.fb"],"values":[0,0,7]}'
+    check "GUI: 停止中の書き込みはすぐには反映せず state の pending に出す" contains "$WORK/rsse.txt" '"pending":[{"name":"g_st.fb","value":"7"}]'
+    check "GUI: 停止中の書き込みの後も event: values はメモリの値（g_st.fb = 0）" sh -c "! grep -q '\"step\":0,\"names\":\[\"TEST_cycle_cnt\",\"g_ms_tick\",\"g_st.fb\"\],\"values\":\[0,0,7\]' '$WORK/rsse.txt'"
     check "GUI: ステップの後の samples（実行した値）" contains "$WORK/rsse.txt" '"rows":[[1,10,7],[2,20,7],[3,30,7]]'
     check "GUI: reset の後に event: values で初期状態の値" sh -c "grep -A1 'event: values' '$WORK/rsse.txt' | tail -1 | grep -q '\"values\":\[0,0,0\]'"
     kill "$GUI_PID" 2>/dev/null

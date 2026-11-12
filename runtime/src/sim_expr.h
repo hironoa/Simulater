@@ -82,6 +82,9 @@ int sim_parse_cell(const char *text, size_t len, sim_cellval *out, char *err, si
 int sim_cellval_present(const sim_cellval *v);
 void sim_cellval_free(sim_cellval *v);
 
+/* 書き込める値か（const・戻り値・'$' の値・要素数・型に収まるか）をメモリに触れずに確かめる。失敗なら -1 と err。
+ * ポインタの先（NULL など）のようにその時のメモリで決まるものは確かめない（書くときにエラーになる） */
+int sim_ref_check_value(const sim_ref *r, const sim_cellval *v, char *err, size_t errlen);
 /* 書き込み（$ / & / * / スカラ）。失敗なら -1 と err */
 int sim_ref_write(sim_ctx *c, const sim_ref *r, const sim_cellval *v, char *err, size_t errlen);
 

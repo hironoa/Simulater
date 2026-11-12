@@ -164,6 +164,21 @@ static int parse_count(const char *s, int *out)
     return 0;
 }
 
+void sim_csv_cell(sim_buf *b, const char *v)
+{
+    size_t n = strlen(v);
+    int q = n > 0 && (v[0] == ' ' || v[0] == '\t' || v[n - 1] == ' ' || v[n - 1] == '\t');
+    const char *p;
+    if (!q && (strchr(v, ',') || strchr(v, '"'))) q = 1;
+    if (!q) { sim_buf_adds(b, v); return; }
+    sim_buf_addc(b, '"');
+    for (p = v; *p; p++) {
+        if (*p == '"') sim_buf_addc(b, '"');
+        sim_buf_addc(b, *p);
+    }
+    sim_buf_addc(b, '"');
+}
+
 /* "実測?(期待)" を分ける。分けられたら 1 */
 static int split_judged(const char *v, char **actual, char **expected)
 {
@@ -377,11 +392,21 @@ static size_t run_block(sim_ctx *c, const char *path, line_t *ls, size_t n, size
             sim_cellval_free(&ev);
             sim_buf_addc(&row, ',');
             if (!failed) {
-                sim_buf_add(&row, cell.p ? cell.p : "", cell.len);
+                /* 実測値（不一致なら "実測?(期待)"）を組み立ててから、セル全体を CSV として引用する。
+                 * 期待値の文字列は入力のときに引用を外してあるので、',' や '"' を含むと列が割れる */
+                sim_buf res;
+                sim_buf_init(&res);
+                sim_buf_add(&res, cell.p ? cell.p : "", cell.len);
                 if (match == 0) {
                     const char *et = exptext;
                     while (*et == ' ' || *et == '\t') et++;
-                    sim_buf_printf(&row, "?(%s)", et);
+                    sim_buf_printf(&res, "?(%s)", et);
+                }
+                sim_csv_cell(&row, sim_buf_cstr(&res));
+                sim_buf_free(&res);
+                if (match == 0) {
+                    const char *et = exptext;
+                    while (*et == ' ' || *et == '\t') et++;
                     judged_ng = 1;
                     if (!o->quiet && *ng_shown < 20) {
                         fprintf(stdout, "  NG %s:%d %s = %s（期待 %s）\n", sim_basename(path), L->lineno,

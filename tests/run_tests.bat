@@ -119,6 +119,17 @@ call :run_cmp empty_string.csv 1
 findstr /l /c:"OK 6" "%WORK%\empty.log" >nul
 if errorlevel 1 (call :ng "an empty string writes the terminator and is compared as a string (OK 6)") else (call :ok "an empty string writes the terminator and is compared as a string (OK 6)")
 
+echo == the whole mismatch cell (actual?(expected)) is quoted as CSV
+call :run_cmp expect_quote.csv 1
+"%SIM%" run "%WORK%\out_expect_quote\expect_quote.csv" -o "%WORK%\oquote_rb" --fixed-time --quiet > "%WORK%\quote_rb.log" 2>&1
+set RC=%ERRORLEVEL%
+findstr /l /c:"OK 1, NG 3, NO Check 0" "%WORK%\quote_rb.log" >nul
+if errorlevel 1 (call :ng "a quoted result CSV reads back with the expected side (OK 1, NG 3)") else if "%RC%"=="1" (call :ok "a quoted result CSV reads back with the expected side (OK 1, NG 3)") else (call :ng "a quoted result CSV reads back: exit code 1, got %RC%")
+"%SIM%" run "%WORK%\out_expect_quote\expect_quote.csv" -o "%WORK%\oquote_rb2" --fixed-time --expect-actual --quiet > "%WORK%\quote_rb2.log" 2>&1
+set RC=%ERRORLEVEL%
+findstr /l /c:"OK 4, NG 0, NO Check 0" "%WORK%\quote_rb2.log" >nul
+if errorlevel 1 (call :ng "a quoted result CSV with --expect-actual is all OK") else if "%RC%"=="0" (call :ok "a quoted result CSV with --expect-actual is all OK") else (call :ng "a quoted result CSV with --expect-actual: exit code 0, got %RC%")
+
 echo == GUI server API
 where curl >nul 2>nul
 if errorlevel 1 (
@@ -296,7 +307,8 @@ set RC=%ERRORLEVEL%
 findstr /l /c:"OK 2, NG 0, NO Check 0" "%WORK%\lm_rerun.log" >nul
 if errorlevel 1 (call :ng "the playback record re-runs with all rows OK") else if "%RC%"=="0" (call :ok "the playback record re-runs with all rows OK") else (call :ng "the playback record re-runs: exit code 0, got %RC%")
 rem a hold (P1) and a one-shot write (P1_bit.no0) to the same memory are applied in the order of the input columns, as sim run does;
-rem a hold set and released while stopped (g_mode = 5) is recorded as an input of the next step; '' writes the terminator
+rem writes reach memory only at the start of the next step, so a hold set and released while stopped (g_mode = 5)
+rem and a one-shot write whose name is released (g_mode = 7) are never written; '' writes the terminator
 curl -s -X POST --data-binary "@%T%\gui\reset_func_mul16.json" "%U%/api/control" > nul
 curl -s -X POST --data-binary "@%T%\gui\watch_p1.json" "%U%/api/watch" > nul
 curl -s -X POST --data-binary "@%T%\gui\write_p1_hold.json" "%U%/api/write" > nul
@@ -305,6 +317,14 @@ curl -s -X POST --data-binary "@%T%\gui\step1.json" "%U%/api/control" > nul
 curl -s -X POST --data-binary "@%T%\gui\release_p1.json" "%U%/api/write" > nul
 curl -s -X POST --data-binary "@%T%\gui\write_mode_hold.json" "%U%/api/write" > nul
 curl -s -X POST --data-binary "@%T%\gui\release_mode.json" "%U%/api/write" > nul
+curl -s -X POST --data-binary "@%T%\gui\write_mode7.json" "%U%/api/write" > nul
+curl -s "%U%/api/info" > "%WORK%\m7_info.json"
+findstr /l /c:"pending" "%WORK%\m7_info.json" | findstr /l /c:"g_mode" >nul
+if errorlevel 1 (call :ng "a one-shot write waiting for the next step is listed in pending") else (call :ok "a one-shot write waiting for the next step is listed in pending")
+curl -s -X POST --data-binary "@%T%\gui\release_mode.json" "%U%/api/write" > nul
+curl -s "%U%/api/info" > "%WORK%\m7r_info.json"
+findstr /l /c:"g_mode" "%WORK%\m7r_info.json" >nul
+if errorlevel 1 (call :ok "release also drops the pending write of that name") else (call :ng "release also drops the pending write of that name")
 curl -s -X POST --data-binary "@%T%\gui\step1.json" "%U%/api/control" > nul
 curl -s -X POST --data-binary "@%T%\gui\write_name_str.json" "%U%/api/write" > nul
 curl -s -X POST --data-binary "@%T%\gui\step1.json" "%U%/api/control" > nul
@@ -317,11 +337,83 @@ curl -s "%U%/api/export.csv" > "%WORK%\ov_export.csv"
 rem the last row ends with the outputs g_eng_name[0] (0 after writing ''), P1, g_mode. Input columns before them depend on earlier holds
 set "LAST="
 for /f "usebackq delims=" %%L in ("%WORK%\ov_export.csv") do set "LAST=%%L"
-if "%LAST:~-6%"==",0,0,5" (call :ok "writing an empty string clears the previous string") else (call :ng "writing an empty string clears the previous string: %LAST%")
+if "%LAST:~-6%"==",0,0,0" (call :ok "writing an empty string clears the previous string") else (call :ng "writing an empty string clears the previous string: %LAST%")
 "%SIM%" run "%WORK%\ov_export.csv" -o "%WORK%\oov" --quiet > "%WORK%\ov_rerun.log" 2>&1
 set RC=%ERRORLEVEL%
 findstr /l /c:"OK 4" "%WORK%\ov_rerun.log" >nul
 if errorlevel 1 (call :ng "overlapping hold and one-shot inputs re-run with all rows OK") else if "%RC%"=="0" (call :ok "overlapping hold and one-shot inputs re-run with all rows OK") else (call :ng "overlapping hold and one-shot inputs re-run: exit code 0, got %RC%")
+rem writes while stopped are not applied at once: the next step writes only the last one per column ('XYZ' then 'A' gives 'A',
+rem so g_eng_name[2] keeps the initial 'G' = 71), and the saved CSV re-runs with all rows OK
+curl -s -X POST --data-binary "@%T%\gui\reset_func_name_len.json" "%U%/api/control" > nul
+curl -s -X POST --data-binary "@%T%\gui\watch_name2.json" "%U%/api/watch" > nul
+curl -s -X POST --data-binary "@%T%\gui\write_name_str.json" "%U%/api/write" > nul
+curl -s -X POST --data-binary "@%T%\gui\write_name_a.json" "%U%/api/write" > nul
+curl -s "%U%/api/info" > "%WORK%\pa_info.json"
+findstr /l /c:"pending" "%WORK%\pa_info.json" >nul
+if errorlevel 1 (call :ng "state has pending") else (call :ok "state has pending")
+findstr /l /c:"XYZ" "%WORK%\pa_info.json" >nul
+if errorlevel 1 (call :ok "a rewrite of the same name replaces the pending write") else (call :ng "a rewrite of the same name replaces the pending write")
+curl -s -X POST --data-binary "@%T%\gui\step1.json" "%U%/api/control" > nul
+curl -s "%U%/api/export.csv" > "%WORK%\pa_export.csv"
+set "LAST="
+for /f "usebackq delims=" %%L in ("%WORK%\pa_export.csv") do set "LAST=%%L"
+if "%LAST:~-3%"==",71" (call :ok "only the last write while stopped is applied (g_eng_name[2] = 71)") else (call :ng "only the last write while stopped is applied (g_eng_name[2] = 71): %LAST%")
+"%SIM%" run "%WORK%\pa_export.csv" -o "%WORK%\opa" --quiet > "%WORK%\pa_rerun.log" 2>&1
+set RC=%ERRORLEVEL%
+findstr /l /c:"OK 1, NG 0, NO Check 0" "%WORK%\pa_rerun.log" >nul
+if errorlevel 1 (call :ng "writes rewritten while stopped re-run with all rows OK") else if "%RC%"=="0" (call :ok "writes rewritten while stopped re-run with all rows OK") else (call :ng "writes rewritten while stopped re-run: exit code 0, got %RC%")
+rem CSV playback writes in the order of the loaded CSV input columns (P1_bit.no0, P1), even after P1 and P1_bit.no0 were written in that order
+curl -s -X POST --data-binary "@%T%\gui\reset_func_mul16.json" "%U%/api/control" > nul
+curl -s -X POST --data-binary "@%T%\gui\watch_p1only.json" "%U%/api/watch" > nul
+curl -s -X POST --data-binary "@%T%\gui\write_p1_one.json" "%U%/api/write" > nul
+curl -s -X POST --data-binary "@%T%\gui\write_p1bit0.json" "%U%/api/write" > nul
+curl -s -X POST --data-binary "@%T%\gui\step1.json" "%U%/api/control" > nul
+curl -s -X POST --data-binary "@%T%\gui\play_order.csv" "%U%/api/load-csv" > nul
+ping -n 2 127.0.0.1 >nul
+curl -s "%U%/api/export.csv" > "%WORK%\po_export.csv"
+rem the outputs at the end of the row are P1 and P1_bit.no0 (both 1 when P1 = 1 is written last)
+set "LAST="
+for /f "usebackq delims=" %%L in ("%WORK%\po_export.csv") do set "LAST=%%L"
+if "%LAST:~-4%"==",1,1" (call :ok "CSV playback keeps the input column order of the CSV") else (call :ng "CSV playback keeps the input column order of the CSV: %LAST%")
+rem round trip: GUI operations, /api/export.csv, then sim run without --expect-actual gives all rows OK
+rem (overlapping inputs, strings and arrays, $ptr, holds with one-shot writes, release, a reset in the middle, CSV playback)
+curl -s -X POST --data-binary "@%T%\gui\reset_func_mul16.json" "%U%/api/control" > nul
+curl -s -X POST --data-binary "@%T%\gui\rt_watch.json" "%U%/api/watch" > nul
+curl -s -X POST --data-binary "@%T%\gui\rt_p1_hold.json" "%U%/api/write" > nul
+curl -s -X POST --data-binary "@%T%\gui\write_p1bit0.json" "%U%/api/write" > nul
+curl -s -X POST --data-binary "@%T%\gui\step1.json" "%U%/api/control" > nul
+curl -s -X POST --data-binary "@%T%\gui\write_name_str.json" "%U%/api/write" > nul
+curl -s -X POST --data-binary "@%T%\gui\rt_name_q.json" "%U%/api/write" > nul
+curl -s -X POST --data-binary "@%T%\gui\rt_a_hold.json" "%U%/api/write" > nul
+curl -s -X POST --data-binary "@%T%\gui\write_b2.json" "%U%/api/write" > nul
+curl -s -X POST --data-binary "@%T%\gui\step1.json" "%U%/api/control" > nul
+curl -s -X POST --data-binary "@%T%\gui\reset.json" "%U%/api/control" > nul
+curl -s -X POST --data-binary "@%T%\gui\write_p1bit0.json" "%U%/api/write" > nul
+curl -s -X POST --data-binary "@%T%\gui\write_alloc.json" "%U%/api/write" > nul
+curl -s -X POST --data-binary "@%T%\gui\step1.json" "%U%/api/control" > nul
+curl -s -X POST --data-binary "@%T%\gui\release_p1.json" "%U%/api/write" > nul
+curl -s -X POST --data-binary "@%T%\gui\rt_b5.json" "%U%/api/write" > nul
+curl -s -X POST --data-binary "@%T%\gui\write_name_arr.json" "%U%/api/write" > nul
+curl -s -X POST --data-binary "@%T%\gui\step1.json" "%U%/api/control" > nul
+curl -s "%U%/api/export.csv" > "%WORK%\rt1_export.csv"
+"%SIM%" run "%WORK%\rt1_export.csv" -o "%WORK%\ort1" --quiet > "%WORK%\rt1_rerun.log" 2>&1
+set RC=%ERRORLEVEL%
+findstr /l /c:"OK 2, NG 0, NO Check 0" "%WORK%\rt1_rerun.log" >nul
+if errorlevel 1 (call :ng "round trip: the record after a reset re-runs with all rows OK") else if "%RC%"=="0" (call :ok "round trip: the record after a reset re-runs with all rows OK") else (call :ng "round trip: the record after a reset re-runs: exit code 0, got %RC%")
+curl -s -X POST --data-binary "@%T%\gui\rt_play.csv" "%U%/api/load-csv" > nul
+ping -n 2 127.0.0.1 >nul
+curl -s -X POST --data-binary "@%T%\gui\rt_p1_16.json" "%U%/api/write" > nul
+curl -s -X POST --data-binary "@%T%\gui\write_name_a.json" "%U%/api/write" > nul
+curl -s -X POST --data-binary "@%T%\gui\write_alloc.json" "%U%/api/write" > nul
+curl -s -X POST --data-binary "@%T%\gui\step1.json" "%U%/api/control" > nul
+curl -s -X POST --data-binary "@%T%\gui\rt_release_a.json" "%U%/api/write" > nul
+curl -s -X POST --data-binary "@%T%\gui\write_b2.json" "%U%/api/write" > nul
+curl -s -X POST --data-binary "@%T%\gui\step1.json" "%U%/api/control" > nul
+curl -s "%U%/api/export.csv" > "%WORK%\rt2_export.csv"
+"%SIM%" run "%WORK%\rt2_export.csv" -o "%WORK%\ort2" --quiet > "%WORK%\rt2_rerun.log" 2>&1
+set RC=%ERRORLEVEL%
+findstr /l /c:"OK 5, NG 0, NO Check 0" "%WORK%\rt2_rerun.log" >nul
+if errorlevel 1 (call :ng "round trip: playback followed by operations re-runs with all rows OK") else if "%RC%"=="0" (call :ok "round trip: playback followed by operations re-runs with all rows OK") else (call :ng "round trip: playback followed by operations re-runs: exit code 0, got %RC%")
 curl -s "%U%/" > "%WORK%\index.html"
 findstr /l /c:"<html" "%WORK%\index.html" >nul
 if errorlevel 1 (call :ng "GET / returns a page") else (call :ok "GET / returns a page")

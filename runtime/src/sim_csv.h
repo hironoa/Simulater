@@ -22,6 +22,9 @@ typedef struct {
 /* 1 ファイルを実行して結果を書く。読めない/書けないなら -1 */
 int sim_csv_run_file(sim_ctx *c, const char *path, const sim_csv_opts *o, sim_csv_stats *st);
 
+/* CSV のセルを b に足す。',' '"' や前後の空白を含むなら "..." で囲み、'"' は二重にする（読み込みと対） */
+void sim_csv_cell(sim_buf *b, const char *v);
+
 /* GUI の読み込み用: 先頭の mod ブロックを表にする */
 typedef struct {
     char *func;

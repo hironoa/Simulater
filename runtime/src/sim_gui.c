@@ -17,6 +17,7 @@
 
 typedef struct { char *name; sim_ref *ref; int col; } watch_t;
 typedef struct { char *name; sim_ref *ref; sim_cellval val; char *text; int col; } hold_t;
+/* 反映待ちの単発書き込み（名前ごとに 1 個。同じ名前に書き直したら置き換える） */
 typedef struct { char *name; sim_ref *ref; sim_cellval val; char *text; int col; } pend_t;
 /* v = 出力 nout 個の数値（SSE の samples 用。読めなければ NAN）。
  * txt = 出力 nout 個 + 入力 nin 個のセルの文字列を NUL 区切りで並べたもの（空文字列は値なし）。
@@ -206,11 +207,12 @@ static int step_in_cmp(const void *a, const void *b)
 }
 
 /* 1 ステップの入力を書き込み、書いたセルの元の文字列を in[列] に記録する。
- * 保存した CSV を sim run で再実行したときと同じになるように、sim run が 1 行の入力列を左から順に 1 回ずつ
- * 書くのに合わせる:
+ * /api/write の書き込み（単発・固定）も CSV の再生も、止まっているときを含めてここ（ステップの開始時）でだけ
+ * メモリに反映する。保存した CSV を sim run で再実行したときと同じになるように、sim run が 1 行の入力列を
+ * 左から順に 1 回ずつ書くのに合わせる:
  *   - 単発書き込み・固定・CSV の再生をまとめて、入力列の番号（エクスポートの列の順）の昇順に書く。
  *     受け付けた順や種類の順ではない（P1 の固定と P1_bit.no0 の単発のように重なる先があると結果が変わる）
- *   - 同じ列（同じ名前）への書き込みが何個かあれば、最後のもの（単発 < 固定 < 再生、単発どうしは受け付けた順）
+ *   - 同じ列（同じ名前）への書き込みが何個かあれば、最後のもの（単発 < 固定 < 再生。単発は名前ごとに 1 個）
  *     だけを書く。記録は 1 列 1 セルなので、前のものも書くと '$' の確保が二重になる・長い文字列の残りが残るなど、
  *     再実行と合わなくなる
  *   - 空の値（空セル）は書かず、記録もしない */
@@ -266,8 +268,11 @@ static void apply_inputs_locked(char **in, int *nin)
     free(v);
     for (i = 0; i < (G.play_active ? G.play.nin : 0); i++) sim_cellval_free(&pv[i]);
     free(pv);
-    for (i = 0; i < G.npend; i++) free_pend(&G.pend[i]);
-    G.npend = 0;
+    if (G.npend) {
+        for (i = 0; i < G.npend; i++) free_pend(&G.pend[i]);
+        G.npend = 0;
+        state_changed();   /* state の pending が空になる */
+    }
 }
 
 static void do_step_locked(void)
@@ -306,7 +311,7 @@ static void sim_loop(void *arg)
             continue;
         }
         if (!G.running) {
-            /* 止まっている間の書き込みは api_write がすぐ反映済み。待ち行列は次のステップで入力として記録する */
+            /* 止まっている間の書き込みは反映待ちのまま。次のステップの開始時に入力として書いて記録する */
             sim_cond_wait(G.cv, G.mu, 50);
             next = sim_now_ns();
             continue;
@@ -364,6 +369,22 @@ static void json_holds(sim_buf *b)
     sim_buf_addc(b, ']');
 }
 
+/* 反映待ちの単発書き込み。value は書いたセルの文字列 */
+static void json_pending(sim_buf *b)
+{
+    int i;
+    sim_buf_addc(b, '[');
+    for (i = 0; i < G.npend; i++) {
+        if (i) sim_buf_addc(b, ',');
+        sim_buf_adds(b, "{\"name\":");
+        sim_buf_json_str(b, G.pend[i].name);
+        sim_buf_adds(b, ",\"value\":");
+        sim_buf_json_str(b, G.pend[i].text);
+        sim_buf_addc(b, '}');
+    }
+    sim_buf_addc(b, ']');
+}
+
 static void json_state(sim_buf *b)
 {
     sim_buf_printf(b, "{\"running\":%s,\"step\":%llu,\"speed\":", G.running || G.budget ? "true" : "false",
@@ -379,7 +400,9 @@ static void json_state(sim_buf *b)
     sim_buf_json_str(b, G.error);
     sim_buf_adds(b, ",\"dropped\":[");
     sim_buf_add(b, G.dropped.p ? G.dropped.p : "", G.dropped.len);
-    sim_buf_adds(b, "]}");
+    sim_buf_adds(b, "],\"pending\":");
+    json_pending(b);
+    sim_buf_addc(b, '}');
 }
 
 static void json_watch_names(sim_buf *b)
@@ -826,6 +849,23 @@ static void free_hold(hold_t *h)
     sim_cellval_free(&h->val);
 }
 
+/* 名前 name の反映待ちを捨てる */
+static void drop_pending_locked(const char *name)
+{
+    int i;
+    for (i = 0; i < G.npend; i++) {
+        if (strcmp(G.pend[i].name, name) == 0) {
+            free_pend(&G.pend[i]);
+            memmove(&G.pend[i], &G.pend[i + 1], (size_t)(G.npend - i - 1) * sizeof *G.pend);
+            G.npend--;
+            return;
+        }
+    }
+}
+
+/* 書き込みは止まっているときもすぐにはメモリへ反映しない。単発は反映待ち（名前ごとに最後の 1 個）、固定は固定の一覧に
+ * 入れ、次のステップの開始時に apply_inputs_locked が入力列の順に書いて記録する（sim run が CSV の 1 行を処理するのと
+ * 同じ規則なので、記録と保存した CSV の再実行が一致する）。値の検証はここで行い、だめなら 400 */
 static void api_write(sim_sock s, req_t *r)
 {
     sj_value *v = parse_body(s, r), *val;
@@ -834,7 +874,7 @@ static void api_write(sim_sock s, req_t *r)
     const char *text = num;   /* 文字列はそのまま使う（長さで切り詰めない） */
     sim_ref *ref;
     sim_cellval cv;
-    int hold, release, i, written_now;
+    int hold, release, i;
     if (!v) return;
     name = sj_get_str(v, "name", NULL);
     if (!name) { send_error(s, 400, "\"name\" がありません"); sj_free(v); return; }
@@ -850,6 +890,7 @@ static void api_write(sim_sock s, req_t *r)
                 break;
             }
         }
+        drop_pending_locked(name);   /* 解除した名前の反映待ちも書かない */
         state_changed();
         sim_mutex_unlock(G.mu);
         send_resp(s, 200, "application/json; charset=utf-8", "{\"ok\":true}", 11, NULL);
@@ -892,9 +933,9 @@ static void api_write(sim_sock s, req_t *r)
         sj_free(v);
         return;
     }
-    if (sim_ref_prefix(ref) == '$' && sim_cellval_present(&cv) &&
-        (cv.n != 1 || cv.is_string || cv.items[0].kind != SIM_ITEM_INT || cv.items[0].i < 0)) {
-        snprintf(err, sizeof err, "'%s': '$' の値は確保する要素数（0 以上の整数）です", name);
+    if (sim_ref_check_value(ref, &cv, err, sizeof err)) {
+        /* 型に収まらない値、'$' の値、要素数の超過など。ポインタの先のようにその時のメモリで決まるものは
+         * ステップで書くときにエラー（state の error）になる */
         sim_ref_free(ref);
         sim_cellval_free(&cv);
         sim_mutex_unlock(G.mu);
@@ -902,44 +943,9 @@ static void api_write(sim_sock s, req_t *r)
         sj_free(v);
         return;
     }
-    written_now = 0;
-    if (!G.running && !G.budget && sim_ref_prefix(ref) != '$') {
-        /* 止まっていればすぐ書く。'$'（確保）は次のステップで 1 回だけ書く（すぐ書いてからもう一度書くと
-         * 二重に確保してポインタが変わり、保存した CSV の再実行と合わなくなる） */
-        written_now = 1;
-        if (sim_ref_write(G.c, ref, &cv, err, sizeof err)) {
-            sim_ref_free(ref);
-            sim_cellval_free(&cv);
-            sim_mutex_unlock(G.mu);
-            send_error(s, 400, err);
-            sj_free(v);
-            return;
-        }
-        values_changed();
-    }
-    if (!hold || written_now) {
-        /* 単発書き込みは次のステップの入力として書いて記録する。止まっているときにすぐ書いた値は、固定でも
-         * 待ち行列に入れる（同じ値をもう一度書く）。次のステップまでに固定を外しても、すぐ書いた値が記録に残り、
-         * 保存した CSV の再実行と合う */
-        sim_cellval pc = cv;
-        sim_ref *pr = ref;
-        if (hold) {
-            /* 固定とは別に持つ（上で解析・解決できた文字列と名前なので失敗しない） */
-            pr = sim_ref_parse(G.c, name, err, sizeof err);
-            if (pr && sim_parse_cell(text, strlen(text), &pc, err, sizeof err)) { sim_ref_free(pr); pr = NULL; }
-        }
-        if (pr) {
-            G.pend = sim_xrealloc(G.pend, (size_t)(G.npend + 1) * sizeof *G.pend);
-            G.pend[G.npend].name = sim_xstrdup(name);
-            G.pend[G.npend].text = sim_xstrdup(text);
-            G.pend[G.npend].ref = pr;
-            G.pend[G.npend].val = pc;
-            G.pend[G.npend].col = col_index(&G.in_cols, &G.nin_cols, name);
-            G.npend++;
-        }
-    }
     if (hold) {
         hold_t *h = NULL;
+        drop_pending_locked(name);   /* 後から固定したので、同じ名前の反映待ちは使われない */
         for (i = 0; i < G.nholds; i++) if (strcmp(G.holds[i].name, name) == 0) { h = &G.holds[i]; free_hold(h); break; }
         if (!h) {
             G.holds = sim_xrealloc(G.holds, (size_t)(G.nholds + 1) * sizeof *G.holds);
@@ -950,8 +956,20 @@ static void api_write(sim_sock s, req_t *r)
         h->ref = ref;
         h->val = cv;
         h->col = col_index(&G.in_cols, &G.nin_cols, name);
-        state_changed();
+    } else {
+        pend_t *p = NULL;
+        for (i = 0; i < G.npend; i++) if (strcmp(G.pend[i].name, name) == 0) { p = &G.pend[i]; free_pend(p); break; }
+        if (!p) {
+            G.pend = sim_xrealloc(G.pend, (size_t)(G.npend + 1) * sizeof *G.pend);
+            p = &G.pend[G.npend++];
+        }
+        p->name = sim_xstrdup(name);
+        p->text = sim_xstrdup(text);
+        p->ref = ref;
+        p->val = cv;
+        p->col = col_index(&G.in_cols, &G.nin_cols, name);
     }
+    state_changed();
     sim_mutex_unlock(G.mu);
     send_resp(s, 200, "application/json; charset=utf-8", "{\"ok\":true}", 11, NULL);
     sj_free(v);
@@ -1048,6 +1066,30 @@ static void discard_pending_locked(void)
     G.npend = 0;
 }
 
+static void free_cols(char ***cols, int *n)
+{
+    int i;
+    for (i = 0; i < *n; i++) free((*cols)[i]);
+    free(*cols);
+    *cols = NULL;
+    *n = 0;
+}
+
+/* 記録が空になったら（リセット・関数の変更・CSV の読み込み）、記録の列を組み直す。
+ * 入力列は読み込んだ CSV の入力列をその順で先頭に、続けていま残っている固定（CSV にない名前）。
+ * 出力列は監視の順。以前に書いた順の列番号を使い続けると、CSV の再生が CSV の入力列と違う順に書いてしまう */
+static void rebuild_cols_locked(void)
+{
+    int i;
+    free_cols(&G.in_cols, &G.nin_cols);
+    free_cols(&G.out_cols, &G.nout_cols);
+    /* 再生が終わった（または止めた）CSV の列は使わない。残しておくと、その後の手動の書き込みの順が変わる */
+    if (G.play_active)
+        for (i = 0; i < G.play_cols; i++) G.play_col_ids[i] = col_index(&G.in_cols, &G.nin_cols, G.play.names[i]);
+    for (i = 0; i < G.nholds; i++) G.holds[i].col = col_index(&G.in_cols, &G.nin_cols, G.holds[i].name);
+    for (i = 0; i < G.nwatch; i++) G.watch[i].col = col_index(&G.out_cols, &G.nout_cols, G.watch[i].name);
+}
+
 static void reset_locked(void)
 {
     char err[1024];
@@ -1060,6 +1102,7 @@ static void reset_locked(void)
     G.play_pos = 0;
     rec_clear();
     reresolve_locked();
+    rebuild_cols_locked();   /* 記録が空なので、列は CSV の入力列と残った固定・監視だけから組み直す */
     state_changed();
     values_changed();
 }
@@ -1198,10 +1241,9 @@ static void api_load_csv(sim_sock s, req_t *r)
     G.play_cols = t.nin;
     G.play_refs = refs;
     G.play_col_ids = sim_xcalloc((size_t)t.nin + 1, sizeof *G.play_col_ids);
-    for (i = 0; i < t.nin; i++) G.play_col_ids[i] = col_index(&G.in_cols, &G.nin_cols, t.names[i]);
     set_watch_locked((const char *const *)t.names, t.nin + t.nout, 1, NULL);
-    reset_locked();
     G.play_active = 1;
+    reset_locked();   /* 列番号（play_col_ids）は記録の列を組み直すときに CSV の入力列の順で振る */
     G.play_pos = 0;
     G.running = 1;
     state_changed();
@@ -1215,22 +1257,6 @@ static void api_load_csv(sim_sock s, req_t *r)
     sim_mutex_unlock(G.mu);
     send_json(s, 200, &b);
     sim_buf_free(&b);
-}
-
-/* CSV のセル。',' '"' や前後の空白を含むなら "..." で囲み、'"' は二重にする（sim run の読み込みと対） */
-static void csv_cell(sim_buf *b, const char *v)
-{
-    size_t n = strlen(v);
-    int q = n > 0 && (v[0] == ' ' || v[0] == '\t' || v[n - 1] == ' ' || v[n - 1] == '\t' || v[0] == '"');
-    const char *p;
-    if (!q && (strchr(v, ',') || strchr(v, '"'))) q = 1;
-    if (!q) { sim_buf_adds(b, v); return; }
-    sim_buf_addc(b, '"');
-    for (p = v; *p; p++) {
-        if (*p == '"') sim_buf_addc(b, '"');
-        sim_buf_addc(b, *p);
-    }
-    sim_buf_addc(b, '"');
 }
 
 static void api_export(sim_sock s)
@@ -1271,12 +1297,12 @@ static void api_export(sim_sock s)
         for (k = 0; k < G.nin_cols; k++) {
             if (!in_used[k]) continue;
             sim_buf_addc(&b, ',');
-            if (k < r->nin) csv_cell(&b, cells[r->nout + k]);
+            if (k < r->nin) sim_csv_cell(&b, cells[r->nout + k]);
         }
         for (k = 0; k < G.nout_cols; k++) {
             if (!out_used[k]) continue;
             sim_buf_addc(&b, ',');
-            if (k < r->nout) csv_cell(&b, cells[k]);
+            if (k < r->nout) sim_csv_cell(&b, cells[k]);
         }
         sim_buf_adds(&b, "\r\n");
     }
