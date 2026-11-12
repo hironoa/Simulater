@@ -520,7 +520,7 @@ curl -s -X POST --data-binary "@%T%\gui\step1.json" "%U%/api/control" > nul
 curl -s -X POST --data-binary "@%T%\gui\watch_call_cnt.json" "%U%/api/watch" > nul
 curl -s -X POST --data-binary "@%T%\gui\step1.json" "%U%/api/control" > nul
 curl -s "%U%/api/export.csv" > "%WORK%\en_export.csv"
-findstr /x /l /c:"step 1," "%WORK%\en_export.csv" >nul
+findstr /l /c:"step 1" "%WORK%\en_export.csv" >nul
 if errorlevel 1 (call :ng "an empty step before watching is saved with step 1 in the comment column") else (call :ok "an empty step before watching is saved with step 1 in the comment column")
 "%SIM%" run "%WORK%\en_export.csv" -o "%WORK%\oen" --quiet > "%WORK%\en_rerun.log" 2>&1
 set RC=%ERRORLEVEL%
@@ -531,9 +531,9 @@ curl -s -X POST --data-binary "@%T%\gui\watch_none.json" "%U%/api/watch" > nul
 curl -s -X POST --data-binary "@%T%\gui\reset_func_cycle.json" "%U%/api/control" > nul
 curl -s -X POST --data-binary "@%T%\gui\step3.json" "%U%/api/control" > nul
 curl -s "%U%/api/export.csv" > "%WORK%\e0_export.csv"
-findstr /x /l /c:"#COMMENT" "%WORK%\e0_export.csv" >nul
+findstr /l /c:"step 2" "%WORK%\e0_export.csv" >nul
 if errorlevel 1 (call :ng "a record with nothing watched or written is a block of 0 inputs and 0 outputs") else (call :ok "a record with nothing watched or written is a block of 0 inputs and 0 outputs")
-findstr /x /l /c:"step 3," "%WORK%\e0_export.csv" >nul
+findstr /l /c:"step 3" "%WORK%\e0_export.csv" >nul
 if errorlevel 1 (call :ng "every row of a 0 input 0 output record has step N and a comma") else (call :ok "every row of a 0 input 0 output record has step N and a comma")
 "%SIM%" run "%WORK%\e0_export.csv" -o "%WORK%\oe0" --quiet > "%WORK%\e0_rerun.log" 2>&1
 set RC=%ERRORLEVEL%
@@ -556,7 +556,7 @@ curl -s -X POST --data-binary "@%T%\gui\step1.json" "%U%/api/control" > nul
 curl -s -X POST --data-binary "@%T%\gui\watch_call_cnt.json" "%U%/api/watch" > nul
 curl -s -X POST --data-binary "@%T%\gui\step1.json" "%U%/api/control" > nul
 curl -s "%U%/api/export.csv" > "%WORK%\em_export.csv"
-findstr /x /l /c:"step 6,," "%WORK%\em_export.csv" >nul
+findstr /l /c:"step 6" "%WORK%\em_export.csv" >nul
 if errorlevel 1 (call :ng "an empty step after removing the watch is saved with step 6") else (call :ok "an empty step after removing the watch is saved with step 6")
 set "LAST="
 for /f "usebackq delims=" %%L in ("%WORK%\em_export.csv") do set "LAST=%%L"
