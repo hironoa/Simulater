@@ -6,6 +6,16 @@ export interface SimState {
   speed: number;
   holds: { name: string; value: number | string }[];
   overrun: boolean;
+  /** 次の周期の開始時に書く単発書き込み（反映待ち）。名前ごとに 1 個 */
+  pending: PendingWrite[];
+  /** ステップ時の書き込み・関数呼び出しなどの誤り（無ければ空文字列） */
+  error: string;
+}
+
+/** 反映待ちの単発書き込み。`value` は書いたセルの文字列（`"7"`、`"'A'"`、`"0x78"` など）。 */
+export interface PendingWrite {
+  name: string;
+  value: string;
 }
 
 /** 関数の変更などで解決し直せずにサーバが外した固定・監視（直近の `/api/control`・`/api/load-csv` の分）。 */
@@ -34,6 +44,23 @@ export function parseDropped(v: unknown): DroppedItem[] | undefined {
   });
 }
 
+/**
+ * `pending` を読む。項目が無ければ空、配列でなければ undefined（不正な形は無視する）。
+ * 名前のない項目は捨て、同じ名前は後のものを採る。
+ */
+export function parsePending(v: unknown): PendingWrite[] | undefined {
+  if (v === undefined || v === null) return [];
+  if (!Array.isArray(v)) return undefined;
+  const byName = new Map<string, string>();
+  for (const p of v) {
+    if (!isObject(p) || typeof p.name !== "string" || !p.name) continue;
+    if (typeof p.value !== "string" && typeof p.value !== "number") continue;
+    byName.delete(p.name);
+    byName.set(p.name, String(p.value));
+  }
+  return [...byName].map(([name, value]) => ({ name, value }));
+}
+
 /** state の形をした値を検証する。オブジェクトでなければ null。 */
 export function parseState(msg: unknown): StateMessage | null {
   if (!isObject(msg)) return null;
@@ -50,8 +77,11 @@ export function parseState(msg: unknown): StateMessage | null {
       value: typeof h.value === "number" || typeof h.value === "string" ? h.value : String(h.value),
     }));
   }
+  if (typeof msg.error === "string") out.error = msg.error;
   const dropped = parseDropped(msg.dropped);
   if (dropped) out.dropped = dropped;
+  const pending = parsePending(msg.pending);
+  if (pending) out.pending = pending;
   return out;
 }
 
@@ -60,7 +90,7 @@ export function parseControlResponse(res: unknown): StateMessage | null {
   if (!isObject(res)) return null;
   if (isObject(res.state)) return parseState(res.state);
   // state の項目が 1 つもなければ state ではない（`{"ok":true}` など）
-  const keys = ["running", "step", "speed", "holds", "overrun", "periodMs", "func", "dropped"];
+  const keys = ["running", "step", "speed", "holds", "overrun", "periodMs", "func", "dropped", "pending", "error"];
   return keys.some((k) => k in res) ? parseState(res) : null;
 }
 

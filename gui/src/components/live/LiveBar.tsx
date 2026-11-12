@@ -106,6 +106,13 @@ export function LiveBar() {
         </span>
       )}
 
+      {sim.error && (
+        <span role="alert" className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-red-100 dark:bg-red-900/50 text-red-700 dark:text-red-300 font-bold max-w-[420px] truncate"
+          title={`シミュレータのエラー（書き込み・関数の呼び出しなど。実行・ステップ・リセットなどの次の操作で消えます）: ${sim.error}`}>
+          <AlertTriangle size={13} className="shrink-0" /> <span className="truncate">{sim.error}</span>
+        </span>
+      )}
+
       <div className="flex items-center gap-1 ml-auto">
         <label className="flex items-center gap-1" title="実行中に表示する直近の点数">表示
           <input type="number" min={50} step={100} className={cn(field, "w-20")} value={win}

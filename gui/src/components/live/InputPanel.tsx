@@ -6,6 +6,7 @@ import { liveController } from "../../live/controller";
 import type { InputItem, InputWidget } from "../../live/persist";
 import { SymbolSearch } from "./SymbolSearch";
 import { formatValue } from "../../live/format";
+import { inputValue, type InputValue } from "../../live/inputValue";
 import { cn } from "../../utils/helpers";
 
 const WIDGETS: { value: InputWidget; label: string }[] = [
@@ -24,16 +25,39 @@ function parseNumber(text: string): number | null {
   return Number.isFinite(v) ? v : null;
 }
 
-function InputCard({ item, current }: { item: InputItem; current: number | null | undefined; key?: React.Key }) {
+interface InputCardProps {
+  item: InputItem;
+  /** メモリの現在値 */
+  current: number | null | undefined;
+  /** 反映待ちの値（書いたセルの文字列）。無ければ undefined */
+  pending: string | undefined;
+  /** 入力の元にする値（反映待ち → 固定の値 → 現在値） */
+  base: InputValue;
+  key?: React.Key;
+}
+
+function InputCard({ item, current, pending, base }: InputCardProps) {
   const live = liveController();
   const [text, setText] = useState(item.value !== undefined ? String(item.value) : "");
-  const [slider, setSlider] = useState(item.value ?? current ?? item.min);
+  const [slider, setSlider] = useState(item.value ?? base.value ?? item.min);
   const [pressed, setPressed] = useState(false);
-  // まだ操作していないスライダは、届いた現在値に合わせておく
+  const textRef = useRef<HTMLInputElement>(null);
+  // スライダは、利用者が最後に設定した値（反映待ち・固定）に合わせる。まだ操作していなければ現在値にも合わせる。
+  // 書き込みはステップまでメモリに反映されないので、現在値だけを見ると書いた直後に古い値へ戻って見える
   const touched = useRef(item.value !== undefined);
+  const lastSlide = useRef(0);
   useEffect(() => {
-    if (!touched.current && current !== null && current !== undefined) setSlider(current);
-  }, [current]);
+    if (base.value === null) return;
+    if (base.source === "current" && touched.current) return;
+    if (performance.now() - lastSlide.current < 500) return; // ドラッグ中は届いた値で戻さない
+    setSlider(base.value);
+  }, [base.value, base.source]);
+  // 数値入力も、ほかから設定された反映待ち・固定の値に合わせる（入力中は触らない）
+  useEffect(() => {
+    if (base.source === "current" || base.value === null) return;
+    if (textRef.current && document.activeElement === textRef.current) return;
+    setText(base.source === "pending" && pending !== undefined ? pending : String(base.value));
+  }, [base.value, base.source, pending]);
   const lastSent = useRef(0);
   const trailing = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => () => { if (trailing.current) clearTimeout(trailing.current); }, []);
@@ -47,6 +71,7 @@ function InputCard({ item, current }: { item: InputItem; current: number | null 
   // スライダはドラッグ中に書き込みが詰まらないよう 50ms に 1 回まで送り、最後の値は必ず送る
   const writeSlider = (v: number) => {
     touched.current = true;
+    lastSlide.current = performance.now();
     setSlider(v);
     const now = performance.now();
     if (trailing.current) clearTimeout(trailing.current);
@@ -59,11 +84,14 @@ function InputCard({ item, current }: { item: InputItem; current: number | null 
   };
 
   const pressedAt = useRef(0);
+  /** 押す前の値（離したらこれに戻す） */
+  const restoreTo = useRef(0);
   const press = async (down: boolean) => {
     if (down === pressed) return;
     setPressed(down);
     if (down) {
       pressedAt.current = performance.now();
+      restoreTo.current = base.value ?? 0;
       await live.write(item.name, 1, true);
     } else {
       // 一瞬のクリックでも対象が 1 を読めるよう、最低 100ms（かつ 3 周期）は 1 のままにする
@@ -71,12 +99,13 @@ function InputCard({ item, current }: { item: InputItem; current: number | null 
       const minMs = Math.max(100, speed > 0 ? (3 * periodMs) / speed : 0);
       const wait = minMs - (performance.now() - pressedAt.current);
       if (wait > 0) await new Promise((r) => setTimeout(r, Math.min(wait, 2000)));
-      // 押している間は固定で 1 を書き続け、離したら 0 に戻す（固定 ON の項目は 0 で固定し直す）
-      await live.releaseButton(item.name);
+      // 押している間は固定で 1 を書き続け、離したら押す前の値に戻す（固定 ON の項目はその値で固定し直す）
+      await live.releaseButton(item.name, restoreTo.current);
     }
   };
 
-  const on = (current ?? 0) !== 0;
+  // トグルは反映待ち → 固定 → 現在値 を元に反転する（停止中に続けて押しても、書いた値を元に反転する）
+  const on = (base.value ?? 0) !== 0;
   const unmonitored = item.monitor === false;
 
   return (
@@ -87,6 +116,12 @@ function InputCard({ item, current }: { item: InputItem; current: number | null 
           title={unmonitored ? "今の対象関数では解決できないため監視から外れています。書き込めると監視に戻ります" : "現在値"}>
           = {unmonitored ? "—" : formatValue(current, "dec")}
         </span>
+        {pending !== undefined && (
+          <span className="font-mono text-[11px] px-1 rounded bg-sky-100 text-sky-800 dark:bg-sky-900/50 dark:text-sky-200 truncate max-w-[9rem]"
+            title="次のステップの開始時にメモリへ書き込みます（それまで現在値は変わりません）">
+            反映待ち: {pending}
+          </span>
+        )}
         <select className={cn(field, "text-[11px]")} value={item.widget} onChange={(e) => live.updateInput(item.name, { widget: e.target.value as InputWidget })}>
           {WIDGETS.map((w) => <option key={w.value} value={w.value}>{w.label}</option>)}
         </select>
@@ -96,7 +131,7 @@ function InputCard({ item, current }: { item: InputItem; current: number | null 
               : "border-gray-300 dark:border-slate-600 text-gray-500 dark:text-gray-400")}
           title={item.hold ? "固定中（毎周期書き込み続けます）。押すと解除" : "固定する（毎周期この値を書き込み続けます）"}
           onClick={() => {
-            const v = item.widget === "slider" ? slider : item.widget === "number" ? parseNumber(text) ?? current ?? 0 : current ?? 0;
+            const v = item.widget === "slider" ? slider : item.widget === "number" ? parseNumber(text) ?? base.value ?? 0 : base.value ?? 0;
             void live.setHold(item.name, !item.hold, v);
           }}>
           {item.hold ? <Lock size={11} /> : <Unlock size={11} />}固定
@@ -106,7 +141,7 @@ function InputCard({ item, current }: { item: InputItem; current: number | null 
 
       {item.widget === "number" && (
         <div className="flex items-center gap-1">
-          <input className={cn(field, "flex-1 font-mono")} value={text} placeholder="値（10 進 / 0x16 進）"
+          <input ref={textRef} className={cn(field, "flex-1 font-mono")} value={text} placeholder="値（10 進 / 0x16 進）"
             onChange={(e) => setText(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") writeNumber(); }} />
           <button className="text-xs px-2 py-0.5 rounded bg-blue-500 text-white hover:bg-blue-600" onClick={writeNumber}>書込</button>
         </div>
@@ -154,13 +189,19 @@ function InputCard({ item, current }: { item: InputItem; current: number | null 
 
 export function InputPanel() {
   const live = liveController();
-  const { inputs, values } = useLiveStore(useShallow((s) => ({ inputs: s.inputs, values: s.values })));
+  const { inputs, values, pending, holds } = useLiveStore(useShallow((s) => ({
+    inputs: s.inputs, values: s.values, pending: s.sim.pending, holds: s.sim.holds,
+  })));
   return (
     <div className="flex flex-col gap-1.5">
       <SymbolSearch placeholder="入力にする変数を検索"
         actions={[{ label: "入力に追加", title: "入力パネルに追加", enabled: (s) => s.writable, onPick: (s) => live.addInput(s.name) }]} />
       {inputs.length === 0 && <div className="text-[11px] text-gray-400 px-1">変数を検索して入力に追加してください。</div>}
-      {inputs.map((item) => <InputCard key={item.name} item={item} current={values[item.name]} />)}
+      {inputs.map((item) => (
+        <InputCard key={item.name} item={item} current={values[item.name]}
+          pending={pending.find((p) => p.name === item.name)?.value}
+          base={inputValue(item.name, { pending, holds }, values[item.name])} />
+      ))}
     </div>
   );
 }

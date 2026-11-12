@@ -7,6 +7,8 @@
 // 正弦波・カウンタ・書き込みに反応する値（ゲイン×正弦、ボタンの押下回数、目標値への一次遅れなど）を流す。
 // 対象関数ごとに `@引数` を持ち（func1 は @a @b、ctrl_task_5ms は @rpm）、関数を変えるとリセットして、
 // 新しい関数にない `@引数` の固定・監視を外して state の dropped に載せる。
+// `/api/write` の書き込み（単発・固定）は止まっているときもすぐにはメモリへ書かず、次のステップの開始時に書く
+// （単発 → 固定 → CSV 再生 の順。単発は名前ごとに最後の 1 個で、反映待ちとして state の pending に載せる）。
 
 import http from "node:http";
 import fs from "node:fs";
@@ -85,7 +87,7 @@ let step = 0; // 次に実行するステップ番号（記録上は 0 始まり
 let speed = 1;
 let overrun = false;
 let watch = ["g_counter", "g_sine", "g_output"];
-const pending = new Map(); // 次の周期の前に 1 回書く
+const pending = new Map(); // 次の周期の開始時に 1 回書く（名前 → 書いたセルの文字列）
 const holds = new Map(); // 毎周期書く
 const inputNames = new Set();
 let stepBudget = 0; // ステップ実行の残り
@@ -115,6 +117,10 @@ function writeVar(name, value) {
 }
 
 function runOneStep() {
+  // 周期の開始時に書く: 単発（反映待ち）→ 固定 → CSV 再生 の順（同じ名前は後のものが残る）
+  for (const [n, v] of pending) if (resolvable(n)) writeVar(n, v);
+  pending.clear();
+  for (const [n, v] of holds) writeVar(n, v);
   if (csvPlay) {
     const row = csvPlay.rows[csvPlay.index];
     if (row) {
@@ -131,9 +137,6 @@ function runOneStep() {
       return false;
     }
   }
-  for (const [n, v] of pending) writeVar(n, v);
-  pending.clear();
-  for (const [n, v] of holds) writeVar(n, v);
 
   const t = step * periodMs;
   put("g_counter", (get("g_counter") + 1) & 0xffff);
@@ -172,6 +175,7 @@ const broadcast = (event, data) => { for (const c of clients) send(c, event, dat
 const stateMsg = () => ({
   running, step, speed, holds: [...holds].map(([name, value]) => ({ name, value })), overrun,
   periodMs, func, playback: !!csvPlay, error: "", dropped,
+  pending: [...pending].map(([name, value]) => ({ name, value })),
 });
 let lastStateJson = "";
 function broadcastState(force = false) {
@@ -351,12 +355,14 @@ const server = http.createServer(async (req, res) => {
       if (typeof body.value === "string" && /[\r\n]/.test(body.value)) return json(res, 400, { error: "値に改行は使えません" });
       const sym = symOf(body.name);
       if (!sym || sym.members) return json(res, 404, { error: unresolvedMessage(String(body.name)) });
-      if (body.release) { holds.delete(body.name); broadcastState(); return json(res, 200, { ok: true }); }
+      // 固定を外すと、その名前の反映待ちも捨てる
+      if (body.release) { holds.delete(body.name); pending.delete(body.name); broadcastState(); return json(res, 200, { ok: true }); }
       if (!sym.writable) return json(res, 400, { error: `${body.name} は書き込めません` });
+      if (typeof body.value !== "number" && typeof body.value !== "string") return json(res, 400, { error: "value がありません" });
       inputNames.add(body.name);
-      if (body.hold) holds.set(body.name, body.value);
-      else { holds.delete(body.name); pending.set(body.name, body.value); }
-      if (!running) { writeVar(body.name, body.value); markValues(); } // 停止中も値が見えるように
+      // 停止中もメモリへはすぐに書かない（次のステップの開始時に書く）。values も変わらない
+      if (body.hold) { holds.set(body.name, body.value); pending.delete(body.name); }
+      else pending.set(body.name, String(body.value)); // 固定した名前への単発は、その周期も固定の値になる
       broadcastState();
       return json(res, 200, { ok: true });
     }

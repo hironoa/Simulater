@@ -18,7 +18,7 @@ describe("dispatchStreamEvent", () => {
     dispatchStreamEvent("samples", '{"step0":10,"names":["a","b"],"rows":[[1,null],[2,"x"]]}', h);
     expect(h.samples).toHaveBeenCalledWith({ step0: 10, names: ["a", "b"], rows: [[1, null], [2, null]] });
     dispatchStreamEvent("state", '{"running":true,"step":3,"speed":0,"holds":[{"name":"x","value":1}],"overrun":false}', h);
-    expect(h.state).toHaveBeenCalledWith({ running: true, step: 3, speed: 0, holds: [{ name: "x", value: 1 }], overrun: false, dropped: [] });
+    expect(h.state).toHaveBeenCalledWith({ running: true, step: 3, speed: 0, holds: [{ name: "x", value: 1 }], overrun: false, dropped: [], pending: [] });
   });
 
   it("state の dropped を読む（無ければ空、不正な項目は捨て、配列でなければ無視）", () => {
@@ -39,9 +39,10 @@ describe("dispatchStreamEvent", () => {
         { name: "@rpm", kind: "hold", message: "引数がありません" },
         { name: "@rpm", kind: "watch", message: "" },
       ],
+      pending: [],
     });
     dispatchStreamEvent("state", '{"step":1,"dropped":"x"}', h);
-    expect(h.state).toHaveBeenLastCalledWith({ step: 1 });
+    expect(h.state).toHaveBeenLastCalledWith({ step: 1, pending: [] });
   });
 
   it("values を検証して渡し、形式が違えば捨てる", () => {
@@ -354,6 +355,107 @@ describe("ライブ制御（SSE の取り込み）", () => {
     await live.control({ speed: 2 });
     expect(record.length).toBe(1);
     live.stop();
+  });
+
+  describe("反映待ちの書き込み（停止中はステップまでメモリに反映されない）", () => {
+    /** 入力パネルのトグルを押したときと同じ: 元にする値を反転して書く */
+    const toggle = (live: ReturnType<typeof makeController>, name: string) =>
+      live.write(name, (live.inputBase(name) ?? 0) !== 0 ? 0 : 1);
+    const writes = () => posted.filter((p) => p.url === "/api/write").map((p) => p.body);
+
+    async function startPaused() {
+      info.state = { running: false, step: 3, speed: 1, holds: [], overrun: false };
+      const live = makeController();
+      useLiveStore.setState({ watch: [] });
+      await live.start();
+      live.addInput("g_mode", "toggle");
+      await vi.runOnlyPendingTimersAsync();
+      const es = FakeEventSource.last!;
+      es.emit("values", { step: 3, names: ["g_mode"], values: [0] });
+      live.flushValues();
+      return { live, es };
+    }
+
+    it("SSE の state の pending を取り込み、ステップで空になれば消す", async () => {
+      const { live, es } = await startPaused();
+      es.emit("state", { running: false, step: 3, pending: [{ name: "g_mode", value: "1" }] });
+      expect(useLiveStore.getState().sim.pending).toEqual([{ name: "g_mode", value: "1" }]);
+      expect(live.inputBase("g_mode")).toBe(1);
+      // 現在値（メモリ）は変わらない
+      expect(useLiveStore.getState().values.g_mode).toBe(0);
+      // 1 ステップ進むと反映されて pending が空になる
+      es.emit("samples", { step0: 3, names: ["g_mode"], rows: [[1]] });
+      es.emit("state", { running: false, step: 4, pending: [] });
+      live.flushValues();
+      expect(useLiveStore.getState().sim.pending).toEqual([]);
+      expect(useLiveStore.getState().values.g_mode).toBe(1);
+      expect(live.inputBase("g_mode")).toBe(1);
+      live.stop();
+    });
+
+    it("停止中にトグルを続けて押すと、反映待ちの値を元に反転する", async () => {
+      const { live } = await startPaused();
+      await toggle(live, "g_mode");
+      expect(useLiveStore.getState().sim.pending).toEqual([{ name: "g_mode", value: "1" }]);
+      expect(useLiveStore.getState().values.g_mode).toBe(0);
+      await toggle(live, "g_mode");
+      expect(writes()).toEqual([
+        { name: "g_mode", value: 1, hold: false },
+        { name: "g_mode", value: 0, hold: false },
+      ]);
+      expect(useLiveStore.getState().sim.pending).toEqual([{ name: "g_mode", value: "0" }]);
+      live.stop();
+    });
+
+    it("固定中の入力に書くと hold:true で送り、固定の値を元に反転する。固定を外すと反映待ちも消す", async () => {
+      const { live, es } = await startPaused();
+      await live.setHold("g_mode", true, 0);
+      es.emit("state", { running: false, holds: [{ name: "g_mode", value: 0 }], pending: [] });
+      await toggle(live, "g_mode");
+      expect(writes().at(-1)).toEqual({ name: "g_mode", value: 1, hold: true });
+      expect(useLiveStore.getState().sim.holds).toEqual([{ name: "g_mode", value: 1 }]);
+      expect(live.inputBase("g_mode")).toBe(1);
+      await toggle(live, "g_mode");
+      expect(writes().at(-1)).toEqual({ name: "g_mode", value: 0, hold: true });
+
+      // 固定 OFF: その名前の反映待ちもサーバで捨てられる
+      useLiveStore.setState({ sim: { ...useLiveStore.getState().sim, pending: [{ name: "g_mode", value: "1" }, { name: "x", value: "2" }] } });
+      await live.setHold("g_mode", false);
+      expect(posted.at(-1)).toEqual({ url: "/api/write", body: { name: "g_mode", release: true } });
+      expect(useLiveStore.getState().sim.pending).toEqual([{ name: "x", value: "2" }]);
+      expect(useLiveStore.getState().sim.holds).toEqual([]);
+      expect(live.inputBase("g_mode")).toBe(0);
+      live.stop();
+    });
+
+    it("押している間だけ 1 のボタンは、離すと押す前の値（反映待ち）に戻す", async () => {
+      const { live } = await startPaused();
+      await live.write("g_mode", 1);
+      const before = live.inputBase("g_mode");
+      await live.write("g_mode", 1, true);
+      expect(useLiveStore.getState().sim.pending).toEqual([]);
+      await live.releaseButton("g_mode", before ?? 0);
+      expect(writes().slice(-3)).toEqual([
+        { name: "g_mode", value: 1, hold: true },
+        { name: "g_mode", release: true },
+        { name: "g_mode", value: 1, hold: false },
+      ]);
+      expect(useLiveStore.getState().sim.holds).toEqual([]);
+      expect(useLiveStore.getState().sim.pending).toEqual([{ name: "g_mode", value: "1" }]);
+      live.stop();
+    });
+
+    it("state.error が出たら 1 回だけ知らせ、表示用に残す", async () => {
+      const { live, es } = await startPaused();
+      es.emit("state", { running: false, error: "ポインタ g_p の先が NULL です" });
+      es.emit("state", { running: false, error: "ポインタ g_p の先が NULL です" });
+      expect(useLiveStore.getState().sim.error).toBe("ポインタ g_p の先が NULL です");
+      expect(notify.error).toHaveBeenCalledTimes(1);
+      expect(notify.error.mock.calls[0][0]).toContain("ポインタ g_p の先が NULL です");
+      es.emit("state", { running: false, error: "" });
+      expect(useLiveStore.getState().sim.error).toBe("");
+      live.stop();
+    });
   });
 
   it("SSE で先に関数の変更を知っても記録を消す", async () => {

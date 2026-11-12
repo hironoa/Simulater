@@ -3,6 +3,7 @@
 import toast from "react-hot-toast";
 import { LIVE_FILE_NAME, useWaveformStore } from "../store/useWaveformStore";
 import { createApi, detectServer, type ControlRequest, type DroppedItem, type SimApi, type StateMessage } from "./api";
+import { dropPending, inputValue, upsertPending } from "./inputValue";
 import { liveRecord, type LiveRecord } from "./liveRecord";
 import { useLiveStore, type LiveStoreState } from "./liveStore";
 import { loadLayout, saveLayout, type InputItem, type InputWidget, type WatchItem } from "./persist";
@@ -207,6 +208,8 @@ export function createLiveController(deps: LiveControllerDeps = {}) {
     const { dropped, ...rest } = msg;
     const prev = store.getState().sim;
     set({ sim: { ...prev, ...rest } });
+    // ステップ時の書き込みの誤り（ポインタの先が NULL など）は、新しく出たときに知らせる（表示は接続バーに残る）
+    if (rest.error && rest.error !== prev.error) notify.error(`シミュレータのエラー: ${rest.error}`);
     if (rest.periodMs && rest.periodMs !== prev.periodMs) waveform.getState().setTaskPeriod(rest.periodMs);
     noteFunc(rest.func);
     onDropped(dropped, fromResponse);
@@ -284,6 +287,8 @@ export function createLiveController(deps: LiveControllerDeps = {}) {
         speed: info.state.speed ?? 1,
         holds: info.state.holds ?? [],
         overrun: !!info.state.overrun,
+        pending: info.state.pending ?? [],
+        error: info.state.error ?? "",
         periodMs: info.periodMs,
         func: info.func,
       },
@@ -387,7 +392,7 @@ export function createLiveController(deps: LiveControllerDeps = {}) {
     set({ inputs: store.getState().inputs.filter((i) => i.name !== name) });
     persist();
     momentary.delete(name);
-    if (item?.hold) void api.release(name).catch(() => undefined);
+    if (item?.hold) void api.release(name).then(() => noteReleased(name), () => undefined);
     void syncWatch();
   }
 
@@ -396,6 +401,33 @@ export function createLiveController(deps: LiveControllerDeps = {}) {
     persist();
   }
 
+  /** 書き込みを受け付けたサーバの状態を、state を待たずに手元へ写す（続けて操作したときの元の値にするため）。 */
+  function noteWritten(name: string, value: number | string, hold: boolean) {
+    const sim = store.getState().sim;
+    if (hold) {
+      // 固定すると同じ名前の反映待ちは捨てられ、その周期からは固定の値になる
+      set({ sim: { ...sim, pending: dropPending(sim.pending, name),
+        holds: [...sim.holds.filter((h) => h.name !== name), { name, value }] } });
+    } else {
+      set({ sim: { ...sim, pending: upsertPending(sim.pending, name, String(value)) } });
+    }
+  }
+
+  /** 固定を外したことを手元へ写す（その名前の反映待ちも捨てられる）。 */
+  function noteReleased(name: string) {
+    const sim = store.getState().sim;
+    set({ sim: { ...sim, pending: dropPending(sim.pending, name), holds: sim.holds.filter((h) => h.name !== name) } });
+  }
+
+  /** 入力の元にする値（反映待ち → 固定の値 → メモリの現在値）。トグルの反転やボタンの復帰に使う。 */
+  function inputBase(name: string): number | null {
+    const s = store.getState();
+    return inputValue(name, s.sim, s.values[name]).value;
+  }
+
+  /**
+   * 値を書く。hold を省くと、固定中の入力は固定値の更新（hold:true）、そうでなければ単発（次のステップの開始時に反映）。
+   */
   async function write(name: string, value: number | string, hold?: boolean) {
     const item = store.getState().inputs.find((i) => i.name === name);
     const h = hold ?? item?.hold ?? false;
@@ -403,6 +435,7 @@ export function createLiveController(deps: LiveControllerDeps = {}) {
     if (h && item && !item.hold) momentary.add(name);
     try {
       await trackHold(name, () => api.write(name, value, h));
+      noteWritten(name, value, h);
       if (!h) momentary.delete(name);
       if (item && typeof value === "number") updateInput(name, { value });
       remonitor(name);
@@ -411,13 +444,16 @@ export function createLiveController(deps: LiveControllerDeps = {}) {
     }
   }
 
-  /** 押している間だけ 1 のボタンを離した: 一時的な固定を解き、0 を書く（固定 ON の項目は 0 で固定し直す）。 */
-  async function releaseButton(name: string) {
+  /**
+   * 押している間だけ 1 のボタンを離した: 一時的な固定を解き、押す前の値（restore。無ければ 0）を書く
+   * （固定 ON の項目はその値で固定し直す）。
+   */
+  async function releaseButton(name: string, restore = 0) {
     await trackHold(name, async () => {
-      await api.release(name).catch(() => undefined);
+      await api.release(name).then(() => noteReleased(name), () => undefined);
       momentary.delete(name);
       const item = store.getState().inputs.find((i) => i.name === name);
-      await write(name, 0, item?.hold ?? false);
+      await write(name, restore, item?.hold ?? false);
     });
   }
 
@@ -428,10 +464,13 @@ export function createLiveController(deps: LiveControllerDeps = {}) {
       await trackHold(name, async () => {
         if (hold) {
           const item = store.getState().inputs.find((i) => i.name === name);
-          const v = value ?? item?.value ?? store.getState().values[name] ?? 0;
+          const v = value ?? item?.value ?? inputBase(name) ?? 0;
           await api.write(name, v, true);
+          noteWritten(name, v, true);
         } else {
+          // 固定を外すと、その名前の反映待ちも捨てられる
           await api.release(name);
+          noteReleased(name);
         }
       });
       if (hold) remonitor(name);
@@ -485,7 +524,7 @@ export function createLiveController(deps: LiveControllerDeps = {}) {
 
   return {
     api, record, handlers, start, stop, control, commit, syncWatch,
-    addWatch, removeWatch, updateWatch, addInput, removeInput, updateInput, write, releaseButton, setHold,
+    addWatch, removeWatch, updateWatch, addInput, removeInput, updateInput, write, releaseButton, setHold, inputBase,
     setWindowSize, setMaxSamples, loadCsv, exportCsv,
     /** テスト用: 保留中の最新値を即座に反映する */
     flushValues,
