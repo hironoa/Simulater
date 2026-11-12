@@ -88,6 +88,8 @@ describe("ライブ制御（SSE の取り込み）", () => {
   let controlResponse: unknown;
   /** /api/load-csv の応答（status と本文） */
   let loadCsvResponse: { status: number; body: unknown };
+  /** /api/write の応答（null なら 200 の {}） */
+  let writeResponse: { status: number; body: unknown } | null;
   let notify: { error: ReturnType<typeof vi.fn>; success: ReturnType<typeof vi.fn>; warn: ReturnType<typeof vi.fn> };
 
   beforeEach(() => {
@@ -98,6 +100,7 @@ describe("ライブ制御（SSE の取り込み）", () => {
     record = new LiveRecord();
     controlResponse = {};
     loadCsvResponse = { status: 200, body: { rows: 0, names: [] } };
+    writeResponse = null;
     notify = { error: vi.fn(), success: vi.fn(), warn: vi.fn() };
     const mem = new Map<string, string>();
     vi.stubGlobal("localStorage", {
@@ -121,6 +124,7 @@ describe("ライブ制御（SSE の取り込み）", () => {
       }
       if (url.endsWith("/api/control")) return new Response(JSON.stringify(controlResponse));
       if (url.endsWith("/api/load-csv")) return new Response(JSON.stringify(loadCsvResponse.body), { status: loadCsvResponse.status });
+      if (url.endsWith("/api/write") && writeResponse) return new Response(JSON.stringify(writeResponse.body), { status: writeResponse.status });
       return new Response("{}");
     });
     return createLiveController({
@@ -458,6 +462,107 @@ describe("ライブ制御（SSE の取り込み）", () => {
       expect(notify.error.mock.calls[0][0]).toContain("ポインタ g_p の先が NULL です");
       es.emit("state", { running: false, error: "" });
       expect(useLiveStore.getState().sim.error).toBe("");
+      live.stop();
+    });
+  });
+
+  describe("2^53 を超える整数（書いた表記のまま送り、丸めた値を送り返さない）", () => {
+    const BIG = "9007199254740993";
+    const BIG_HEX = "0x20000000000001";
+    const writes = () => posted.filter((p) => p.url === "/api/write").map((p) => p.body);
+    const saved = () => JSON.parse(localStorage.getItem("sim-gui:layout:v1")!) as { inputs: { name: string; value?: unknown; hold: boolean }[] };
+
+    async function startWith(name: string) {
+      info.state = { running: false, step: 0, speed: 1, holds: [], overrun: false };
+      const live = makeController();
+      useLiveStore.setState({ watch: [] });
+      await live.start();
+      live.addInput(name, "number");
+      await vi.runOnlyPendingTimersAsync();
+      return { live, es: FakeEventSource.last! };
+    }
+
+    it("数値入力の文字列はその表記のまま送り、反映待ちと構成にも同じ文字列で残す", async () => {
+      const { live } = await startWith("g_u64");
+      await live.write("g_u64", BIG);
+      await live.write("g_u64", BIG_HEX);
+      expect(writes()).toEqual([
+        { name: "g_u64", value: BIG, hold: false },
+        { name: "g_u64", value: BIG_HEX, hold: false },
+      ]);
+      // JSON の本文にも数値ではなく文字列として載る
+      const raw = posted.filter((p) => p.url === "/api/write").map((p) => JSON.stringify(p.body));
+      expect(raw[0]).toContain(`"value":"${BIG}"`);
+      expect(useLiveStore.getState().sim.pending).toEqual([{ name: "g_u64", value: BIG_HEX }]);
+      expect(useLiveStore.getState().inputs[0].value).toBe(BIG_HEX);
+      expect(saved().inputs[0].value).toBe(BIG_HEX);
+      live.stop();
+    });
+
+    it("400 ならサーバのメッセージをそのまま知らせ、反映待ちにも構成にも残さない", async () => {
+      const { live } = await startWith("g_u64");
+      writeResponse = { status: 400, body: { error: "g_u64: 値 '12abc' を読めません" } };
+      await live.write("g_u64", "12abc");
+      expect(writes()).toEqual([{ name: "g_u64", value: "12abc", hold: false }]);
+      expect(notify.error).toHaveBeenCalledWith("g_u64 に書き込めませんでした: g_u64: 値 '12abc' を読めません");
+      expect(useLiveStore.getState().sim.pending).toEqual([]);
+      expect(useLiveStore.getState().inputs[0].value).toBeUndefined();
+      live.stop();
+    });
+
+    it("固定と固定中の値の更新でも同じ文字列を送り、丸まって届く state.holds を書いた表記に戻す", async () => {
+      const { live, es } = await startWith("g_u64");
+      await live.setHold("g_u64", true, BIG_HEX);
+      expect(writes().at(-1)).toEqual({ name: "g_u64", value: BIG_HEX, hold: true });
+      // C 側は数値にできる固定値を JSON の数値で返すので、2^53 を超える整数は丸まって届く
+      es.emit("state", { running: false, holds: [{ name: "g_u64", value: 9007199254740992 }], pending: [] });
+      expect(useLiveStore.getState().sim.holds).toEqual([{ name: "g_u64", value: BIG_HEX }]);
+      expect(live.inputBaseValue("g_u64")).toMatchObject({ source: "hold", send: BIG_HEX });
+      // 固定中に書くと hold:true で同じ表記のまま送る
+      await live.write("g_u64", BIG);
+      expect(writes().at(-1)).toEqual({ name: "g_u64", value: BIG, hold: true });
+      es.emit("state", { running: false, holds: [{ name: "g_u64", value: 9007199254740992 }], pending: [] });
+      expect(useLiveStore.getState().sim.holds).toEqual([{ name: "g_u64", value: BIG }]);
+      expect(saved().inputs[0]).toMatchObject({ value: BIG, hold: true });
+      // 固定を外して付け直すと、最後に書いた表記で固定する
+      await live.setHold("g_u64", false);
+      await live.setHold("g_u64", true);
+      expect(writes().slice(-2)).toEqual([{ name: "g_u64", release: true }, { name: "g_u64", value: BIG, hold: true }]);
+      live.stop();
+    });
+
+    it("構成の保存と復元で文字列を保ち、再読み込み後も丸まった state.holds を書いた表記に戻す", async () => {
+      const first = await startWith("g_u64");
+      await first.live.setHold("g_u64", true, BIG_HEX);
+      first.live.stop();
+      expect(saved().inputs[0]).toMatchObject({ value: BIG_HEX, hold: true });
+      // 再読み込み: サーバは固定を持ったまま、値は丸まった数値で返す
+      info.state = { running: false, step: 0, speed: 1, holds: [{ name: "g_u64", value: 9007199254740992 }] as never[], overrun: false };
+      useLiveStore.setState({ ...initialLiveState });
+      const live = makeController();
+      await live.start();
+      expect(useLiveStore.getState().inputs[0]).toMatchObject({ name: "g_u64", value: BIG_HEX, hold: true });
+      expect(useLiveStore.getState().sim.holds).toEqual([{ name: "g_u64", value: BIG_HEX }]);
+      expect(live.inputBaseValue("g_u64").send).toBe(BIG_HEX);
+      live.stop();
+    });
+
+    it("丸められている可能性のある現在値は、固定・ボタンの復帰で送り返さない", async () => {
+      const { live, es } = await startWith("g_u64");
+      es.emit("values", { step: 0, names: ["g_u64"], values: [9007199254740992] });
+      live.flushValues();
+      expect(live.inputBaseValue("g_u64")).toEqual({ value: 9007199254740992, source: "current", send: null, inexact: true });
+      const before = writes().length;
+      await live.setHold("g_u64", true, null);
+      await live.setHold("g_u64", true);
+      expect(writes().length).toBe(before);
+      expect(useLiveStore.getState().inputs[0].hold).toBe(false);
+      expect(notify.error).toHaveBeenCalledTimes(2);
+      // ボタン: 押す前の値が分からなければ、離したときに固定を解くだけで値は書かない
+      await live.write("g_u64", 1, true);
+      await live.releaseButton("g_u64", null);
+      expect(writes().slice(before)).toEqual([{ name: "g_u64", value: 1, hold: true }, { name: "g_u64", release: true }]);
+      expect(notify.error).toHaveBeenCalledTimes(3);
       live.stop();
     });
   });

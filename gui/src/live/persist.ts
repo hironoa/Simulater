@@ -11,8 +11,10 @@ export interface InputItem {
   max: number;
   step: number;
   hold: boolean;
-  /** 数値入力・スライダの最後の値（復元用） */
-  value?: number;
+  /**
+   * 数値入力・スライダの最後の値（復元用）。数値入力は書いた文字列のまま（`"0x20000000000001"` など。Number に通して丸めない）
+   */
+  value?: number | string;
   /**
    * false なら現在値を監視しない（関数の変更でサーバが監視から外したとき）。
    * 書き込めたとき・入力に追加し直したときに監視へ戻す。省略は監視する。
@@ -69,6 +71,7 @@ export function sanitizeLayout(raw: unknown): LiveLayout {
         hold: !!it.hold,
       };
       if (typeof it.value === "number" && Number.isFinite(it.value)) item.value = it.value;
+      else if (typeof it.value === "string" && it.value.trim() && !/[\r\n]/.test(it.value)) item.value = it.value.trim();
       if (it.monitor === false) item.monitor = false;
       return [item];
     }),

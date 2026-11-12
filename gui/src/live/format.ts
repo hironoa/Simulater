@@ -8,3 +8,8 @@ export function formatValue(v: number | null | undefined, radix: "dec" | "hex"):
   if (hex.length % 2) hex = "0" + hex;
   return "0x" + hex;
 }
+
+/** 丸められている可能性のある値（2^53 を超える整数）に付ける印と、その説明。 */
+export const ROUNDED_MARK = "≈";
+export const ROUNDED_TITLE =
+  "2^53 を超える整数は JSON の数値として届く時点で丸められている可能性があります（下位の桁が正確とは限りません）";

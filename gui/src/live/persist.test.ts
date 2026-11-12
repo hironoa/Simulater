@@ -21,6 +21,25 @@ describe("構成の保存と復元", () => {
     expect(loadLayout(s)).toEqual(layout);
   });
 
+  it("数値入力の文字列の値は書いた表記のまま保存して読み戻す（2^53 を超える整数を丸めない）", () => {
+    const s = new MemoryStorage();
+    const layout = {
+      inputs: [
+        { name: "g_u64", widget: "number" as const, min: 0, max: 100, step: 1, hold: true, value: "9007199254740993" },
+        { name: "g_hex", widget: "number" as const, min: 0, max: 100, step: 1, hold: false, value: "0x20000000000001" },
+      ],
+      watch: [],
+      windowSize: 2000,
+      maxSamples: DEFAULT_LAYOUT.maxSamples,
+    };
+    saveLayout(layout, s);
+    expect(s.getItem(STORAGE_KEY)).toContain('"value":"9007199254740993"');
+    expect(loadLayout(s)).toEqual(layout);
+    // 空・改行を含む文字列は捨て、前後の空白は除く
+    const got = sanitizeLayout({ inputs: [{ name: "a", value: "  " }, { name: "b", value: "1\n2" }, { name: "c", value: " 0x10 " }] });
+    expect(got.inputs.map((i) => i.value)).toEqual([undefined, undefined, "0x10"]);
+  });
+
   it("監視から外した入力（monitor: false）を読み戻せる", () => {
     const got = sanitizeLayout({ inputs: [{ name: "@rpm", monitor: false }, { name: "b", monitor: "no" }] });
     expect(got.inputs.map((i) => i.monitor)).toEqual([false, undefined]);

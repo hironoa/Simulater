@@ -3,7 +3,8 @@ import { X, AlertCircle } from "lucide-react";
 import { useLiveStore } from "../../live/liveStore";
 import { liveController } from "../../live/controller";
 import { useWaveformStore } from "../../store/useWaveformStore";
-import { formatValue } from "../../live/format";
+import { formatValue, ROUNDED_MARK, ROUNDED_TITLE } from "../../live/format";
+import { mayBeRounded } from "../../live/inputValue";
 import { SymbolSearch } from "./SymbolSearch";
 import { cn } from "../../utils/helpers";
 
@@ -52,7 +53,10 @@ export function VariableMonitor() {
                     {w.name}
                     {!err && serverWatch.length > 0 && !watched.has(w.name) && <span className="text-[10px] text-gray-400">（同期待ち）</span>}
                   </td>
-                  <td className="font-mono text-right tabular-nums">{err ? "—" : formatValue(values[w.name], w.radix)}</td>
+                  <td className="font-mono text-right tabular-nums" title={!err && mayBeRounded(values[w.name]) ? ROUNDED_TITLE : undefined}>
+                    {err ? "—" : formatValue(values[w.name], w.radix)}
+                    {!err && mayBeRounded(values[w.name]) && <span className="text-amber-600 dark:text-amber-400">{ROUNDED_MARK}</span>}
+                  </td>
                   <td className="text-center">
                     <button className="text-[10px] px-1 rounded border border-gray-300 dark:border-slate-600 hover:bg-gray-100 dark:hover:bg-slate-700"
                       title="10 進 / 16 進を切り替え" onClick={() => live.updateWatch(w.name, { radix: w.radix === "dec" ? "hex" : "dec" })}>

@@ -110,10 +110,39 @@ function clampType(sym, v) {
   return v >= m / 2 ? v - m : v;
 }
 
+/**
+ * テスト CSV のセルと同じ書式（docs/DESIGN.md「3.」の値）の文字列を数値にする（模擬なので先頭の要素だけ）。
+ * 10 進、0x 16 進、0b 2 進、負数、先頭の +、末尾の u/l、浮動小数、'文字列'（先頭の文字。'' は 0）、| 区切り。読めなければ null。
+ */
+function parseCell(text) {
+  const t = String(text).trim();
+  if (!t) return null;
+  if (/^'.*'$/su.test(t)) return t.length > 2 ? t.slice(1).codePointAt(0) : 0;
+  const first = t.includes("|") ? t.split("|")[0].trim() : t;
+  if (t.includes("|")) return t.split("|").every((c) => parseCell(c) !== null) ? parseCell(first) : null;
+  let m = /^([-+]?)0x([0-9a-f]+)[ul]*$/i.exec(first);
+  if (m) return (m[1] === "-" ? -1 : 1) * parseInt(m[2], 16);
+  m = /^([-+]?)0b([01]+)[ul]*$/i.exec(first);
+  if (m) return (m[1] === "-" ? -1 : 1) * parseInt(m[2], 2);
+  if (/^[-+]?\d+[ul]*$/i.test(first)) return Number(first.replace(/[ul]+$/i, ""));
+  if (/^[-+]?(\d+\.?\d*|\.\d+)(e[-+]?\d+)?$/i.test(first)) {
+    const v = Number(first);
+    return Number.isFinite(v) ? v : null;
+  }
+  return null;
+}
+
+/** state.holds の値: C 側と同じく、数値にできる値は JSON の数値で返す（2^53 を超える整数は受け手で丸まる） */
+function holdJson(value) {
+  if (typeof value !== "string") return value;
+  const v = parseCell(value);
+  return v === null ? value : v;
+}
+
 function writeVar(name, value) {
   const sym = symOf(name);
-  const v = typeof value === "string" ? Number(value.startsWith("0x") ? parseInt(value, 16) : value) : value;
-  put(name, clampType(sym, Number.isFinite(v) ? v : 0));
+  const v = typeof value === "string" ? parseCell(value) : value;
+  put(name, clampType(sym, v !== null && Number.isFinite(v) ? v : 0));
 }
 
 function runOneStep() {
@@ -173,7 +202,7 @@ function send(res, event, data) {
 }
 const broadcast = (event, data) => { for (const c of clients) send(c, event, data); };
 const stateMsg = () => ({
-  running, step, speed, holds: [...holds].map(([name, value]) => ({ name, value })), overrun,
+  running, step, speed, holds: [...holds].map(([name, value]) => ({ name, value: holdJson(value) })), overrun,
   periodMs, func, playback: !!csvPlay, error: "", dropped,
   pending: [...pending].map(([name, value]) => ({ name, value })),
 });
@@ -382,6 +411,10 @@ const server = http.createServer(async (req, res) => {
       if (body.release) { holds.delete(body.name); pending.delete(body.name); broadcastState(); return json(res, 200, { ok: true }); }
       if (!sym.writable) return json(res, 400, { error: `${body.name} は書き込めません` });
       if (typeof body.value !== "number" && typeof body.value !== "string") return json(res, 400, { error: "value がありません" });
+      // 文字列の値はテスト CSV のセルと同じ書式として書いた表記のまま持つ（記録・pending にもその表記で出す）。読めなければ 400
+      if (typeof body.value === "string" && parseCell(body.value) === null) {
+        return json(res, 400, { error: `${body.name}: 値 ${JSON.stringify(body.value)} を読めません（テスト CSV のセルと同じ書式で書いてください）` });
+      }
       inputNames.add(body.name);
       // 停止中もメモリへはすぐに書かない（次のステップの開始時に書く）。values も変わらない
       if (body.hold) { holds.set(body.name, body.value); pending.delete(body.name); }

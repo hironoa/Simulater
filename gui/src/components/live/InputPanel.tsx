@@ -5,8 +5,10 @@ import { useLiveStore } from "../../live/liveStore";
 import { liveController } from "../../live/controller";
 import type { InputItem, InputWidget } from "../../live/persist";
 import { SymbolSearch } from "./SymbolSearch";
-import { formatValue } from "../../live/format";
-import { inputValue, type InputValue } from "../../live/inputValue";
+import { formatValue, ROUNDED_MARK, ROUNDED_TITLE } from "../../live/format";
+import {
+  buttonRestoreValue, cellNumber, holdInputValue, inputValue, mayBeRounded, numberInputValue, type InputValue,
+} from "../../live/inputValue";
 import { cn } from "../../utils/helpers";
 
 const WIDGETS: { value: InputWidget; label: string }[] = [
@@ -18,28 +20,24 @@ const WIDGETS: { value: InputWidget; label: string }[] = [
 
 const field = "px-1.5 py-0.5 text-xs rounded border border-gray-300 dark:border-slate-600 bg-white dark:bg-slate-900";
 
-function parseNumber(text: string): number | null {
-  const t = text.trim();
-  if (!t) return null;
-  const v = /^-?0x[0-9a-f]+$/i.test(t) ? (t.startsWith("-") ? -parseInt(t.slice(1), 16) : parseInt(t, 16)) : Number(t);
-  return Number.isFinite(v) ? v : null;
-}
-
 interface InputCardProps {
   item: InputItem;
   /** メモリの現在値 */
   current: number | null | undefined;
   /** 反映待ちの値（書いたセルの文字列）。無ければ undefined */
   pending: string | undefined;
+  /** 固定の値（届いたまま文字列にしたもの）。固定していなければ undefined */
+  held: string | undefined;
   /** 入力の元にする値（反映待ち → 固定の値 → 現在値） */
   base: InputValue;
   key?: React.Key;
 }
 
-function InputCard({ item, current, pending, base }: InputCardProps) {
+function InputCard({ item, current, pending, held, base }: InputCardProps) {
   const live = liveController();
+  // 数値入力は書いた文字列のまま持つ（Number に通すと 2^53 を超える整数が丸まる）
   const [text, setText] = useState(item.value !== undefined ? String(item.value) : "");
-  const [slider, setSlider] = useState(item.value ?? base.value ?? item.min);
+  const [slider, setSlider] = useState(cellNumber(item.value) ?? base.value ?? item.min);
   const [pressed, setPressed] = useState(false);
   const textRef = useRef<HTMLInputElement>(null);
   // スライダは、利用者が最後に設定した値（反映待ち・固定）に合わせる。まだ操作していなければ現在値にも合わせる。
@@ -52,18 +50,20 @@ function InputCard({ item, current, pending, base }: InputCardProps) {
     if (performance.now() - lastSlide.current < 500) return; // ドラッグ中は届いた値で戻さない
     setSlider(base.value);
   }, [base.value, base.source]);
-  // 数値入力も、ほかから設定された反映待ち・固定の値に合わせる（入力中は触らない）
+  // 数値入力も、ほかから設定された反映待ち・固定の値に合わせる（入力中は触らない）。数値に直さず書いた表記のまま出す
+  const shown = pending ?? held;
   useEffect(() => {
-    if (base.source === "current" || base.value === null) return;
+    if (shown === undefined) return;
     if (textRef.current && document.activeElement === textRef.current) return;
-    setText(base.source === "pending" && pending !== undefined ? pending : String(base.value));
-  }, [base.value, base.source, pending]);
+    setText(shown);
+  }, [shown]);
   const lastSent = useRef(0);
   const trailing = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => () => { if (trailing.current) clearTimeout(trailing.current); }, []);
 
+  // 書式の検証はサーバに任せ、400 ならそのメッセージを出す（'文字列' や 1|2|3 も書ける）。空欄は送らない
   const writeNumber = () => {
-    const v = parseNumber(text);
+    const v = numberInputValue(text);
     if (v === null) return;
     void live.write(item.name, v);
   };
@@ -84,14 +84,14 @@ function InputCard({ item, current, pending, base }: InputCardProps) {
   };
 
   const pressedAt = useRef(0);
-  /** 押す前の値（離したらこれに戻す） */
-  const restoreTo = useRef(0);
+  /** 押す前の値（離したらこれに戻す）。丸められた現在値しか無ければ null（戻さずに知らせる） */
+  const restoreTo = useRef<number | string | null>(0);
   const press = async (down: boolean) => {
     if (down === pressed) return;
     setPressed(down);
     if (down) {
       pressedAt.current = performance.now();
-      restoreTo.current = base.value ?? 0;
+      restoreTo.current = buttonRestoreValue(base);
       await live.write(item.name, 1, true);
     } else {
       // 一瞬のクリックでも対象が 1 を読めるよう、最低 100ms（かつ 3 周期）は 1 のままにする
@@ -115,6 +115,7 @@ function InputCard({ item, current, pending, base }: InputCardProps) {
         <span className="font-mono text-xs text-gray-500 dark:text-gray-400"
           title={unmonitored ? "今の対象関数では解決できないため監視から外れています。書き込めると監視に戻ります" : "現在値"}>
           = {unmonitored ? "—" : formatValue(current, "dec")}
+          {!unmonitored && mayBeRounded(current) && <span title={ROUNDED_TITLE}>{ROUNDED_MARK}</span>}
         </span>
         {pending !== undefined && (
           <span className="font-mono text-[11px] px-1 rounded bg-sky-100 text-sky-800 dark:bg-sky-900/50 dark:text-sky-200 truncate max-w-[9rem]"
@@ -131,8 +132,8 @@ function InputCard({ item, current, pending, base }: InputCardProps) {
               : "border-gray-300 dark:border-slate-600 text-gray-500 dark:text-gray-400")}
           title={item.hold ? "固定中（毎周期書き込み続けます）。押すと解除" : "固定する（毎周期この値を書き込み続けます）"}
           onClick={() => {
-            const v = item.widget === "slider" ? slider : item.widget === "number" ? parseNumber(text) ?? base.value ?? 0 : base.value ?? 0;
-            void live.setHold(item.name, !item.hold, v);
+            // 送る値は丸めない（数値入力は欄の文字列のまま、元にする値は届いた表記のまま）
+            void live.setHold(item.name, !item.hold, item.hold ? undefined : holdInputValue(item.widget, text, slider, base));
           }}>
           {item.hold ? <Lock size={11} /> : <Unlock size={11} />}固定
         </button>
@@ -141,7 +142,8 @@ function InputCard({ item, current, pending, base }: InputCardProps) {
 
       {item.widget === "number" && (
         <div className="flex items-center gap-1">
-          <input ref={textRef} className={cn(field, "flex-1 font-mono")} value={text} placeholder="値（10 進 / 0x16 進）"
+          <input ref={textRef} className={cn(field, "flex-1 font-mono")} value={text} placeholder="値（テスト CSV のセルと同じ書式）"
+            title="テスト CSV のセルと同じ書式で書けます（10 進、0x 16 進、負数、浮動小数、'文字列'、1|2|3）。書いた表記のまま送ります"
             onChange={(e) => setText(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") writeNumber(); }} />
           <button className="text-xs px-2 py-0.5 rounded bg-blue-500 text-white hover:bg-blue-600" onClick={writeNumber}>書込</button>
         </div>
@@ -187,6 +189,13 @@ function InputCard({ item, current, pending, base }: InputCardProps) {
   );
 }
 
+/** 固定の値を表示用の文字列にする。届いたまま文字列にし、丸められている可能性のある数値は出さない（欄に入れると送り返してしまう）。 */
+function heldValue(holds: { name: string; value: number | string }[], name: string): string | undefined {
+  const h = holds.find((x) => x.name === name);
+  if (!h || (typeof h.value === "number" && mayBeRounded(h.value))) return undefined;
+  return String(h.value);
+}
+
 export function InputPanel() {
   const live = liveController();
   const { inputs, values, pending, holds } = useLiveStore(useShallow((s) => ({
@@ -200,6 +209,7 @@ export function InputPanel() {
       {inputs.map((item) => (
         <InputCard key={item.name} item={item} current={values[item.name]}
           pending={pending.find((p) => p.name === item.name)?.value}
+          held={heldValue(holds, item.name)}
           base={inputValue(item.name, { pending, holds }, values[item.name])} />
       ))}
     </div>
