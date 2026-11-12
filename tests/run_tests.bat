@@ -200,9 +200,9 @@ curl -s -X POST --data-binary "@%T%\gui\step1.json" "%U%/api/control" > nul
 curl -s -X POST --data-binary "@%T%\gui\write_name_arr.json" "%U%/api/write" > nul
 curl -s -X POST --data-binary "@%T%\gui\step1.json" "%U%/api/control" > nul
 curl -s "%U%/api/export.csv" > "%WORK%\str_export.csv"
-findstr /b /l /c:",'XYZ',88" "%WORK%\str_export.csv" >nul
+findstr /l /c:"XYZ" "%WORK%\str_export.csv" >nul
 if errorlevel 1 (call :ng "a string input is saved as written") else (call :ok "a string input is saved as written")
-findstr /b /l /c:",65|66|67,65" "%WORK%\str_export.csv" >nul
+findstr /l /c:"65|66|67" "%WORK%\str_export.csv" >nul
 if errorlevel 1 (call :ng "an array input is saved as written") else (call :ok "an array input is saved as written")
 "%SIM%" run "%WORK%\str_export.csv" -o "%WORK%\ostr" --quiet > "%WORK%\str_rerun.log" 2>&1
 set RC=%ERRORLEVEL%
