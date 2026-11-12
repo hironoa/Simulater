@@ -911,6 +911,10 @@ static num_t decode(const sim_type *t, uint32_t bit_size, uint64_t raw)
     return n;
 }
 
+/* 期待値と比べる。整数の型では期待値を入力と同じ規則（encode）でビット列に直してから比べるので、
+ * 負の値を符号なしの型に書いた場合、16 進表記、整数値の小数などの解釈が入力側と食い違わない。
+ * 入力なら「収まりません」のエラーになる値（ビット幅を超える値、整数でない小数）は、
+ * 下位ビットだけで比べずに不一致にする（エラーにして他の行を止めないため） */
 static int item_match(const sim_type *t, uint32_t bit_size, uint64_t raw, const sim_item *it)
 {
     num_t a = decode(t, bit_size, raw);
@@ -919,11 +923,11 @@ static int item_match(const sim_type *t, uint32_t bit_size, uint64_t raw, const 
         if (t->size == 4) return (float)e == (float)a.f;
         return e == a.f;
     }
-    if (it->kind == SIM_ITEM_FLOAT) return (a.is_signed ? (double)a.i : (double)a.u) == it->f;
     {
-        unsigned bits = bit_size ? bit_size : type_bits(t);
-        uint64_t e = mask_bits((uint64_t)it->i, bits);
-        if (t->kind == SIM_T_BOOL) return (a.u != 0) == (it->i != 0);
+        uint64_t e;
+        char err[256];
+        if (encode(t, bit_size, it, "", &e, err, sizeof err)) return 0;
+        if (t->kind == SIM_T_BOOL) return (a.u != 0) == (e != 0);
         return e == a.u;
     }
 }
@@ -947,6 +951,11 @@ static void format_num(const sim_type *t, uint32_t bit_size, uint64_t raw, const
 }
 
 /* ================================================================ セルの値 */
+
+int sim_cellval_present(const sim_cellval *v)
+{
+    return v && (v->n > 0 || v->is_string);
+}
 
 void sim_cellval_free(sim_cellval *v)
 {
@@ -1080,7 +1089,8 @@ int sim_ref_write(sim_ctx *c, const sim_ref *r, const sim_cellval *v, char *err,
 {
     loc_t L;
     int i;
-    if (v->n == 0) return 0;
+    /* 空セル（n = 0 で文字列でもない）は「設定しない」。空文字列 '' は終端の 0 を書く */
+    if (!sim_cellval_present(v)) return 0;
     if (r->is_const) { snprintf(err, errlen, "'%s' は const なので書き込めません", r->text); return -1; }
     if (r->base == RB_RET && r->nsteps == 0) { snprintf(err, errlen, "'%s': 戻り値は入力にできません", r->text); return -1; }
     if (eval_loc(c, r, r->nsteps, &L, err, errlen)) return -1;
@@ -1140,7 +1150,7 @@ int sim_ref_check(sim_ctx *c, const sim_ref *r, const sim_cellval *expected, con
                   sim_buf *out, int *match, char *err, size_t errlen)
 {
     loc_t L;
-    int has_exp = expected && expected->n > 0;
+    int has_exp = sim_cellval_present(expected);
     *match = -1;
     if (r->prefix == '$') { snprintf(err, errlen, "'%s': '$' は入力にだけ使えます", r->text); return -1; }
     if (eval_loc(c, r, r->nsteps, &L, err, errlen)) return -1;
@@ -1177,6 +1187,16 @@ int sim_ref_check(sim_ctx *c, const sim_ref *r, const sim_cellval *expected, con
         int n, i, as_string, all = 1;
         uint64_t *raws;
         if (L.kind != RB_MEM) { snprintf(err, errlen, "'%s': 読み出し先がメモリではありません", r->text); return -1; }
+        if (has_exp && expected->is_string && expected->n == 0) {
+            /* 空文字列 '': 先頭の要素が 0（終端）かを比べる。入力の '' が終端の 0 だけを書くのと対。
+             * 表示は期待値なしと同じ（配列なら終端までの文字列）。空なら '' と書く */
+            uint64_t first;
+            if (read_raw(c, &L, e, -1, 0, &first, err, errlen)) return -1;
+            *match = first == 0;
+            if (first == 0) { sim_buf_adds(out, "''"); return 0; }
+            has_exp = 0;
+            expected = NULL;
+        }
         if (has_exp && r->count > 0 && (uint32_t)expected->n > r->count) {
             snprintf(err, errlen, "'%s': 期待値が %d 個ありますが、要素数は %u です", r->text, expected->n, r->count);
             return -1;

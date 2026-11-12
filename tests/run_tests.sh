@@ -158,6 +158,20 @@ RC=$?
 check "4097 要素目の不一致を NG にする（終了コード 1）" test "$RC" -eq 1
 check "4096 要素を超える期待値と入力を全部比べる（OK 2, NG 1）" contains "$WORK/long.log" "合計: 総数 3, OK 2, NG 1, NO Check 0"
 
+echo "== 期待値の範囲（入力と同じ規則で解釈し、収まらない値は NG）"
+run_cmp expect_range.csv 1
+"$SIM" run "$T/csv/expect_range.csv" -o "$WORK/orange" --quiet > "$WORK/range.log" 2>&1
+check "範囲外の期待値はエラーで止めずに NG（総数 31, OK 15, NG 16）" contains "$WORK/range.log" "合計: 総数 31, OK 15, NG 16, NO Check 0"
+check "mul16@@ の期待値 65536 は実測 0 と不一致（0?(65536)）" contains "$WORK/orange/expect_range.csv" ",0,0,0?(65536),NG,"
+check "uint8 の期待値 -1.0 は入力と同じく 255 と解釈する" sh -c "sed -n 16p '$WORK/orange/expect_range.csv' | grep -q '^,255,255,OK,'"
+
+echo "== 空文字列 '' と空セル"
+run_cmp empty_string.csv 1
+"$SIM" run "$T/csv/empty_string.csv" -o "$WORK/oempty" --quiet > "$WORK/empty.log" 2>&1
+check "'' は終端の 0 を書き、期待値の '' は空文字列と比べる（総数 7, OK 6, NG 1）" contains "$WORK/empty.log" "合計: 総数 7, OK 6, NG 1, NO Check 0"
+check "入力 '' の行で g_eng_name[0] が 0（前の 'AB' が残らない）" contains "$WORK/oempty/empty_string.csv" ",'',0,'',OK,"
+check "期待値 '' は空でない文字列と不一致（'XY'?('')）" contains "$WORK/oempty/empty_string.csv" ",'XY',88,'XY'?(''),NG,"
+
 echo "== GUI サーバの API"
 if ! command -v curl > /dev/null 2>&1; then
     ng "curl がありません"
@@ -399,6 +413,36 @@ data: {"periodMs":2,"func":"TEST_cycle","names":["g_eng.state","TEST_cycle_cnt",
     "$SIM" run "$WORK/lm_export.csv" -o "$WORK/olm" --quiet > "$WORK/lm_rerun.log" 2>&1
     RC=$?
     check "CSV の再生の記録を sim run で再実行すると全行 OK（終了コード 0）" sh -c "[ $RC -eq 0 ] && grep -F -q '合計: 総数 2, OK 2, NG 0, NO Check 0' '$WORK/lm_rerun.log'"
+
+    # 同じメモリへの固定（P1）と単発書き込み（P1_bit.no0）: 1 ステップの入力は保存 CSV の入力列の順に適用する（sim run と同じ）。
+    # 止まっているときに固定してすぐ外した値（g_mode = 5）も次のステップの入力として記録する。'' は終端の 0 を書く
+    post reset_func_mul16.json r16.out /api/control > /dev/null
+    post watch_p1.json wp1.out /api/watch > /dev/null
+    post write_p1_hold.json wp1h.out /api/write > /dev/null
+    post write_p1bit0.json wp1b.out /api/write > /dev/null
+    post step1.json s1.out /api/control > /dev/null
+    post release_p1.json rp1.out /api/write > /dev/null
+    post write_mode_hold.json wmh.out /api/write > /dev/null
+    post release_mode.json rmh.out /api/write > /dev/null
+    post step1.json s1.out /api/control > /dev/null
+    post write_name_str.json wns.out /api/write > /dev/null
+    post step1.json s1.out /api/control > /dev/null
+    CODE=$(post write_name_empty.json wne.out /api/write)
+    check "/api/write で '' を書ける（200）" test "$CODE" = 200
+    post step1.json s1.out /api/control > /dev/null
+    CODE=$(post write_alloc_empty.json wae.out /api/write)
+    check "/api/write で \$ に '' は 400" test "$CODE" = 400
+    curl -s "$U/api/export.csv" | tr -d '\r' > "$WORK/ov_export.csv"
+    # 出力列の値（同じ名前の入力列もあるので、最後に出てくる列を採る）
+    outcol() { awk -F, -v n="$1" 'NR==2{for(i=1;i<=NF;i++) if($i==n) c=i} NR>2&&c{printf "%s ", $c}' "$WORK/ov_export.csv"; }
+    incol() { awk -F, -v n="$1" 'NR==2{for(i=NF;i>=1;i--) if($i==n) c=i} NR>2&&c{printf "%s ", $c}' "$WORK/ov_export.csv"; }
+    P1S=$(outcol P1); MODES=$(outcol g_mode); NAMES=$(outcol 'g_eng_name[0]'); MODEIN=$(incol g_mode)
+    check "P1 を固定して P1_bit.no0 = 0 を単発で書くと列の順に適用して P1 = 0（P1: ${P1S}）" test "$P1S" = "0 0 0 0 "
+    check "止まっているときに固定してすぐ外した値を次のステップの入力に記録する（入力 g_mode: ${MODEIN}、出力: ${MODES}）" test "$MODEIN" = " 5   " -a "$MODES" = "0 5 5 5 "
+    check "'' を書くと g_eng_name[0] が 0（${NAMES}）" test "$NAMES" = "69 69 88 0 "
+    "$SIM" run "$WORK/ov_export.csv" -o "$WORK/oov" --quiet > "$WORK/ov_rerun.log" 2>&1
+    RC=$?
+    check "重なる入力先の固定・単発書き込みの記録を sim run で再実行すると全行 OK（終了コード 0）" sh -c "[ $RC -eq 0 ] && grep -F -q '合計: 総数 4, OK 4, NG 0, NO Check 0' '$WORK/ov_rerun.log'"
 
     PORT_USED_LOG="$WORK/gui2.log"
     "$SIM" gui --no-browser --port "$PORT" > "$PORT_USED_LOG" 2>&1

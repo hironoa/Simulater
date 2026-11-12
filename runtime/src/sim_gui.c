@@ -188,16 +188,85 @@ static void free_pend(pend_t *p)
     sim_cellval_free(&p->val);
 }
 
-static void apply_pending_locked(char **in, int *nin)
+/* 1 ステップの入力 1 個（単発書き込み・固定・CSV の再生） */
+typedef struct {
+    int col;                  /* 記録の入力列（エクスポートの入力列の順） */
+    int seq;                  /* 集めた順（同じ列の中では後のものが勝つ） */
+    sim_ref *ref;
+    const sim_cellval *val;
+    const char *text;
+    int play_row;             /* CSV の再生なら行番号（1 から）、違えば 0 */
+} step_in_t;
+
+static int step_in_cmp(const void *a, const void *b)
 {
-    int i;
+    const step_in_t *x = a, *y = b;
+    if (x->col != y->col) return x->col < y->col ? -1 : 1;
+    return x->seq < y->seq ? -1 : (x->seq > y->seq);
+}
+
+/* 1 ステップの入力を書き込み、書いたセルの元の文字列を in[列] に記録する。
+ * 保存した CSV を sim run で再実行したときと同じになるように、sim run が 1 行の入力列を左から順に 1 回ずつ
+ * 書くのに合わせる:
+ *   - 単発書き込み・固定・CSV の再生をまとめて、入力列の番号（エクスポートの列の順）の昇順に書く。
+ *     受け付けた順や種類の順ではない（P1 の固定と P1_bit.no0 の単発のように重なる先があると結果が変わる）
+ *   - 同じ列（同じ名前）への書き込みが何個かあれば、最後のもの（単発 < 固定 < 再生、単発どうしは受け付けた順）
+ *     だけを書く。記録は 1 列 1 セルなので、前のものも書くと '$' の確保が二重になる・長い文字列の残りが残るなど、
+ *     再実行と合わなくなる
+ *   - 空の値（空セル）は書かず、記録もしない */
+static void apply_inputs_locked(char **in, int *nin)
+{
     char err[1024];
+    int i, j, n = 0, cap = G.npend + G.nholds + (G.play_active ? G.play.nin : 0) + 1;
+    step_in_t *v = sim_xcalloc((size_t)cap, sizeof *v);
+    sim_cellval *pv = sim_xcalloc((size_t)(G.play_active ? G.play.nin : 0) + 1, sizeof *pv);
     for (i = 0; i < G.npend; i++) {
         pend_t *p = &G.pend[i];
-        if (sim_ref_write(G.c, p->ref, &p->val, err, sizeof err)) set_error(err);
-        else rec_set_in(in, nin, p->col, p->text);
-        free_pend(p);
+        if (!sim_cellval_present(&p->val)) continue;
+        v[n].col = p->col; v[n].seq = n; v[n].ref = p->ref; v[n].val = &p->val; v[n].text = p->text; n++;
     }
+    for (i = 0; i < G.nholds; i++) {
+        hold_t *h = &G.holds[i];
+        if (!sim_cellval_present(&h->val)) continue;
+        v[n].col = h->col; v[n].seq = n; v[n].ref = h->ref; v[n].val = &h->val; v[n].text = h->text; n++;
+    }
+    if (G.play_active && G.play_pos < G.play.nrows) {
+        char **row = G.play.cells[G.play_pos];
+        for (i = 0; i < G.play.nin; i++) {
+            if (!row[i] || !G.play_refs[i]) continue;
+            if (sim_parse_cell(row[i], strlen(row[i]), &pv[i], err, sizeof err)) {
+                char m[1200];
+                snprintf(m, sizeof m, "CSV %d 行目のデータ: %s", G.play_pos + 1, err);
+                set_error(m);
+                continue;
+            }
+            if (!sim_cellval_present(&pv[i])) continue;
+            v[n].col = G.play_col_ids[i]; v[n].seq = n; v[n].ref = G.play_refs[i]; v[n].val = &pv[i];
+            v[n].text = row[i]; v[n].play_row = G.play_pos + 1; n++;
+        }
+        G.play_pos++;
+    }
+    qsort(v, (size_t)n, sizeof *v, step_in_cmp);
+    for (i = 0; i < n; i = j) {
+        step_in_t *w;
+        for (j = i + 1; j < n && v[j].col == v[i].col; j++) {}
+        w = &v[j - 1];   /* 同じ列の最後のもの */
+        if (sim_ref_write(G.c, w->ref, w->val, err, sizeof err)) {
+            if (w->play_row) {
+                char m[1200];
+                snprintf(m, sizeof m, "CSV %d 行目のデータ: %s", w->play_row, err);
+                set_error(m);
+            } else {
+                set_error(err);
+            }
+        } else {
+            rec_set_in(in, nin, w->col, w->text);
+        }
+    }
+    free(v);
+    for (i = 0; i < (G.play_active ? G.play.nin : 0); i++) sim_cellval_free(&pv[i]);
+    free(pv);
+    for (i = 0; i < G.npend; i++) free_pend(&G.pend[i]);
     G.npend = 0;
 }
 
@@ -206,31 +275,7 @@ static void do_step_locked(void)
     char err[1024];
     char **in = sim_xcalloc((size_t)G.nin_cols + 1, sizeof *in);
     int i, nin = 0;
-    apply_pending_locked(in, &nin);
-    for (i = 0; i < G.nholds; i++) {
-        hold_t *h = &G.holds[i];
-        if (sim_ref_write(G.c, h->ref, &h->val, err, sizeof err)) set_error(err);
-        else rec_set_in(in, &nin, h->col, h->text);
-    }
-    if (G.play_active) {
-        if (G.play_pos < G.play.nrows) {
-            char **row = G.play.cells[G.play_pos];
-            for (i = 0; i < G.play.nin; i++) {
-                sim_cellval v;
-                if (!row[i] || !G.play_refs[i]) continue;
-                if (sim_parse_cell(row[i], strlen(row[i]), &v, err, sizeof err) ||
-                    sim_ref_write(G.c, G.play_refs[i], &v, err, sizeof err)) {
-                    char m[1200];
-                    snprintf(m, sizeof m, "CSV %d 行目のデータ: %s", G.play_pos + 1, err);
-                    set_error(m);
-                } else {
-                    rec_set_in(in, &nin, G.play_col_ids[i], row[i]);
-                }
-                sim_cellval_free(&v);
-            }
-            G.play_pos++;
-        }
-    }
+    apply_inputs_locked(in, &nin);
     if (sim_ctx_func(G.c)) {
         if (sim_ctx_call(G.c, err, sizeof err)) { set_error(err); G.running = 0; G.budget = 0; }
     }
@@ -789,7 +834,7 @@ static void api_write(sim_sock s, req_t *r)
     const char *text = num;   /* 文字列はそのまま使う（長さで切り詰めない） */
     sim_ref *ref;
     sim_cellval cv;
-    int hold, release, i;
+    int hold, release, i, written_now;
     if (!v) return;
     name = sj_get_str(v, "name", NULL);
     if (!name) { send_error(s, 400, "\"name\" がありません"); sj_free(v); return; }
@@ -847,7 +892,7 @@ static void api_write(sim_sock s, req_t *r)
         sj_free(v);
         return;
     }
-    if (sim_ref_prefix(ref) == '$' && cv.n > 0 &&
+    if (sim_ref_prefix(ref) == '$' && sim_cellval_present(&cv) &&
         (cv.n != 1 || cv.is_string || cv.items[0].kind != SIM_ITEM_INT || cv.items[0].i < 0)) {
         snprintf(err, sizeof err, "'%s': '$' の値は確保する要素数（0 以上の整数）です", name);
         sim_ref_free(ref);
@@ -857,9 +902,11 @@ static void api_write(sim_sock s, req_t *r)
         sj_free(v);
         return;
     }
+    written_now = 0;
     if (!G.running && !G.budget && sim_ref_prefix(ref) != '$') {
         /* 止まっていればすぐ書く。'$'（確保）は次のステップで 1 回だけ書く（すぐ書いてからもう一度書くと
          * 二重に確保してポインタが変わり、保存した CSV の再実行と合わなくなる） */
+        written_now = 1;
         if (sim_ref_write(G.c, ref, &cv, err, sizeof err)) {
             sim_ref_free(ref);
             sim_cellval_free(&cv);
@@ -869,6 +916,27 @@ static void api_write(sim_sock s, req_t *r)
             return;
         }
         values_changed();
+    }
+    if (!hold || written_now) {
+        /* 単発書き込みは次のステップの入力として書いて記録する。止まっているときにすぐ書いた値は、固定でも
+         * 待ち行列に入れる（同じ値をもう一度書く）。次のステップまでに固定を外しても、すぐ書いた値が記録に残り、
+         * 保存した CSV の再実行と合う */
+        sim_cellval pc = cv;
+        sim_ref *pr = ref;
+        if (hold) {
+            /* 固定とは別に持つ（上で解析・解決できた文字列と名前なので失敗しない） */
+            pr = sim_ref_parse(G.c, name, err, sizeof err);
+            if (pr && sim_parse_cell(text, strlen(text), &pc, err, sizeof err)) { sim_ref_free(pr); pr = NULL; }
+        }
+        if (pr) {
+            G.pend = sim_xrealloc(G.pend, (size_t)(G.npend + 1) * sizeof *G.pend);
+            G.pend[G.npend].name = sim_xstrdup(name);
+            G.pend[G.npend].text = sim_xstrdup(text);
+            G.pend[G.npend].ref = pr;
+            G.pend[G.npend].val = pc;
+            G.pend[G.npend].col = col_index(&G.in_cols, &G.nin_cols, name);
+            G.npend++;
+        }
     }
     if (hold) {
         hold_t *h = NULL;
@@ -883,15 +951,6 @@ static void api_write(sim_sock s, req_t *r)
         h->val = cv;
         h->col = col_index(&G.in_cols, &G.nin_cols, name);
         state_changed();
-    } else {
-        /* 止まっているときも次のステップの入力として記録するため、待ち行列に入れる（同じ値をもう一度書く） */
-        G.pend = sim_xrealloc(G.pend, (size_t)(G.npend + 1) * sizeof *G.pend);
-        G.pend[G.npend].name = sim_xstrdup(name);
-        G.pend[G.npend].text = sim_xstrdup(text);
-        G.pend[G.npend].ref = ref;
-        G.pend[G.npend].val = cv;
-        G.pend[G.npend].col = col_index(&G.in_cols, &G.nin_cols, name);
-        G.npend++;
     }
     sim_mutex_unlock(G.mu);
     send_resp(s, 200, "application/json; charset=utf-8", "{\"ok\":true}", 11, NULL);

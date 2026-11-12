@@ -76,8 +76,10 @@ typedef struct {
     int is_string;      /* '文字列' */
 } sim_cellval;
 
-/* 空なら n = 0。失敗なら -1 と err */
+/* 空なら n = 0。空文字列 '' は n = 0、is_string = 1。失敗なら -1 と err */
 int sim_parse_cell(const char *text, size_t len, sim_cellval *out, char *err, size_t errlen);
+/* 値が書いてあるか。空セルは 0、空文字列 '' は 1（入力なら終端の 0 を書き、期待値なら空文字列と比べる） */
+int sim_cellval_present(const sim_cellval *v);
 void sim_cellval_free(sim_cellval *v);
 
 /* 書き込み（$ / & / * / スカラ）。失敗なら -1 と err */

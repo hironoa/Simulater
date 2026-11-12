@@ -105,6 +105,20 @@ if "%RC%"=="1" (call :ok "mismatch at element 4097 is NG (exit code 1)") else (c
 findstr /l /c:"OK 2, NG 1, NO Check 0" "%WORK%\long.log" >nul
 if errorlevel 1 (call :ng "all elements beyond 4096 are compared (OK 2, NG 1)") else (call :ok "all elements beyond 4096 are compared (OK 2, NG 1)")
 
+echo == expected values are read with the input rules; values that do not fit are NG
+call :run_cmp expect_range.csv 1
+"%SIM%" run "%T%\csv\expect_range.csv" -o "%WORK%\orange" --quiet > "%WORK%\range.log" 2>&1
+findstr /l /c:"OK 15" "%WORK%\range.log" >nul
+if errorlevel 1 (call :ng "out-of-range expected values are NG, not errors (OK 15)") else (call :ok "out-of-range expected values are NG, not errors (OK 15)")
+findstr /l /c:"NG 16" "%WORK%\range.log" >nul
+if errorlevel 1 (call :ng "out-of-range expected values are NG, not errors (NG 16)") else (call :ok "out-of-range expected values are NG, not errors (NG 16)")
+
+echo == empty string and empty cell
+call :run_cmp empty_string.csv 1
+"%SIM%" run "%T%\csv\empty_string.csv" -o "%WORK%\oempty" --quiet > "%WORK%\empty.log" 2>&1
+findstr /l /c:"OK 6" "%WORK%\empty.log" >nul
+if errorlevel 1 (call :ng "an empty string writes the terminator and is compared as a string (OK 6)") else (call :ok "an empty string writes the terminator and is compared as a string (OK 6)")
+
 echo == GUI server API
 where curl >nul 2>nul
 if errorlevel 1 (
@@ -281,6 +295,33 @@ if errorlevel 1 (call :ok "the playback record has no column for the dropped hol
 set RC=%ERRORLEVEL%
 findstr /l /c:"OK 2, NG 0, NO Check 0" "%WORK%\lm_rerun.log" >nul
 if errorlevel 1 (call :ng "the playback record re-runs with all rows OK") else if "%RC%"=="0" (call :ok "the playback record re-runs with all rows OK") else (call :ng "the playback record re-runs: exit code 0, got %RC%")
+rem a hold (P1) and a one-shot write (P1_bit.no0) to the same memory are applied in the order of the input columns, as sim run does;
+rem a hold set and released while stopped (g_mode = 5) is recorded as an input of the next step; '' writes the terminator
+curl -s -X POST --data-binary "@%T%\gui\reset_func_mul16.json" "%U%/api/control" > nul
+curl -s -X POST --data-binary "@%T%\gui\watch_p1.json" "%U%/api/watch" > nul
+curl -s -X POST --data-binary "@%T%\gui\write_p1_hold.json" "%U%/api/write" > nul
+curl -s -X POST --data-binary "@%T%\gui\write_p1bit0.json" "%U%/api/write" > nul
+curl -s -X POST --data-binary "@%T%\gui\step1.json" "%U%/api/control" > nul
+curl -s -X POST --data-binary "@%T%\gui\release_p1.json" "%U%/api/write" > nul
+curl -s -X POST --data-binary "@%T%\gui\write_mode_hold.json" "%U%/api/write" > nul
+curl -s -X POST --data-binary "@%T%\gui\release_mode.json" "%U%/api/write" > nul
+curl -s -X POST --data-binary "@%T%\gui\step1.json" "%U%/api/control" > nul
+curl -s -X POST --data-binary "@%T%\gui\write_name_str.json" "%U%/api/write" > nul
+curl -s -X POST --data-binary "@%T%\gui\step1.json" "%U%/api/control" > nul
+curl -s -X POST --data-binary "@%T%\gui\write_name_empty.json" "%U%/api/write" > nul
+curl -s -X POST --data-binary "@%T%\gui\step1.json" "%U%/api/control" > nul
+curl -s -X POST --data-binary "@%T%\gui\write_alloc_empty.json" "%U%/api/write" > "%WORK%\wae.out"
+findstr /l /c:"error" "%WORK%\wae.out" >nul
+if errorlevel 1 (call :ng "/api/write rejects an empty string for $") else (call :ok "/api/write rejects an empty string for $")
+curl -s "%U%/api/export.csv" > "%WORK%\ov_export.csv"
+rem the last row: inputs &g_eng_name (''), P1, P1_bit.no0, g_mode; outputs g_eng_name[0] (0 after writing ''), P1, g_mode
+set "LAST="
+for /f "usebackq delims=" %%L in ("%WORK%\ov_export.csv") do set "LAST=%%L"
+if "%LAST%"==",'',,,,0,0,5" (call :ok "writing an empty string clears the previous string") else (call :ng "writing an empty string clears the previous string: %LAST%")
+"%SIM%" run "%WORK%\ov_export.csv" -o "%WORK%\oov" --quiet > "%WORK%\ov_rerun.log" 2>&1
+set RC=%ERRORLEVEL%
+findstr /l /c:"OK 4" "%WORK%\ov_rerun.log" >nul
+if errorlevel 1 (call :ng "overlapping hold and one-shot inputs re-run with all rows OK") else if "%RC%"=="0" (call :ok "overlapping hold and one-shot inputs re-run with all rows OK") else (call :ng "overlapping hold and one-shot inputs re-run: exit code 0, got %RC%")
 curl -s "%U%/" > "%WORK%\index.html"
 findstr /l /c:"<html" "%WORK%\index.html" >nul
 if errorlevel 1 (call :ng "GET / returns a page") else (call :ok "GET / returns a page")

@@ -358,8 +358,8 @@ static size_t run_block(sim_ctx *c, const char *path, line_t *ls, size_t n, size
                 report(path, L->lineno, m2);
                 failed = 1;
             } else {
-                if (ev.n > 0) {
-                    if (ev.items[0].hex_digits > 0 && !ev.is_string) {
+                if (sim_cellval_present(&ev)) {
+                    if (!ev.is_string && ev.items[0].hex_digits > 0) {
                         cols[k].fmt.hex_digits = ev.items[0].hex_digits;
                         cols[k].fmt.upper = ev.items[0].hex_upper;
                         cols[k].fmt.prefix_upper = ev.items[0].hex_prefix_upper;
