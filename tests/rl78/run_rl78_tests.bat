@@ -87,6 +87,24 @@ copy /y "%TP%" "%WORK%\autocfg\prog.abs" >nul
 copy /y "%R%\cfg\stub.cfg" "%WORK%\autocfg\sim.cfg" >nul
 call :run "sim.cfg next to the .abs is read" 0 "OK 3, NG 0" --abs "%WORK%\autocfg\prog.abs" "%R%\csv\synth_stub.csv"
 
+echo == real backend GUI call failures
+where curl >nul 2>nul
+if errorlevel 1 goto after_fault_gui
+set /a PORT=22000 + %RANDOM% %% 15000
+set "U=http://127.0.0.1:%PORT%"
+copy /y "%RS%" "%WORK%\sim_rgui_test.exe" >nul
+start "" /b "%WORK%\sim_rgui_test.exe" gui --abs "%TP%" --cfg "%R%\cfg\limit.cfg" --func TEST_cycle --no-browser --port %PORT% --html-dir "%WORK%\nohtml" > "%WORK%\rgui.log" 2>&1
+for /l %%I in (1,1,50) do (
+    curl -s "%U%/api/info" > "%WORK%\rinfo.json" 2>nul
+    if not errorlevel 1 goto fault_gui_ready
+    ping -n 2 127.0.0.1 >nul
+)
+:fault_gui_ready
+call :gui_fault f_undef "61 19"
+call :gui_fault f_loop "BR"
+taskkill /f /im sim_rgui_test.exe >nul 2>nul
+:after_fault_gui
+
 echo == performance (real backend)
 > "%WORK%\perf_cycle.csv" echo mod,TEST_cycle,perf,0,1
 >> "%WORK%\perf_cycle.csv" echo #COMMENT,TEST_cycle_cnt
@@ -132,4 +150,47 @@ shift
 set RC=%ERRORLEVEL%
 findstr /l /c:"%RTXT%" "%WORK%\r.log" >nul
 if errorlevel 1 (call :ng "%RN%" & type "%WORK%\r.log") else if "%RC%"=="%RC_EXP%" (call :ok "%RN%") else (call :ng "%RN%: exit code %RC_EXP%, got %RC%")
+exit /b 0
+
+rem JSON fields are checked as JSON; findstr patterns below contain only letters, digits and spaces.
+:gui_fault
+> "%WORK%\fault_watch.json" echo {"names":["g_out"]}
+> "%WORK%\fault_reset.json" echo {"cmd":"reset","func":"%~1"}
+> "%WORK%\fault_step.json" echo {"cmd":"step","steps":1}
+curl -s -X POST --data-binary "@%WORK%\fault_watch.json" "%U%/api/watch" >nul
+curl -s -X POST --data-binary "@%WORK%\fault_reset.json" "%U%/api/control" >nul
+set "CODE="
+for /f "usebackq delims=" %%C in (`curl -s -o "%WORK%\fault.json" -w "%%{http_code}" -X POST --data-binary "@%WORK%\fault_step.json" "%U%/api/control"`) do set "CODE=%%C"
+if "%CODE%"=="200" (call :ok "GUI %~1 step HTTP 200") else (call :ng "GUI %~1 step HTTP 200")
+powershell -NoProfile -Command "$s=Get-Content -Raw -LiteralPath '%WORK%\fault.json' | ConvertFrom-Json; if ($null -eq $s -or $s.stepsDone -ne 0 -or $s.step -ne 0 -or $s.running -ne $false -or $s.stepsLeft -ne 0 -or !$s.error) {exit 1}"
+if errorlevel 1 (call :ng "GUI %~1 failed step stops without advancing") else (call :ok "GUI %~1 failed step stops without advancing")
+call :has "%WORK%\fault.json" "PC" "GUI %~1 error has PC"
+call :has "%WORK%\fault.json" "%~2" "GUI %~1 error has instruction details"
+curl -s "%U%/api/export.csv" > "%WORK%\fault.csv"
+powershell -NoProfile -Command "if (@(Get-Content -LiteralPath '%WORK%\fault.csv').Count -ne 2) {exit 1}"
+if errorlevel 1 (call :ng "GUI %~1 export has no data rows") else (call :ok "GUI %~1 export has no data rows")
+> "%WORK%\fault_step.json" echo {"cmd":"step","steps":3}
+curl -s -X POST --data-binary "@%WORK%\fault_step.json" "%U%/api/control" > "%WORK%\fault.json"
+powershell -NoProfile -Command "$s=Get-Content -Raw -LiteralPath '%WORK%\fault.json' | ConvertFrom-Json; if ($null -eq $s -or $s.stepsDone -ne 0 -or $s.stepsLeft -ne 0 -or !$s.error) {exit 1}"
+if errorlevel 1 (call :ng "GUI %~1 step N stops at first failure") else (call :ok "GUI %~1 step N stops at first failure")
+> "%WORK%\fault_reset.json" echo {"cmd":"reset","func":"TEST_cycle"}
+curl -s -X POST --data-binary "@%WORK%\fault_reset.json" "%U%/api/control" > "%WORK%\recovered.json"
+powershell -NoProfile -Command "$s=Get-Content -Raw -LiteralPath '%WORK%\recovered.json' | ConvertFrom-Json; if ($null -eq $s -or $s.error -ne '') {exit 1}"
+if errorlevel 1 (call :ng "GUI %~1 reset clears error") else (call :ok "GUI %~1 reset clears error")
+> "%WORK%\fault_watch.json" echo {"names":["TEST_cycle_cnt"]}
+curl -s -X POST --data-binary "@%WORK%\fault_watch.json" "%U%/api/watch" >nul
+curl -s -X POST --data-binary "@%WORK%\fault_step.json" "%U%/api/control" > "%WORK%\recovered.json"
+powershell -NoProfile -Command "$s=Get-Content -Raw -LiteralPath '%WORK%\recovered.json' | ConvertFrom-Json; if ($null -eq $s -or $s.stepsDone -ne 3 -or $s.error -ne '') {exit 1}"
+if errorlevel 1 (call :ng "GUI %~1 reset allows three steps") else (call :ok "GUI %~1 reset allows three steps")
+curl -s "%U%/api/export.csv" > "%WORK%\recovered.csv"
+call :run "GUI %~1 recovered CSV replays three rows OK" 0 "OK 3, NG 0" --abs "%TP%" --cfg "%R%\cfg\limit.cfg" "%WORK%\recovered.csv"
+> "%WORK%\fault_play.csv" echo mod,%~1,fault,0,1
+>> "%WORK%\fault_play.csv" echo #COMMENT,g_out
+>> "%WORK%\fault_play.csv" echo ,0
+>> "%WORK%\fault_play.csv" echo ,0
+curl -s -X POST --data-binary "@%WORK%\fault_play.csv" "%U%/api/load-csv" >nul
+ping -n 2 127.0.0.1 >nul
+curl -s "%U%/api/info" > "%WORK%\fault_info.json"
+powershell -NoProfile -Command "$s=(Get-Content -Raw -LiteralPath '%WORK%\fault_info.json' | ConvertFrom-Json).state; if ($null -eq $s -or $s.playback -ne $false -or $s.running -ne $false -or $s.step -ne 0 -or !$s.error) {exit 1}"
+if errorlevel 1 (call :ng "GUI %~1 failed playback stops without advancing") else (call :ok "GUI %~1 failed playback stops without advancing")
 exit /b 0

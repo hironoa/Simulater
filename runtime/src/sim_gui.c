@@ -38,7 +38,7 @@ typedef struct {
     double period_ms;
     int overrun;
     char func[256];
-    char error[1024];
+    char error[1200];
     uint64_t state_ver;
     uint64_t values_ver;      /* 一時停止中の現在値（event: values）を送り直す合図 */
 
@@ -299,8 +299,18 @@ static void do_step_locked(void)
         free(in);
         return;
     }
-    if (sim_ctx_func(G.c)) {
-        if (sim_ctx_call(G.c, err, sizeof err)) { set_error(err); G.running = 0; G.budget = 0; }
+    if (sim_ctx_func(G.c) && sim_ctx_call(G.c, err, sizeof err)) {
+        char msg[1200];
+        snprintf(msg, sizeof msg, "%s リセットしてからやり直してください。", err);
+        set_error(msg);
+        G.running = 0;
+        G.budget = 0;
+        G.play_active = 0;
+        state_changed();
+        values_changed();   /* 入力と関数の途中までの実行でメモリが変わっている */
+        for (i = 0; i < G.nin_cols; i++) free(in[i]);
+        free(in);
+        return;
     }
     G.step++;
     rec_push(G.step, in, nin);

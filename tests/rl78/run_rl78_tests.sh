@@ -157,7 +157,7 @@ rl78_run "sim.cfg の abs = で .abs を指定（--abs なし）" 0 "合計: 総
 echo "== 本物のバックエンドの GUI サーバ"
 if command -v curl > /dev/null 2>&1; then
     PORT=$((20000 + ($$ + 7) % 20000))
-    "$RS" gui --abs "$TP" --func TEST_cycle --no-browser --port "$PORT" --period-ms 2 --html-dir "$WORK/nohtml" > "$WORK/rgui.log" 2>&1 &
+    "$RS" gui --abs "$TP" --cfg "$R/cfg/limit.cfg" --func TEST_cycle --no-browser --port "$PORT" --period-ms 2 --html-dir "$WORK/nohtml" > "$WORK/rgui.log" 2>&1 &
     GUI_PID=$!
     U="http://127.0.0.1:$PORT"
     i=0
@@ -188,6 +188,43 @@ data: {"step":0,"names":["TEST_cycle_cnt","g_ms_tick","g_st.fb"],"values":[0,0,0
     check "GUI: 停止中の書き込みの後も event: values はメモリの値（g_st.fb = 0）" sh -c "! grep -q '\"step\":0,\"names\":\[\"TEST_cycle_cnt\",\"g_ms_tick\",\"g_st.fb\"\],\"values\":\[0,0,7\]' '$WORK/rsse.txt'"
     check "GUI: ステップの後の samples（実行した値）" contains "$WORK/rsse.txt" '"rows":[[1,10,7],[2,20,7],[3,30,7]]'
     check "GUI: reset の後に event: values で初期状態の値" sh -c "grep -A1 'event: values' '$WORK/rsse.txt' | tail -1 | grep -q '\"values\":\[0,0,0\]'"
+    # 呼び出し失敗は通常の測定点として保存しない。復旧後の記録は再実行できる。
+    for fault in f_undef f_loop; do
+        curl -s -X POST --data '{"names":["g_out"]}' "$U/api/watch" > /dev/null
+        curl -s -X POST --data "{\"cmd\":\"reset\",\"func\":\"$fault\"}" "$U/api/control" > /dev/null
+        curl -s -X POST --data '{"cmd":"step","steps":1}' "$U/api/control" > "$WORK/fault.json"
+        check "GUI $fault: stepsDone は 0" contains "$WORK/fault.json" '"stepsDone":0'
+        check "GUI $fault: step は 0 のまま" contains "$WORK/fault.json" '"step":0'
+        check "GUI $fault: 実行停止" contains "$WORK/fault.json" '"running":false'
+        check "GUI $fault: 残りの step も停止" contains "$WORK/fault.json" '"stepsLeft":0'
+        check "GUI $fault: PC を含むエラー" contains "$WORK/fault.json" 'PC=0x002A'
+        check "GUI $fault: エラーにリセットの案内" contains "$WORK/fault.json" 'リセットしてからやり直してください'
+        if [ "$fault" = f_undef ]; then
+            check "GUI f_undef: エラーに命令バイト列" contains "$WORK/fault.json" '61 19'
+        else
+            check "GUI f_loop: エラーに命令数上限と逆アセンブル" contains "$WORK/fault.json" 'BR $002A5H'
+        fi
+        curl -s "$U/api/export.csv" > "$WORK/fault.csv"
+        check "GUI $fault: 保存 CSV にデータ行なし" sh -c '[ "$(wc -l < "$1")" -eq 2 ]' sh "$WORK/fault.csv"
+        curl -s -X POST --data '{"cmd":"step","steps":3}' "$U/api/control" > "$WORK/fault.json"
+        check "GUI $fault: step N も最初の失敗で停止" contains "$WORK/fault.json" '"stepsDone":0'
+        curl -s -X POST --data '{"cmd":"reset","func":"TEST_cycle"}' "$U/api/control" > "$WORK/recovered.json"
+        check "GUI $fault: reset でエラー解除" contains "$WORK/recovered.json" '"error":""'
+        curl -s -X POST --data '{"names":["TEST_cycle_cnt"]}' "$U/api/watch" > /dev/null
+        curl -s -X POST --data '{"cmd":"step","steps":3}' "$U/api/control" > "$WORK/recovered.json"
+        check "GUI $fault: reset 後は 3 周期進む" contains "$WORK/recovered.json" '"stepsDone":3'
+        curl -s "$U/api/export.csv" > "$WORK/recovered.csv"
+        rl78_run "GUI $fault: 復旧後の保存 CSV は 3 行すべて OK" 0 "OK 3, NG 0" -- --abs "$TP" --cfg "$R/cfg/limit.cfg" "$WORK/recovered.csv"
+
+        # CSV 再生での失敗も再生・実行を停止する（先頭行は直ちに実行される）。
+        printf 'mod,%s,fault,0,1\n#COMMENT,g_out\n,0\n,0\n' "$fault" > "$WORK/fault_play.csv"
+        curl -s -X POST --data-binary "@$WORK/fault_play.csv" "$U/api/load-csv" > /dev/null
+        sleep 0.2
+        curl -s "$U/api/info" > "$WORK/fault_info.json"
+        check "GUI $fault: 失敗した CSV 再生を停止" contains "$WORK/fault_info.json" '"playback":false'
+        check "GUI $fault: 再生失敗で実行停止" contains "$WORK/fault_info.json" '"running":false'
+        check "GUI $fault: 再生失敗で step は 0" contains "$WORK/fault_info.json" '"step":0'
+    done
     kill "$GUI_PID" 2>/dev/null
     wait "$GUI_PID" 2>/dev/null
     GUI_PID=""
