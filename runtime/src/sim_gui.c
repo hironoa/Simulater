@@ -165,12 +165,6 @@ static void rec_set_in(char **in, int *nin, int col, const char *text)
     if (col + 1 > *nin) *nin = col + 1;
 }
 
-static double cell_first(const sim_cellval *v)
-{
-    if (v->n != 1 || v->is_string) return NAN;
-    return sim_item_double(&v->items[0]);
-}
-
 /* ================================================================ 周期実行 */
 
 static void set_error(const char *msg)
@@ -294,6 +288,40 @@ static void do_step_locked(void)
     }
 }
 
+/* 実行中の 1 周期の長さ（ナノ秒）。speed > 0 のときだけ使う */
+static uint64_t interval_ns_locked(void) { return (uint64_t)(G.period_ms / G.speed * 1e6); }
+
+/* G.mu をロックしたまま呼ぶ。期限 deadline まで、または G.cv の通知（/api/control などの制御要求）まで待つ。
+ * 期限の SIM_COND_WAIT_SLACK_NS 手前までは条件変数で待ち（通知ですぐ起きる）、残りはロックを外して
+ * sim_sleep_until_ns で高精度に待つ（この間の通知は残りの短い時間だけ遅れて効く）。
+ * 条件変数の 1 回の待ちは最大 1 秒に区切る（POSIX の時間切れは実時間の時計なので、時計が戻されても待ちすぎない）。
+ * 早く戻ることがあるので、呼び出し側は戻るたびに状態と期限を確かめ直す */
+static void wait_until_locked(uint64_t deadline)
+{
+    uint64_t now = sim_now_ns(), left;
+    if (now >= deadline) return;
+    left = deadline - now;
+    if (left > SIM_COND_WAIT_SLACK_NS + 1000000ULL) {
+        uint64_t ms = (left - SIM_COND_WAIT_SLACK_NS) / 1000000ULL;
+        if (ms > 1000) ms = 1000;
+        sim_cond_wait(G.cv, G.mu, (int)ms);
+    } else {
+        sim_mutex_unlock(G.mu);
+        sim_sleep_until_ns(deadline);
+        sim_mutex_lock(G.mu);
+    }
+}
+
+/* 周期実行のスレッド。G.mu を持ったまま動き、ステップの間と待機中だけ外す。
+ * 待機中に制御要求（run/pause/step/reset、speed・periodMs・func の変更、CSV の読み込み）が来ると
+ * すぐに起きて、実行状態と期限を確かめ直す:
+ *   - pause・step・reset（running が 0、budget が残っている）: 待つのをやめて先頭に戻る（step はすぐ実行する）
+ *   - speed を 0（最速）にした: すぐに次のステップを始める
+ *   - 周期・速度を変えた: 次の期限を「前のステップの予定時刻 + 新しい間隔」にする。もう過ぎていればすぐ始める
+ *     （変更による遅れなのでオーバーランにはしない）
+ *   - 記録をやり直した（reset、関数の変更、CSV の読み込み。G.epoch が変わる）で実行中なら、すぐに 1 ステップ目を始め、
+ *     そこから数え直す
+ *   - それ以外（書き込み、実行中の run など）: 期限は変えずに待ち続ける */
 static void sim_loop(void *arg)
 {
     uint64_t next = sim_now_ns(), last_overrun = 0, last_yield = sim_now_ns();
@@ -317,8 +345,8 @@ static void sim_loop(void *arg)
         }
         do_step_locked();
         if (G.speed > 0) {
-            uint64_t interval = (uint64_t)(G.period_ms / G.speed * 1e6);
-            uint64_t now = sim_now_ns();
+            uint64_t interval = interval_ns_locked();
+            uint64_t now = sim_now_ns(), epoch = G.epoch;
             next += interval;
             if (now > next + interval) {
                 /* 追いつけない: 周期を詰めずに続ける */
@@ -329,9 +357,20 @@ static void sim_loop(void *arg)
                 G.overrun = 0;
                 state_changed();
             }
-            sim_mutex_unlock(G.mu);
-            sim_sleep_until_ns(next);
-            sim_mutex_lock(G.mu);
+            /* 期限まで待つ。制御要求で起きたら状態と期限を確かめ直す */
+            for (;;) {
+                if (!G.running || G.budget > 0 || G.speed <= 0) break;
+                if (G.epoch != epoch) { next = sim_now_ns(); break; }
+                if (interval_ns_locked() != interval) {
+                    uint64_t ni = interval_ns_locked();
+                    next = next - interval + ni;   /* 前のステップの予定時刻 + 新しい間隔 */
+                    interval = ni;
+                    now = sim_now_ns();
+                    if (next < now) next = now;
+                }
+                if (sim_now_ns() >= next) break;
+                wait_until_locked(next);
+            }
         } else {
             uint64_t now = sim_now_ns();
             if (G.overrun) { G.overrun = 0; state_changed(); }
@@ -356,13 +395,12 @@ static void json_holds(sim_buf *b)
     int i;
     sim_buf_addc(b, '[');
     for (i = 0; i < G.nholds; i++) {
-        double d = cell_first(&G.holds[i].val);
+        /* pending と同じく書いたセルの文字列のまま返す（数値にすると 2^53 を超える整数が丸まり、0x78 が 120 になる） */
         if (i) sim_buf_addc(b, ',');
         sim_buf_adds(b, "{\"name\":");
         sim_buf_json_str(b, G.holds[i].name);
         sim_buf_adds(b, ",\"value\":");
-        if (!isnan(d)) sim_buf_json_num(b, d);
-        else sim_buf_json_str(b, G.holds[i].text);
+        sim_buf_json_str(b, G.holds[i].text);
         sim_buf_addc(b, '}');
     }
     sim_buf_addc(b, ']');
@@ -401,7 +439,8 @@ static void json_state(sim_buf *b)
     sim_buf_add(b, G.dropped.p ? G.dropped.p : "", G.dropped.len);
     sim_buf_adds(b, "],\"pending\":");
     json_pending(b);
-    sim_buf_addc(b, '}');
+    /* step の残り（0 でなければ step を実行中。running も真になる） */
+    sim_buf_printf(b, ",\"stepsLeft\":%llu}", (unsigned long long)G.budget);
 }
 
 static void json_watch_names(sim_buf *b)
@@ -1225,13 +1264,29 @@ static void api_control(sim_sock s, req_t *r)
         reset_locked();
     }
     state_changed();
-    /* step はその場で終わるまで待って結果を返す（最大 5 秒） */
-    if (strcmp(cmd, "step") == 0) {
-        uint64_t t0 = sim_now_ns();
-        while (G.budget > 0 && sim_now_ns() - t0 < 5000000000ULL) sim_cond_wait(G.cv, G.mu, 20);
-    }
     sim_buf_init(&b);
-    json_state(&b);
+    if (strcmp(cmd, "step") == 0) {
+        /* step は周期を待たずに続けて N 回実行する（周期実行のスレッドが budget を消化する）。
+         * その場で終わるまで待って結果を返すが、待つのは最大 5 秒。終わらなければその時点の状態を返し、
+         * 残りは続けて実行する（stepsLeft が 0 でなく running が真。pause で止められる）。
+         * 先に受け付けた step の残りがあれば、その分も含めて終わるまで待つ */
+        uint64_t t0 = sim_now_ns(), s0 = G.step, ep = G.epoch, target = G.step + G.budget;
+        int timed_out = 0;
+        for (;;) {
+            uint64_t el;
+            if (G.budget == 0 || G.step >= target || G.epoch != ep) break;
+            el = sim_now_ns() - t0;
+            if (el >= 5000000000ULL) { timed_out = 1; break; }
+            sim_cond_wait(G.cv, G.mu, 20);   /* 残りが 0 になれば通知で起きる。ほかの step の追加分は 20ms ごとに見る */
+        }
+        json_state(&b);
+        b.len--;   /* 末尾の '}' の前に足す */
+        sim_buf_printf(&b, ",\"stepsDone\":%llu,\"timedOut\":%s}",
+                       (unsigned long long)(G.epoch == ep && G.step >= s0 ? G.step - s0 : 0),
+                       timed_out ? "true" : "false");
+    } else {
+        json_state(&b);
+    }
     sim_mutex_unlock(G.mu);
     send_json(s, 200, &b);
     sim_buf_free(&b);

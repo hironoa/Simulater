@@ -524,6 +524,17 @@ curl -s "%U%/api/info" > "%WORK%\nv6.json"
 findstr /l /c:"9007199254740993" "%WORK%\nv6.json" >nul
 if errorlevel 1 (call :ng "a large integer is written as typed, not rounded") else (call :ok "a large integer is written as typed, not rounded")
 curl -s -X POST --data-binary "@%T%\gui\release_u64.json" "%U%/api/write" > nul
+rem hold values are returned as the written cell text (a large integer is not rounded, hex is not turned into decimal)
+curl -s -X POST --data-binary "@%T%\gui\write_u64_hold.json" "%U%/api/write" > nul
+curl -s -X POST --data-binary "@%T%\gui\write_hex_hold.json" "%U%/api/write" > nul
+curl -s "%U%/api/info" > "%WORK%\hh_info.json"
+findstr /l /c:"{\"name\":\"0x100:8\",\"value\":\"9007199254740993\"}" "%WORK%\hh_info.json" >nul
+if errorlevel 1 (call :ng "holds keep a large integer as written") else (call :ok "holds keep a large integer as written")
+curl -s -X POST --data-binary "@%T%\gui\pause.json" "%U%/api/control" > "%WORK%\hh_ctl.out"
+findstr /l /c:"\"value\":\"0x78\"}" "%WORK%\hh_ctl.out" >nul
+if errorlevel 1 (call :ng "holds keep hex as written") else (call :ok "holds keep hex as written")
+curl -s -X POST --data-binary "@%T%\gui\release_u64.json" "%U%/api/write" > nul
+curl -s -X POST --data-binary "@%T%\gui\release_hex.json" "%U%/api/write" > nul
 curl -s "%U%/" > "%WORK%\index.html"
 findstr /l /c:"<html" "%WORK%\index.html" >nul
 if errorlevel 1 (call :ng "GET / returns a page") else (call :ok "GET / returns a page")
@@ -535,6 +546,52 @@ ping -n 2 127.0.0.1 >nul
 curl -s -X POST --data-binary "@%T%\gui\play_utf16.csv" "%U%/api/load-csv" > "%WORK%\lu16.out"
 findstr /l /c:"UTF" "%WORK%\lu16.out" >nul
 if errorlevel 1 (call :ng "/api/load-csv rejects UTF-16 with a clear message") else (call :ok "/api/load-csv rejects UTF-16 with a clear message")
+rem a long period wait wakes on /api/control: with periodMs 5000, run (the first step runs at once), pause, then step
+rem answers without waiting for the end of the period and advances to step 2
+curl -s --max-time 2 -X POST --data-binary "@%T%\gui\reset.json" "%U%/api/control" > nul
+curl -s --max-time 2 -X POST --data-binary "@%T%\gui\run_long.json" "%U%/api/control" > nul
+ping -n 2 127.0.0.1 >nul
+set "CODE="
+for /f "usebackq delims=" %%C in (`curl -s -o "%WORK%\lp2.out" -w "%%{http_code}" --max-time 1.5 -X POST --data-binary "@%T%\gui\pause.json" "%U%/api/control"`) do set "CODE=%%C"
+if "%CODE%"=="200" (call :ok "long period: pause while running answers at once") else (call :ng "long period: pause while running answers at once: 200 expected, got %CODE%")
+set "CODE="
+for /f "usebackq delims=" %%C in (`curl -s -o "%WORK%\lp3.out" -w "%%{http_code}" --max-time 1.5 -X POST --data-binary "@%T%\gui\step1.json" "%U%/api/control"`) do set "CODE=%%C"
+if "%CODE%"=="200" (call :ok "long period: step after pause answers within 1.5 s") else (call :ng "long period: step after pause answers within 1.5 s: 200 expected, got %CODE%")
+findstr /l /c:"\"running\":false,\"step\":2," "%WORK%\lp3.out" >nul
+if errorlevel 1 (call :ng "long period: step after pause advances to step 2") else (call :ok "long period: step after pause advances to step 2")
+rem shortening the period while running takes effect without waiting for the end of the old period
+curl -s --max-time 2 -X POST --data-binary "@%T%\gui\reset.json" "%U%/api/control" > nul
+curl -s --max-time 2 -X POST --data-binary "@%T%\gui\run_long.json" "%U%/api/control" > nul
+ping -n 2 127.0.0.1 >nul
+curl -s --max-time 2 -X POST --data-binary "@%T%\gui\period_short.json" "%U%/api/control" > nul
+ping -n 2 127.0.0.1 >nul
+curl -s --max-time 2 "%U%/api/info" > "%WORK%\lp7.json"
+set "LPOK=0"
+findstr /l /c:"\"running\":true" "%WORK%\lp7.json" >nul && set "LPOK=1"
+findstr /l /c:"\"step\":1," "%WORK%\lp7.json" >nul && set "LPOK=0"
+if "%LPOK%"=="1" (call :ok "long period: changing the period to 2 ms while running takes effect at once") else (call :ng "long period: changing the period to 2 ms while running takes effect at once")
+rem switching to the fastest speed while waiting for a long period runs at once
+curl -s --max-time 2 -X POST --data-binary "@%T%\gui\period_long.json" "%U%/api/control" > nul
+curl -s --max-time 2 -X POST --data-binary "@%T%\gui\speed_fast.json" "%U%/api/control" > nul
+ping -n 2 127.0.0.1 >nul
+curl -s --max-time 2 -X POST --data-binary "@%T%\gui\pause.json" "%U%/api/control" > "%WORK%\lp12.out"
+findstr /r /c:"\"step\":[0-9][0-9][0-9][0-9]" "%WORK%\lp12.out" >nul
+if errorlevel 1 (call :ng "long period: switching to the fastest speed while waiting runs at once") else (call :ok "long period: switching to the fastest speed while waiting runs at once")
+rem a step that does not finish in 5 s answers with the steps done, the steps left and that it is still running; pause stops it
+curl -s --max-time 2 -X POST --data-binary "@%T%\gui\speed_restore.json" "%U%/api/control" > nul
+set "CODE="
+for /f "usebackq delims=" %%C in (`curl -s -o "%WORK%\lp14.out" -w "%%{http_code}" --max-time 8 -X POST --data-binary "@%T%\gui\step_huge.json" "%U%/api/control"`) do set "CODE=%%C"
+findstr /l /c:"\"timedOut\":true" "%WORK%\lp14.out" >nul
+if errorlevel 1 (call :ng "a step that does not finish in 5 s reports timedOut") else if "%CODE%"=="200" (call :ok "a step that does not finish in 5 s reports timedOut") else (call :ng "a step that does not finish in 5 s: 200 expected, got %CODE%")
+findstr /l /c:"\"running\":true" "%WORK%\lp14.out" >nul
+if errorlevel 1 (call :ng "a step that does not finish in 5 s reports running") else (call :ok "a step that does not finish in 5 s reports running")
+curl -s --max-time 2 -X POST --data-binary "@%T%\gui\pause.json" "%U%/api/control" > "%WORK%\lp15.out"
+findstr /l /c:"\"stepsLeft\":0" "%WORK%\lp15.out" >nul
+if errorlevel 1 (call :ng "pause stops a step that did not finish") else (call :ok "pause stops a step that did not finish")
+curl -s --max-time 2 -X POST --data-binary "@%T%\gui\step1.json" "%U%/api/control" > "%WORK%\lp16.out"
+findstr /l /c:"\"stepsLeft\":0,\"stepsDone\":1,\"timedOut\":false" "%WORK%\lp16.out" >nul
+if errorlevel 1 (call :ng "a finished step reports timedOut false") else (call :ok "a finished step reports timedOut false")
+curl -s --max-time 2 -X POST --data-binary "@%T%\gui\reset.json" "%U%/api/control" > nul
 taskkill /f /im sim_guitest.exe >nul 2>nul
 
 :after_gui

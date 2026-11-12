@@ -296,7 +296,7 @@ else
     CODE=$(post step5.json step.out /api/control)
     check "/api/control step が 200" test "$CODE" = 200
     check "/api/control step で 5 ステップ進む" contains "$WORK/step.out" '"step":5'
-    check "state に holds" contains "$WORK/step.out" '"holds":[{"name":"AMSTB_adc_read@AMIN_adc[0]","value":800},{"name":"P2_bit.no0","value":1}]'
+    check "state に holds" contains "$WORK/step.out" '"holds":[{"name":"AMSTB_adc_read@AMIN_adc[0]","value":"800"},{"name":"P2_bit.no0","value":"1"}]'
 
     curl -s "$U/api/export.csv" > "$WORK/export.csv"
     check "/api/export.csv の mod 行" grep -q "^mod,TEST_cycle,GUI記録,3,4" "$WORK/export.csv"
@@ -673,6 +673,21 @@ data: {"periodMs":2,"func":"TEST_cycle","names":["g_eng.state","TEST_cycle_cnt",
     curl -s "$U/api/info" > "$WORK/nv6.json"
     check "/api/write の整数 9007199254740993 を double に丸めない" sh -c "[ '$CODE' = 200 ] && grep -F -q '{\"name\":\"0x100:8\",\"value\":\"9007199254740993\"}' '$WORK/nv6.json'"
     post release_u64.json nv7.out /api/write > /dev/null
+    # 固定の値も書いたセルの文字列のまま holds に出す（2^53 を超える整数を丸めない、16 進を 10 進にしない）
+    curl -s -N --max-time 1.5 "$U/api/stream" > "$WORK/hh_sse.txt" 2>/dev/null &
+    SSE_PID=$!
+    sleep 0.3
+    post write_u64_hold.json hh1.out /api/write > /dev/null
+    post write_hex_hold.json hh2.out /api/write > /dev/null
+    HH='"holds":[{"name":"0x100:8","value":"9007199254740993"},{"name":"AMSTB_adc_read@AMIN_adc[1]","value":"0x78"}]'
+    curl -s "$U/api/info" > "$WORK/hh_info.json"
+    check "/api/info の holds に固定した値の表記のまま（9007199254740993、0x78）" contains "$WORK/hh_info.json" "$HH"
+    post pause.json hh_ctl.out /api/control > /dev/null
+    check "/api/control の応答の holds に固定した値の表記のまま" contains "$WORK/hh_ctl.out" "$HH"
+    wait "$SSE_PID" 2>/dev/null
+    check "SSE の state の holds に固定した値の表記のまま" contains "$WORK/hh_sse.txt" "$HH"
+    post release_u64.json hh3.out /api/write > /dev/null
+    post release_hex.json hh4.out /api/write > /dev/null
     CODE=$(curl -s -o "$WORK/nv8.out" -w '%{http_code}' "$U/api/symbols?q=g_&limit=10x")
     check "/api/symbols の limit=10x は 400" test "$CODE" = 400
     CODE=$(curl -s -o "$WORK/nv9.out" -w '%{http_code}' -X POST -H 'Content-Length: 12abc' --data-binary '{"names":[]}' "$U/api/watch")
@@ -688,6 +703,52 @@ data: {"periodMs":2,"func":"TEST_cycle","names":["g_eng.state","TEST_cycle_cnt",
     done
     CODE=$(curl -s -o "$WORK/lu16.out" -w '%{http_code}' -X POST --data-binary "@$T/gui/play_utf16.csv" "$U/api/load-csv")
     check "/api/load-csv で UTF-16 の CSV は分かるエラーで 400" sh -c "[ '$CODE' = 400 ] && grep -F -q 'UTF-16 の CSV には対応していません' '$WORK/lu16.out'"
+
+    # 長い周期の待機は /api/control で起こせる。周期 5000ms で run（1 ステップ目はすぐ）→ pause → step が
+    # 周期の終わりを待たずに応答し、ステップが 2 に進む（直す前は周期の終わりまで約 4.7 秒待たされた）
+    ctl() { curl -s -o "$WORK/$2" -w '%{http_code}' --max-time "$3" -X POST --data-binary "@$T/gui/$1" "$U/api/control"; }
+    step_of() { sed -n 's/.*"step":\([0-9]*\).*/\1/p' "$1"; }
+    ctl reset.json lp0.out 2 > /dev/null
+    ctl run_long.json lp1.out 2 > /dev/null
+    sleep 0.3
+    CODE=$(ctl pause.json lp2.out 1.5)
+    check "長い周期: 実行中の pause がすぐ応答する" test "$CODE" = 200
+    CODE=$(ctl step1.json lp3.out 1.5)
+    check "長い周期: pause の後の step がすぐ応答する（1.5 秒以内に 200）" test "$CODE" = 200
+    check "長い周期: pause の後の step でステップが 2 に進む" contains "$WORK/lp3.out" '"running":false,"step":2,'
+    # 実行中に周期を短くすると、古い周期の終わりを待たずに新しい周期で進む
+    ctl reset.json lp4.out 2 > /dev/null
+    ctl run_long.json lp5.out 2 > /dev/null
+    sleep 0.3
+    ctl period_short.json lp6.out 1.5 > /dev/null
+    sleep 0.5
+    curl -s --max-time 2 "$U/api/info" > "$WORK/lp7.json"
+    N=$(step_of "$WORK/lp7.json")
+    check "長い周期: 実行中に周期を 2ms にするとすぐ進む（0.5 秒で 20 ステップ以上。実際 ${N:-?}）" test "${N:-0}" -ge 20
+    # 長くした周期は前のステップから数える（0.5 秒の間に 1 ステップより多くは進まない）
+    ctl period_long.json lp8.out 1.5 > /dev/null
+    curl -s --max-time 2 "$U/api/info" > "$WORK/lp9.json"
+    N1=$(step_of "$WORK/lp9.json")
+    sleep 0.5
+    curl -s --max-time 2 "$U/api/info" > "$WORK/lp10.json"
+    N2=$(step_of "$WORK/lp10.json")
+    check "長い周期: 周期を 5000ms に戻すと 0.5 秒では進まない（${N1:-?} -> ${N2:-?}）" test "$((${N2:-0} - ${N1:-0}))" -le 1
+    # 長い周期の待機中に最速（speed 0）にするとすぐ最速で進む
+    ctl speed_fast.json lp11.out 1.5 > /dev/null
+    sleep 0.3
+    CODE=$(ctl pause.json lp12.out 1.5)
+    N3=$(step_of "$WORK/lp12.out")
+    check "長い周期: 待機中に最速にするとすぐ進む（0.3 秒で 1000 ステップ以上。実際 ${N3:-?}）" sh -c "[ '$CODE' = 200 ] && [ '${N3:-0}' -ge 1000 ]"
+    # 5 秒で終わらない step は、進んだステップ数・残り・実行中であることを応答で知らせ、続きは pause で止められる
+    ctl speed_restore.json lp13.out 2 > /dev/null
+    CODE=$(ctl step_huge.json lp14.out 8)
+    check "終わらない step は 5 秒で 200 を返す" test "$CODE" = 200
+    check "終わらない step の応答に timedOut と実行中" sh -c "grep -F -q '\"running\":true' '$WORK/lp14.out' && grep -F -q '\"timedOut\":true' '$WORK/lp14.out' && grep -q '\"stepsLeft\":[1-9][0-9]*,\"stepsDone\":[1-9]' '$WORK/lp14.out'"
+    CODE=$(ctl pause.json lp15.out 1.5)
+    check "終わらない step を pause で止められる" sh -c "[ '$CODE' = 200 ] && grep -F -q '\"running\":false' '$WORK/lp15.out' && grep -F -q '\"stepsLeft\":0' '$WORK/lp15.out'"
+    CODE=$(ctl step1.json lp16.out 1.5)
+    check "終わる step の応答は timedOut が false" sh -c "[ '$CODE' = 200 ] && grep -F -q '\"stepsLeft\":0,\"stepsDone\":1,\"timedOut\":false' '$WORK/lp16.out'"
+    ctl reset.json lp17.out 2 > /dev/null
 
     PORT_USED_LOG="$WORK/gui2.log"
     "$SIM" gui --no-browser --port "$PORT" > "$PORT_USED_LOG" 2>&1

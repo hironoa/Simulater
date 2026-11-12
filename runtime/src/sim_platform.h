@@ -12,9 +12,19 @@ sim_mutex *sim_mutex_new(void);
 void sim_mutex_lock(sim_mutex *m);
 void sim_mutex_unlock(sim_mutex *m);
 sim_cond *sim_cond_new(void);
-/* 待つ。timeout_ms 経過で戻る。m はロックした状態で呼ぶ */
+/* 待つ。timeout_ms 経過で戻る（負なら時間切れなし）。m はロックした状態で呼ぶ。理由なく早く戻ることもあるので、
+ * 呼び出し側は戻ったら条件を確かめ直す */
 void sim_cond_wait(sim_cond *c, sim_mutex *m, int timeout_ms);
 void sim_cond_broadcast(sim_cond *c);
+/* sim_cond_wait の時間切れが予定より遅れうる幅の目安（ナノ秒）。期限つきで条件変数を待つときは、
+ * 期限のこれだけ手前までを sim_cond_wait で待ち、残りを sim_sleep_until_ns で待つと、起こせる待機と
+ * 期限の精度を両立できる。Windows の SleepConditionVariableSRW はシステムのタイマ刻み（既定 15.6ms）で
+ * 起きるので大きく取る */
+#ifdef _WIN32
+#define SIM_COND_WAIT_SLACK_NS 25000000ULL
+#else
+#define SIM_COND_WAIT_SLACK_NS 2000000ULL
+#endif
 
 typedef void (*sim_thread_fn)(void *arg);
 /* デタッチしたスレッドを作る。失敗なら -1 */
@@ -39,7 +49,8 @@ long sim_recv(sim_sock s, void *buf, size_t n);
 /* 全部送る。成功 0、失敗 -1 */
 int sim_send_all(sim_sock s, const void *buf, size_t n);
 void sim_close_sock(sim_sock s);
-void sim_sock_set_timeout(sim_sock s, int recv_ms);
+/* 受信と送信の時間切れ（ミリ秒）。相手が読まずに止まっていても、送信が ms で失敗して戻る */
+void sim_sock_set_timeout(sim_sock s, int ms);
 
 /* 実行ファイルのあるフォルダ（末尾の区切りなし）。返す文字列は静的領域 */
 const char *sim_exe_dir(void);

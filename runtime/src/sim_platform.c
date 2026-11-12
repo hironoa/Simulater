@@ -166,10 +166,11 @@ void sim_close_sock(sim_sock s)
     closesocket((SOCKET)s);
 }
 
-void sim_sock_set_timeout(sim_sock s, int recv_ms)
+void sim_sock_set_timeout(sim_sock s, int ms)
 {
-    DWORD t = (DWORD)recv_ms;
+    DWORD t = (DWORD)ms;
     setsockopt((SOCKET)s, SOL_SOCKET, SO_RCVTIMEO, (const char *)&t, sizeof t);
+    setsockopt((SOCKET)s, SOL_SOCKET, SO_SNDTIMEO, (const char *)&t, sizeof t);
 }
 
 const char *sim_exe_dir(void)
@@ -385,12 +386,13 @@ void sim_close_sock(sim_sock s)
     close((int)s);
 }
 
-void sim_sock_set_timeout(sim_sock s, int recv_ms)
+void sim_sock_set_timeout(sim_sock s, int ms)
 {
     struct timeval tv;
-    tv.tv_sec = recv_ms / 1000;
-    tv.tv_usec = (recv_ms % 1000) * 1000;
+    tv.tv_sec = ms / 1000;
+    tv.tv_usec = (ms % 1000) * 1000;
     setsockopt((int)s, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
+    setsockopt((int)s, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof tv);
 }
 
 const char *sim_exe_dir(void)
