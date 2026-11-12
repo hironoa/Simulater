@@ -314,10 +314,10 @@ curl -s -X POST --data-binary "@%T%\gui\write_alloc_empty.json" "%U%/api/write" 
 findstr /l /c:"error" "%WORK%\wae.out" >nul
 if errorlevel 1 (call :ng "/api/write rejects an empty string for $") else (call :ok "/api/write rejects an empty string for $")
 curl -s "%U%/api/export.csv" > "%WORK%\ov_export.csv"
-rem the last row: inputs &g_eng_name (''), P1, P1_bit.no0, g_mode; outputs g_eng_name[0] (0 after writing ''), P1, g_mode
+rem the last row ends with the outputs g_eng_name[0] (0 after writing ''), P1, g_mode. Input columns before them depend on earlier holds
 set "LAST="
 for /f "usebackq delims=" %%L in ("%WORK%\ov_export.csv") do set "LAST=%%L"
-if "%LAST%"==",'',,,,0,0,5" (call :ok "writing an empty string clears the previous string") else (call :ng "writing an empty string clears the previous string: %LAST%")
+if "%LAST:~-6%"==",0,0,5" (call :ok "writing an empty string clears the previous string") else (call :ng "writing an empty string clears the previous string: %LAST%")
 "%SIM%" run "%WORK%\ov_export.csv" -o "%WORK%\oov" --quiet > "%WORK%\ov_rerun.log" 2>&1
 set RC=%ERRORLEVEL%
 findstr /l /c:"OK 4" "%WORK%\ov_rerun.log" >nul
