@@ -1,0 +1,24 @@
+MOD,mul16,upper,2,1
+#COMMENT,@a,@b,mul16@@
+,2,3,6,OK,0.0000ms
+Mod,mul16,mixed,2,1
+#Comment,@a,@b,mul16@@
+,2,4,8,OK,0.0000ms
+ mod ,mul16,spaces,2,1
+	#COMMENT	,@a,@b,mul16@@
+,2,5,10,OK,0.0000ms
+"mod",mul16,quoted,2,1
+"#COMMENT",@a,@b,mul16@@
+,2,6,12,OK,0.0000ms
+ "mod" ,mul16,quoted and spaces,2,1
+" #comment ",@a,@b,mul16@@
+,2,7,14,OK,0.0000ms
+„ÄÄmod„ÄÄ,mul16,fullwidth space UTF-8,2,1
+„ÄÄ#COMMENT,@a,@b,mul16@@
+,2,8,16,OK,0.0000ms
+Å@mod,mul16,fullwidth space Shift_JIS,2,1
+Å@#COMMENT,@a,@b,mul16@@
+,2,9,18,OK,0.0000ms
+mod,mul16,trailing commas,2,1,,,
+#COMMENT,@a,@b,mul16@@,,
+,2,10,20,OK,0.0000ms

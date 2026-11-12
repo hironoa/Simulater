@@ -81,6 +81,42 @@ call :err_case null_deref.csv "NULL"
 call :err_case bad_mod.csv "'x'"
 call :err_case big_decimal.csv "g_mode"
 
+echo == encodings and line identification (never skip a block silently)
+rem a UTF-8 BOM is skipped when identifying lines and kept as bytes in the result CSV
+call :run_cmp bom_mul16.csv 1
+"%SIM%" run "%WORK%\out_bom_mul16\bom_mul16.csv" -o "%WORK%\obom_rb" --fixed-time --quiet > "%WORK%\bom_rb.log" 2>&1
+set RC=%ERRORLEVEL%
+fc /b "%WORK%\obom_rb\bom_mul16.csv" "%T%\expected\bom_mul16.csv" >nul
+if errorlevel 1 (call :ng "a result CSV with a BOM reads back the same") else if "%RC%"=="1" (call :ok "a result CSV with a BOM reads back the same") else (call :ng "a result CSV with a BOM reads back: exit code 1, got %RC%")
+call :err_case utf16le_bom.csv "UTF"
+call :err_case utf16be_bom.csv "UTF"
+call :err_case nul_byte.csv "NUL"
+call :err_case no_mod.csv "mod"
+call :err_case no_comment.csv "COMMENT"
+rem letter case, spaces and tabs, double quotes, a leading full-width space and extra trailing commas are accepted
+call :run_cmp lenient_ident.csv 0
+"%SIM%" run "%T%\csv\lenient_ident.csv" -o "%WORK%\olen" --quiet > "%WORK%\len.log" 2>&1
+findstr /l /c:"OK 8, NG 0" "%WORK%\len.log" >nul
+if errorlevel 1 (call :ng "all 8 spellings of mod and COMMENT run (OK 8)") else (call :ok "all 8 spellings of mod and COMMENT run (OK 8)")
+rem CR-only line ends and a last line without a line end
+call :run_cmp cr_only.csv 0
+rem a block without data rows and lines before the first mod line are warnings, not errors
+call :run_cmp only_comments.csv 0
+"%SIM%" run "%T%\csv\only_comments.csv" -o "%WORK%\ooc" --quiet > nul 2> "%WORK%\oc_err.log"
+findstr /l /c:"mul16" "%WORK%\oc_err.log" >nul
+if errorlevel 1 (call :ng "a block without data rows is warned about") else (call :ok "a block without data rows is warned about")
+call :run_cmp data_before_mod.csv 0
+"%SIM%" run "%T%\csv\data_before_mod.csv" -o "%WORK%\odb" --quiet > nul 2> "%WORK%\db_err.log"
+findstr /l /c:"mod" "%WORK%\db_err.log" >nul
+if errorlevel 1 (call :ng "lines before the first mod line are warned about") else (call :ok "lines before the first mod line are warned about")
+rem several files: the others still run and the final exit code reflects every file
+"%SIM%" run "%T%\csv\err\no_mod.csv" "%T%\csv\unit_all.csv" -o "%WORK%\omulti" --quiet > "%WORK%\multi.log" 2>&1
+set RC=%ERRORLEVEL%
+if not exist "%WORK%\omulti\unit_all.csv" (call :ng "a file without mod lines does not stop the others") else if "%RC%"=="2" (call :ok "a file without mod lines does not stop the others (exit code 2)") else (call :ng "a file without mod lines with a normal file: exit code 2, got %RC%")
+"%SIM%" run "%T%\csv\only_comments.csv" "%T%\csv\ng_case.csv" -o "%WORK%\omulti2" --quiet > "%WORK%\multi2.log" 2>&1
+set RC=%ERRORLEVEL%
+if "%RC%"=="1" (call :ok "a warning does not change the exit code (1)") else (call :ng "a warning does not change the exit code: 1, got %RC%")
+
 echo == numeric ranges and spellings (never silently another value)
 "%SIM%" run "%T%\csv\err\num_range.csv" -o "%WORK%\onr" --quiet > "%WORK%\nr.log" 2>&1
 set RC=%ERRORLEVEL%
@@ -451,6 +487,14 @@ curl -s -X POST --data-binary "@%T%\gui\release_u64.json" "%U%/api/write" > nul
 curl -s "%U%/" > "%WORK%\index.html"
 findstr /l /c:"<html" "%WORK%\index.html" >nul
 if errorlevel 1 (call :ng "GET / returns a page") else (call :ok "GET / returns a page")
+rem a CSV with a UTF-8 BOM loads; UTF-16 is rejected with a clear message
+curl -s -X POST --data-binary "@%T%\gui\play_bom.csv" "%U%/api/load-csv" > "%WORK%\lbom.out"
+findstr /l /c:"rows" "%WORK%\lbom.out" >nul
+if errorlevel 1 (call :ng "/api/load-csv accepts a UTF-8 BOM") else (call :ok "/api/load-csv accepts a UTF-8 BOM")
+ping -n 2 127.0.0.1 >nul
+curl -s -X POST --data-binary "@%T%\gui\play_utf16.csv" "%U%/api/load-csv" > "%WORK%\lu16.out"
+findstr /l /c:"UTF" "%WORK%\lu16.out" >nul
+if errorlevel 1 (call :ng "/api/load-csv rejects UTF-16 with a clear message") else (call :ok "/api/load-csv rejects UTF-16 with a clear message")
 taskkill /f /im sim_guitest.exe >nul 2>nul
 
 :after_gui

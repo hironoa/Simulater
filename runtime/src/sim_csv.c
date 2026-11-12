@@ -12,6 +12,7 @@
 typedef struct { const char *p; size_t n; } span;
 
 typedef struct {
+    span pre;       /* 行の識別では読み飛ばすが出力へは写す先頭のバイト（1 行目の UTF-8 BOM） */
     span text;      /* 改行を含まない行 */
     span eol;       /* 改行（"\r\n"、"\n"、"\r" または空） */
     span *cells;    /* 生のセル（引用符を含む） */
@@ -46,13 +47,16 @@ static void split_cells(line_t *L)
     }
 }
 
-static line_t *split_lines(const char *d, size_t len, size_t *nout)
+/* skip: 先頭の何バイトを 1 行目の pre にするか（UTF-8 BOM なら 3） */
+static line_t *split_lines(const char *d, size_t len, size_t skip, size_t *nout)
 {
-    size_t cap = 256, n = 0, i = 0;
+    size_t cap = 256, n = 0, i = skip;
     line_t *v = sim_xmalloc(cap * sizeof *v);
-    while (i < len) {
+    while (i < len || (n == 0 && skip > 0)) {
         size_t s = i;
         line_t L;
+        L.pre.p = d;
+        L.pre.n = n == 0 ? skip : 0;
         while (i < len && d[i] != '\n' && d[i] != '\r') i++;
         L.text.p = d + s;
         L.text.n = i - s;
@@ -74,6 +78,50 @@ static void free_lines(line_t *v, size_t n)
     size_t i;
     for (i = 0; i < n; i++) free(v[i].cells);
     free(v);
+}
+
+/* 文字コードを確かめる。UTF-8 の BOM なら *skip = 3。UTF-16（BOM が FF FE / FE FF）は対応外としてエラー */
+static int check_encoding(const char *d, size_t len, size_t *skip, char *err, size_t errlen)
+{
+    const unsigned char *u = (const unsigned char *)d;
+    *skip = 0;
+    if (len >= 2 && ((u[0] == 0xFF && u[1] == 0xFE) || (u[0] == 0xFE && u[1] == 0xFF))) {
+        snprintf(err, errlen, "UTF-16 の CSV には対応していません（先頭が UTF-16 の BOM）。UTF-8 か Shift_JIS で保存し直してください");
+        return -1;
+    }
+    if (len >= 3 && u[0] == 0xEF && u[1] == 0xBB && u[2] == 0xBF) *skip = 3;
+    return 0;
+}
+
+/* NUL バイトを含む最初の行の番号（なければ 0）。NUL があるとセルを C 文字列にしたときに途中で切れ、
+ * 行の識別や値が黙って変わるので、ファイルごとエラーにする（BOM のない UTF-16 もここで止まる） */
+static int nul_line(const line_t *ls, size_t n)
+{
+    size_t i;
+    for (i = 0; i < n; i++)
+        if (ls[i].text.n && memchr(ls[i].text.p, 0, ls[i].text.n)) return ls[i].lineno;
+    return 0;
+}
+
+/* 空白とみなすバイト列の長さ（空白・タブ・全角空白（UTF-8 の E3 80 80、Shift_JIS の 81 40））。違えば 0 */
+static size_t ws_len(const char *p, const char *e)
+{
+    const unsigned char *u = (const unsigned char *)p;
+    if (p >= e) return 0;
+    if (*p == ' ' || *p == '\t') return 1;
+    if (e - p >= 3 && u[0] == 0xE3 && u[1] == 0x80 && u[2] == 0x80) return 3;
+    if (e - p >= 2 && u[0] == 0x81 && u[1] == 0x40) return 2;
+    return 0;
+}
+
+/* 行末側の空白。Shift_JIS の全角空白は直前の 2 バイト文字の 2 バイト目と区別できないので、行末側では見ない */
+static size_t ws_len_back(const char *p, const char *e)
+{
+    const unsigned char *u = (const unsigned char *)e;
+    if (e <= p) return 0;
+    if (e[-1] == ' ' || e[-1] == '\t') return 1;
+    if (e - p >= 3 && u[-3] == 0xE3 && u[-2] == 0x80 && u[-1] == 0x80) return 3;
+    return 0;
 }
 
 /* セルの値（前後の空白を除き、"..." の引用を外す） */
@@ -101,30 +149,47 @@ static char *cell_value(const line_t *L, int k)
     return b.p;
 }
 
-static int first_is(const line_t *L, const char *word)
+/* 1 列目を行の識別用に整える: 前後の空白（全角空白を含む）を除き、"..." の引用を外して、もう一度空白を除く。
+ * Excel が保存した "mod"、行頭の全角空白、" #comment " などを、黙ってデータ行やコメントとして扱わないため */
+static char *first_key(const line_t *L)
 {
-    char *v = cell_value(L, 0);
-    int r = strcmp(v, word) == 0;
-#ifdef _WIN32
-    if (!r) r = _stricmp(v, word) == 0;
-#else
-    if (!r) {
-        size_t i, n = strlen(word);
-        r = strlen(v) == n;
-        for (i = 0; r && i < n; i++) if (tolower((unsigned char)v[i]) != tolower((unsigned char)word[i])) r = 0;
+    char *v = cell_value(L, 0), *r;
+    const char *p = v, *e = v + strlen(v);
+    size_t w;
+    int pass;
+    for (pass = 0; pass < 2; pass++) {
+        while ((w = ws_len(p, e)) > 0) p += w;
+        while ((w = ws_len_back(p, e)) > 0) e -= w;
+        if (pass == 0 && e - p >= 2 && *p == '"' && e[-1] == '"') { p++; e--; }
+        else break;
     }
-#endif
+    r = sim_xstrndup(p, (size_t)(e - p));
     free(v);
     return r;
 }
 
-static int is_mod(const line_t *L) { return first_is(L, "mod"); }
+/* s が word（英字は大文字小文字を区別しない）で始まれば 1 */
+static int ci_prefix(const char *s, const char *word)
+{
+    for (; *word; s++, word++)
+        if (tolower((unsigned char)*s) != tolower((unsigned char)*word)) return 0;
+    return 1;
+}
+
+/* mod 行: 1 列目が mod（MOD、Mod、前後の空白、"mod" も同じ） */
+static int is_mod(const line_t *L)
+{
+    char *k = first_key(L);
+    int r = ci_prefix(k, "mod") && k[3] == 0;
+    free(k);
+    return r;
+}
 
 static int first_starts(const line_t *L, char ch)
 {
-    char *v = cell_value(L, 0);
-    int r = v[0] == ch;
-    free(v);
+    char *k = first_key(L);
+    int r = k[0] == ch;
+    free(k);
     return r;
 }
 
@@ -132,23 +197,26 @@ static int all_empty(const line_t *L)
 {
     int k;
     for (k = 0; k < L->ncells; k++) {
-        size_t i;
-        for (i = 0; i < L->cells[k].n; i++)
-            if (L->cells[k].p[i] != ' ' && L->cells[k].p[i] != '\t') return 0;
+        const char *p = L->cells[k].p, *e = p + L->cells[k].n;
+        size_t w;
+        while (p < e && (w = ws_len(p, e)) > 0) p += w;
+        if (p < e) return 0;
     }
     return 1;
 }
 
+/* #COMMENT 行: 1 列目が #COMMENT で始まる（大文字小文字・前後の空白・引用は is_mod と同じく問わない） */
 static int is_header(const line_t *L)
 {
-    char *v = cell_value(L, 0);
-    int r = strncmp(v, "#COMMENT", 8) == 0 || strncmp(v, "#comment", 8) == 0;
-    free(v);
+    char *k = first_key(L);
+    int r = ci_prefix(k, "#COMMENT");
+    free(k);
     return r;
 }
 
 static void copy_line(sim_buf *out, const line_t *L)
 {
+    sim_buf_add(out, L->pre.p, L->pre.n);
     sim_buf_add(out, L->text.p, L->text.n);
     sim_buf_add(out, L->eol.p, L->eol.n);
 }
@@ -209,6 +277,11 @@ static void report(const char *path, int line, const char *msg)
     fprintf(stderr, "エラー: %s:%d: %s\n", path, line, msg);
 }
 
+static void warn(const char *path, int line, const char *msg)
+{
+    fprintf(stderr, "警告: %s:%d: %s\n", path, line, msg);
+}
+
 /* mod ブロックを実行する。戻り値は次の行の添字 */
 static size_t run_block(sim_ctx *c, const char *path, line_t *ls, size_t n, size_t i, sim_buf *out,
                         const sim_csv_opts *o, sim_csv_stats *st, int *ng_shown)
@@ -218,7 +291,7 @@ static size_t run_block(sim_ctx *c, const char *path, line_t *ls, size_t n, size
     int nin = 0, nout = 0, k, failed = 0;
     size_t j, hdr = 0;
     col_t *cols = NULL;
-    long b_total = 0, b_ok = 0, b_ng = 0, b_nc = 0;
+    long b_total = 0, b_ok = 0, b_ng = 0, b_nc = 0, b_rows = 0;
 
     copy_line(out, &ls[i]);
     func = cell_value(&ls[i], 1);
@@ -304,7 +377,9 @@ static size_t run_block(sim_ctx *c, const char *path, line_t *ls, size_t n, size
         int judged_ng = 0, judged_ok = 0;
         uint64_t t0, t1, clk0 = 0, clk1 = 0;
         sim_backend *bk = sim_ctx_backend(c);
-        if (failed || first_starts(L, ';') || first_starts(L, '#') || all_empty(L)) {
+        int skipped = first_starts(L, ';') || first_starts(L, '#') || all_empty(L);
+        if (!skipped) b_rows++;
+        if (failed || skipped) {
             copy_line(out, L);
             continue;
         }
@@ -435,6 +510,11 @@ static size_t run_block(sim_ctx *c, const char *path, line_t *ls, size_t n, size
         sim_buf_free(&row);
     }
     if (failed) st->errors++;
+    else if (b_rows == 0) {
+        /* コメントアウトだけの雛形 CSV を壊さないよう、エラーにはしない。ただし黙って 0 件の成功にもしない */
+        snprintf(err, sizeof err, "mod '%s' に実行するデータ行がありません（すべて ; 行・# 行・空行）", func);
+        warn(path, ls[i].lineno, err);
+    }
     fprintf(stdout, "  mod %s: 総数 %ld, OK %ld, NG %ld, NO Check %ld%s\n", func, b_total, b_ok, b_ng, b_nc,
             failed ? "（エラーで中断）" : "");
     st->total += b_total;
@@ -452,21 +532,55 @@ static size_t run_block(sim_ctx *c, const char *path, line_t *ls, size_t n, size
 
 int sim_csv_run_file(sim_ctx *c, const char *path, const sim_csv_opts *o, sim_csv_stats *st)
 {
-    size_t len, n, i;
+    size_t len, n, i, skip, first_mod;
     char *data = sim_read_file(path, &len);
     line_t *ls;
     sim_buf out;
     char *opath;
-    int ng_shown = 0;
+    char err[512];
+    int ng_shown = 0, bad;
     if (!data) {
         fprintf(stderr, "エラー: %s を読めません\n", path);
         st->errors++;
         return -1;
     }
-    ls = split_lines(data, len, &n);
+    fprintf(stdout, "%s\n", path);
+    if (check_encoding(data, len, &skip, err, sizeof err)) {
+        fprintf(stderr, "エラー: %s: %s\n", path, err);
+        st->errors++;
+        free(data);
+        return -1;
+    }
+    ls = split_lines(data, len, skip, &n);
+    if ((bad = nul_line(ls, n)) > 0) {
+        report(path, bad, "NUL バイト（0x00）を含む行があります。UTF-16 など対応していない文字コードで保存されていないか確かめてください");
+        st->errors++;
+        free_lines(ls, n); free(data);
+        return -1;
+    }
+    for (first_mod = 0; first_mod < n && !is_mod(&ls[first_mod]); first_mod++) {}
+    if (first_mod >= n) {
+        fprintf(stderr, "エラー: %s: mod 行がありません（1 列目が mod の行がないので、実行するテストがありません）\n", path);
+        st->errors++;
+        free_lines(ls, n); free(data);
+        return -1;
+    }
+    {
+        /* 最初の mod 行より前の行はどのテストにも属さない。; 行と空行のほかは、mod 行の書き間違いの可能性があるので警告する */
+        int lo = 0, hi = 0;
+        for (i = 0; i < first_mod; i++) {
+            if (first_starts(&ls[i], ';') || all_empty(&ls[i])) continue;
+            if (!lo) lo = ls[i].lineno;
+            hi = ls[i].lineno;
+        }
+        if (lo) {
+            if (lo == hi) snprintf(err, sizeof err, "最初の mod 行より前に、どのテストにも属さない行があります（%d 行目）。実行しません", lo);
+            else snprintf(err, sizeof err, "最初の mod 行より前に、どのテストにも属さない行があります（%d〜%d 行目）。実行しません", lo, hi);
+            warn(path, lo, err);
+        }
+    }
     sim_buf_init(&out);
     sim_buf_reserve(&out, len + 1024);
-    fprintf(stdout, "%s\n", path);
     for (i = 0; i < n;) {
         if (is_mod(&ls[i])) i = run_block(c, path, ls, n, i, &out, o, st, &ng_shown);
         else copy_line(&out, &ls[i++]);
@@ -524,11 +638,18 @@ void sim_csv_table_free(sim_csv_table *t)
 
 int sim_csv_load_table(const char *data, size_t len, sim_csv_table *t, char *err, size_t errlen)
 {
-    size_t n, i, hdr = 0;
-    line_t *ls = split_lines(data, len, &n);
+    size_t n, i, hdr = 0, skip;
+    line_t *ls;
     char *v;
     int k;
     memset(t, 0, sizeof *t);
+    if (check_encoding(data, len, &skip, err, errlen)) return -1;
+    ls = split_lines(data, len, skip, &n);
+    if ((k = nul_line(ls, n)) > 0) {
+        snprintf(err, errlen, "%d 行目に NUL バイト（0x00）があります。UTF-16 など対応していない文字コードで保存されていないか確かめてください", k);
+        free_lines(ls, n);
+        return -1;
+    }
     for (i = 0; i < n && !is_mod(&ls[i]); i++) {}
     if (i >= n) { snprintf(err, errlen, "mod 行がありません"); free_lines(ls, n); return -1; }
     t->func = cell_value(&ls[i], 1);

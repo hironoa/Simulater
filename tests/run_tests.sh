@@ -117,6 +117,44 @@ err_case bad_mod.csv "入力数）'x' が数値ではありません"
 # 64 ビットを超える 10 進は飽和させて別の値（-1 = 255）にしない
 err_case big_decimal.csv "4 列目 'g_mode': 'g_mode' に書く値が 64 ビットの整数の範囲を超えています"
 
+echo "== 文字コードと行の識別（ブロックを黙って無視しない）"
+# UTF-8 の BOM は行の識別では読み飛ばし、結果 CSV には BOM を含めて元のバイト列のまま写す
+run_cmp bom_mul16.csv 1
+"$SIM" run "$T/csv/bom_mul16.csv" -o "$WORK/obom" --quiet > "$WORK/bom.log" 2>&1
+check "BOM 付きの CSV の先頭ブロックを実行する（総数 2, OK 1, NG 1）" contains "$WORK/bom.log" "合計: 総数 2, OK 1, NG 1, NO Check 0"
+check "BOM 付きの結果 CSV の先頭 3 バイトが BOM のまま" sh -c "[ \"\$(head -c 3 '$WORK/out_bom_mul16/bom_mul16.csv' | od -An -tx1 | tr -d ' \n')\" = efbbbf ]"
+"$SIM" run "$WORK/out_bom_mul16/bom_mul16.csv" -o "$WORK/obom_rb" --fixed-time --quiet > "$WORK/bom_rb.log" 2>&1
+RC=$?
+check "BOM 付きの結果 CSV を読み直しても同じ結果（終了コード 1、総数 2, NG 1）" sh -c "[ $RC -eq 1 ] && grep -F -q '合計: 総数 2, OK 1, NG 1, NO Check 0' '$WORK/bom_rb.log' && cmp -s '$WORK/obom_rb/bom_mul16.csv' '$T/expected/bom_mul16.csv'"
+err_case utf16le_bom.csv "UTF-16 の CSV には対応していません"
+err_case utf16be_bom.csv "UTF-16 の CSV には対応していません"
+err_case nul_byte.csv "nul_byte.csv:3: NUL バイト（0x00）を含む行があります"
+err_case no_mod.csv "no_mod.csv: mod 行がありません"
+err_case no_comment.csv "mod 'mul16' に #COMMENT 行がありません"
+# 大文字小文字・前後の空白とタブ・二重引用符・行頭の全角空白（UTF-8 / Shift_JIS）・末尾の余分なカンマを受け付ける
+run_cmp lenient_ident.csv 0
+"$SIM" run "$T/csv/lenient_ident.csv" -o "$WORK/olen" --quiet > "$WORK/len.log" 2>&1
+check "mod / #COMMENT の表記揺れの 8 ブロックをすべて実行する（総数 8, OK 8）" contains "$WORK/len.log" "合計: 総数 8, OK 8, NG 0, NO Check 0"
+# CR だけの改行と、改行のない最終行
+run_cmp cr_only.csv 0
+"$SIM" run "$T/csv/cr_only.csv" -o "$WORK/ocr" --quiet > "$WORK/cr.log" 2>&1
+check "CR だけの改行・改行のない最終行も実行する（総数 2, OK 2）" contains "$WORK/cr.log" "合計: 総数 2, OK 2, NG 0, NO Check 0"
+# 実行するデータ行が 0 行のブロックはエラーにせず警告（コメントアウトだけの雛形を壊さない）
+run_cmp only_comments.csv 0
+"$SIM" run "$T/csv/only_comments.csv" -o "$WORK/ooc" --quiet > "$WORK/oc.log" 2>&1
+check "データ行が 0 行のブロックを警告する" contains "$WORK/oc.log" "警告: $T/csv/only_comments.csv:1: mod 'mul16' に実行するデータ行がありません"
+# 最初の mod 行より前のデータらしい行は警告する
+run_cmp data_before_mod.csv 0
+"$SIM" run "$T/csv/data_before_mod.csv" -o "$WORK/odb" --quiet > "$WORK/db.log" 2>&1
+check "最初の mod 行より前のデータらしい行を警告する" contains "$WORK/db.log" "警告: $T/csv/data_before_mod.csv:1: 最初の mod 行より前に、どのテストにも属さない行があります（1〜2 行目）"
+# 複数のファイル: ほかのファイルは実行を続け、最後の終了コードに反映する
+"$SIM" run "$T/csv/err/no_mod.csv" "$T/csv/unit_all.csv" -o "$WORK/omulti" --quiet > "$WORK/multi.log" 2>&1
+RC=$?
+check "mod 行のないファイルと正常なファイル: 正常な方は実行して終了コード 2" sh -c "[ $RC -eq 2 ] && [ -f '$WORK/omulti/unit_all.csv' ] && grep -F -q '合計: 総数 35, OK 35, NG 0, NO Check 0, エラー 1' '$WORK/multi.log'"
+"$SIM" run "$T/csv/only_comments.csv" "$T/csv/ng_case.csv" -o "$WORK/omulti2" --quiet > "$WORK/multi2.log" 2>&1
+RC=$?
+check "データ行が 0 行のファイルと NG のファイル: 警告は終了コードを変えない（1）" test "$RC" -eq 1
+
 echo "== 数値の範囲と表記（黙って別の値にしない）"
 "$SIM" run "$T/csv/err/num_range.csv" -o "$WORK/onr" --quiet > "$WORK/nr.log" 2>&1
 RC=$?
@@ -597,6 +635,17 @@ data: {"periodMs":2,"func":"TEST_cycle","names":["g_eng.state","TEST_cycle_cnt",
     check "/api/symbols の limit=10x は 400" test "$CODE" = 400
     CODE=$(curl -s -o "$WORK/nv9.out" -w '%{http_code}' -X POST -H 'Content-Length: 12abc' --data-binary '{"names":[]}' "$U/api/watch")
     check "Content-Length が数値でなければ 400" test "$CODE" = 400
+
+    # BOM 付きの CSV も読み込める（先頭の mod 行を見つける）。UTF-16 は分かるエラーで 400
+    CODE=$(curl -s -o "$WORK/lbom.out" -w '%{http_code}' -X POST --data-binary "@$T/gui/play_bom.csv" "$U/api/load-csv")
+    check "/api/load-csv で BOM 付きの CSV が 200（2 行）" sh -c "[ '$CODE' = 200 ] && grep -F -q '{\"rows\":2,\"names\":[\"@a\",\"@b\",\"mul16@@\"]}' '$WORK/lbom.out'"
+    i=0
+    while [ $i -lt 50 ]; do
+        curl -s "$U/api/info" | grep -q '"running":false' && break
+        i=$((i + 1)); sleep 0.1
+    done
+    CODE=$(curl -s -o "$WORK/lu16.out" -w '%{http_code}' -X POST --data-binary "@$T/gui/play_utf16.csv" "$U/api/load-csv")
+    check "/api/load-csv で UTF-16 の CSV は分かるエラーで 400" sh -c "[ '$CODE' = 400 ] && grep -F -q 'UTF-16 の CSV には対応していません' '$WORK/lu16.out'"
 
     PORT_USED_LOG="$WORK/gui2.log"
     "$SIM" gui --no-browser --port "$PORT" > "$PORT_USED_LOG" 2>&1
