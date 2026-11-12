@@ -209,10 +209,11 @@ static int step_in_cmp(const void *a, const void *b)
  *     だけを書く。記録は 1 列 1 セルなので、前のものも書くと '$' の確保が二重になる・長い文字列の残りが残るなど、
  *     再実行と合わなくなる
  *   - 空の値（空セル）は書かず、記録もしない */
-static void apply_inputs_locked(char **in, int *nin)
+static int apply_inputs_locked(char **in, int *nin)
 {
     char err[1024];
-    int i, j, n = 0, cap = G.npend + G.nholds + (G.play_active ? G.play.nin : 0) + 1;
+    int i, j, failed = 0, npv = G.play_active ? G.play.nin : 0;
+    int n = 0, cap = G.npend + G.nholds + (G.play_active ? G.play.nin : 0) + 1;
     step_in_t *v = sim_xcalloc((size_t)cap, sizeof *v);
     sim_cellval *pv = sim_xcalloc((size_t)(G.play_active ? G.play.nin : 0) + 1, sizeof *pv);
     for (i = 0; i < G.npend; i++) {
@@ -231,41 +232,61 @@ static void apply_inputs_locked(char **in, int *nin)
             if (!row[i] || !G.play_refs[i]) continue;
             if (sim_parse_cell(row[i], strlen(row[i]), &pv[i], err, sizeof err)) {
                 char m[1200];
-                snprintf(m, sizeof m, "CSV %d 行目のデータ: %s", G.play_pos + 1, err);
+                snprintf(m, sizeof m, "CSV %d 行目のデータ、入力 '%.128s' 値 '%.128s': %.800s",
+                         G.play_pos + 1, G.play.names[i], row[i], err);
                 set_error(m);
-                continue;
+                failed = 1;
+                goto done;
             }
             if (!sim_cellval_present(&pv[i])) continue;
             v[n].col = G.play_col_ids[i]; v[n].seq = n; v[n].ref = G.play_refs[i]; v[n].val = &pv[i];
             v[n].text = row[i]; v[n].play_row = G.play_pos + 1; n++;
         }
-        G.play_pos++;
     }
     qsort(v, (size_t)n, sizeof *v, step_in_cmp);
-    for (i = 0; i < n; i = j) {
-        step_in_t *w;
-        for (j = i + 1; j < n && v[j].col == v[i].col; j++) {}
-        w = &v[j - 1];   /* 同じ列の最後のもの */
-        if (sim_ref_write(G.c, w->ref, w->val, err, sizeof err)) {
-            if (w->play_row) {
+    /* 型・値の検証をすべて済ませてから書く。メモリ依存の失敗は書く時点で分かる。 */
+    for (int pass = 0; pass < 2 && !failed; pass++) {
+        for (i = 0; i < n; i = j) {
+            step_in_t *w;
+            for (j = i + 1; j < n && v[j].col == v[i].col; j++) {}
+            w = &v[j - 1];   /* 同じ列の最後のもの */
+            if (pass == 0 ? sim_ref_check_value(w->ref, w->val, err, sizeof err) :
+                            sim_ref_write(G.c, w->ref, w->val, err, sizeof err)) {
                 char m[1200];
-                snprintf(m, sizeof m, "CSV %d 行目のデータ: %s", w->play_row, err);
+                int row = w->play_row ? w->play_row : (G.play_active ? G.play_pos + 1 : 0);
+                if (row) {
+                    snprintf(m, sizeof m, "CSV %d 行目のデータ、入力 '%.128s' 値 '%.128s': %.800s",
+                             row, G.in_cols[w->col], w->text, err);
+                } else {
+                    snprintf(m, sizeof m, "入力 '%.128s' 値 '%.128s': %.800s",
+                             G.in_cols[w->col], w->text, err);
+                }
                 set_error(m);
-            } else {
-                set_error(err);
+                failed = 1;
+                break;
             }
-        } else {
-            rec_set_in(in, nin, w->col, w->text);
+            if (pass == 1) rec_set_in(in, nin, w->col, w->text);
         }
     }
+done:
     free(v);
-    for (i = 0; i < (G.play_active ? G.play.nin : 0); i++) sim_cellval_free(&pv[i]);
+    for (i = 0; i < npv; i++) sim_cellval_free(&pv[i]);
     free(pv);
     if (G.npend) {
         for (i = 0; i < G.npend; i++) free_pend(&G.pend[i]);
         G.npend = 0;
         state_changed();   /* state の pending が空になる */
     }
+    if (failed) {
+        G.running = 0;
+        G.budget = 0;
+        G.play_active = 0;
+        state_changed();
+        values_changed();   /* 書き込み途中の失敗でメモリが変わった可能性がある */
+        return -1;
+    }
+    if (G.play_active) G.play_pos++;
+    return 0;
 }
 
 static void do_step_locked(void)
@@ -273,7 +294,11 @@ static void do_step_locked(void)
     char err[1024];
     char **in = sim_xcalloc((size_t)G.nin_cols + 1, sizeof *in);
     int i, nin = 0;
-    apply_inputs_locked(in, &nin);
+    if (apply_inputs_locked(in, &nin)) {
+        for (i = 0; i < G.nin_cols; i++) free(in[i]);
+        free(in);
+        return;
+    }
     if (sim_ctx_func(G.c)) {
         if (sim_ctx_call(G.c, err, sizeof err)) { set_error(err); G.running = 0; G.budget = 0; }
     }
@@ -284,6 +309,7 @@ static void do_step_locked(void)
     if (G.play_active && G.play_pos >= G.play.nrows) {
         G.play_active = 0;
         G.running = 0;
+        G.budget = 0;
         state_changed();
     }
 }
@@ -1315,6 +1341,11 @@ static void api_load_csv(sim_sock s, req_t *r)
     const sim_func *nf = NULL, *f;
     sim_ref **refs;
     if (sim_csv_load_table(r->body, r->body_len, &t, err, sizeof err)) { send_error(s, 400, err); return; }
+    if (t.nrows == 0) {
+        sim_csv_table_free(&t);
+        send_error(s, 400, "再生するデータ行がありません（先頭の mod ブロック）");
+        return;
+    }
     /* 同じ名前（前後の空白を除いて完全一致）の入力列が複数あれば、何も変えずに 400。
      * GUI の記録は入力 1 名 = 1 列（同じステップで同じ列に書いたら最後の値）なので、sim run のように
      * 左から順に別々に書く動作を再現できず、保存した CSV とも往復しない。表記が違うだけで同じメモリを指す列
@@ -1359,6 +1390,28 @@ static void api_load_csv(sim_sock s, req_t *r)
             sim_mutex_unlock(G.mu);
             send_error(s, 400, m);
             return;
+        }
+    }
+    /* 全データ行を状態を変えずに検証する（ポインタの先などは再生時に判定）。 */
+    for (int row = 0; row < t.nrows; row++) {
+        for (i = 0; i < t.nin; i++) {
+            sim_cellval val;
+            const char *text = t.cells[row][i] ? t.cells[row][i] : "";
+            int bad = sim_parse_cell(text, strlen(text), &val, err, sizeof err);
+            if (!bad) bad = sim_ref_check_value(refs[i], &val, err, sizeof err);
+            sim_cellval_free(&val);
+            if (bad) {
+                char m[1200];
+                int k;
+                snprintf(m, sizeof m, "CSV %d 行目のデータ、入力 %d 列目 '%.128s' 値 '%.128s': %.800s",
+                         row + 1, i + 2, t.names[i], text, err);
+                for (k = 0; k < t.nin; k++) sim_ref_free(refs[k]);
+                free(refs);
+                sim_csv_table_free(&t);
+                sim_mutex_unlock(G.mu);
+                send_error(s, 400, m);
+                return;
+            }
         }
     }
     G.running = 0;

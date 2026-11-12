@@ -615,6 +615,111 @@ ping -n 2 127.0.0.1 >nul
 curl -s -X POST --data-binary "@%T%\gui\play_utf16.csv" "%U%/api/load-csv" > "%WORK%\lu16.out"
 findstr /l /c:"UTF" "%WORK%\lu16.out" >nul
 if errorlevel 1 (call :ng "/api/load-csv rejects UTF-16 with a clear message") else (call :ok "/api/load-csv rejects UTF-16 with a clear message")
+rem Rejected input cells and empty CSV files must leave all state untouched.
+curl -s -X POST --data-binary "@%T%\gui\release_adc.json" "%U%/api/write" > "%WORK%\er.out"
+curl -s -X POST --data-binary "@%T%\gui\release_ign.json" "%U%/api/write" > "%WORK%\er.out"
+curl -s -X POST --data-binary "@%T%\gui\reset_func_cycle.json" "%U%/api/control" > "%WORK%\er.out"
+curl -s -X POST --data-binary "@%T%\gui\watch_call_cnt.json" "%U%/api/watch" > "%WORK%\er.out"
+curl -s -X POST --data-binary "@%T%\gui\step1.json" "%U%/api/control" > "%WORK%\er.out"
+curl -s "%U%/api/info" > "%WORK%\reject_info0"
+curl -s "%U%/api/export.csv" > "%WORK%\reject_csv0"
+set "CODE="
+for /f "usebackq delims=" %%C in (`curl -s -o "%WORK%\reject.out" -w "%%{http_code}" -X POST --data-binary "@%T%\gui\play_out_of_range.csv" "%U%/api/load-csv"`) do set "CODE=%%C"
+if "%CODE%"=="400" (call :ok "play_out_of_range returns 400") else (call :ng "play_out_of_range returns 400: got %CODE%")
+findstr /l /c:"999999" "%WORK%\reject.out" >nul
+if errorlevel 1 (call :ng "play_out_of_range reports the rejected value or error") else (call :ok "play_out_of_range reports the rejected value or error")
+curl -s "%U%/api/info" > "%WORK%\reject_info1"
+fc /b "%WORK%\reject_info0" "%WORK%\reject_info1" >nul
+if errorlevel 1 (call :ng "play_out_of_range leaves info unchanged") else (call :ok "play_out_of_range leaves info unchanged")
+curl -s "%U%/api/export.csv" > "%WORK%\reject_csv1"
+fc /b "%WORK%\reject_csv0" "%WORK%\reject_csv1" >nul
+if errorlevel 1 (call :ng "play_out_of_range leaves export.csv unchanged") else (call :ok "play_out_of_range leaves export.csv unchanged")
+curl -s "%U%/api/info" > "%WORK%\reject_info0"
+curl -s "%U%/api/export.csv" > "%WORK%\reject_csv0"
+set "CODE="
+for /f "usebackq delims=" %%C in (`curl -s -o "%WORK%\reject.out" -w "%%{http_code}" -X POST --data-binary "@%T%\gui\play_bad_value.csv" "%U%/api/load-csv"`) do set "CODE=%%C"
+if "%CODE%"=="400" (call :ok "play_bad_value returns 400") else (call :ng "play_bad_value returns 400: got %CODE%")
+findstr /l /c:"abc" "%WORK%\reject.out" >nul
+if errorlevel 1 (call :ng "play_bad_value reports the rejected value or error") else (call :ok "play_bad_value reports the rejected value or error")
+curl -s "%U%/api/info" > "%WORK%\reject_info1"
+fc /b "%WORK%\reject_info0" "%WORK%\reject_info1" >nul
+if errorlevel 1 (call :ng "play_bad_value leaves info unchanged") else (call :ok "play_bad_value leaves info unchanged")
+curl -s "%U%/api/export.csv" > "%WORK%\reject_csv1"
+fc /b "%WORK%\reject_csv0" "%WORK%\reject_csv1" >nul
+if errorlevel 1 (call :ng "play_bad_value leaves export.csv unchanged") else (call :ok "play_bad_value leaves export.csv unchanged")
+curl -s "%U%/api/info" > "%WORK%\reject_info0"
+curl -s "%U%/api/export.csv" > "%WORK%\reject_csv0"
+set "CODE="
+for /f "usebackq delims=" %%C in (`curl -s -o "%WORK%\reject.out" -w "%%{http_code}" -X POST --data-binary "@%T%\gui\play_empty.csv" "%U%/api/load-csv"`) do set "CODE=%%C"
+if "%CODE%"=="400" (call :ok "play_empty returns 400") else (call :ng "play_empty returns 400: got %CODE%")
+findstr /l /c:"error" "%WORK%\reject.out" >nul
+if errorlevel 1 (call :ng "play_empty reports the rejected value or error") else (call :ok "play_empty reports the rejected value or error")
+curl -s "%U%/api/info" > "%WORK%\reject_info1"
+fc /b "%WORK%\reject_info0" "%WORK%\reject_info1" >nul
+if errorlevel 1 (call :ng "play_empty leaves info unchanged") else (call :ok "play_empty leaves info unchanged")
+curl -s "%U%/api/export.csv" > "%WORK%\reject_csv1"
+fc /b "%WORK%\reject_csv0" "%WORK%\reject_csv1" >nul
+if errorlevel 1 (call :ng "play_empty leaves export.csv unchanged") else (call :ok "play_empty leaves export.csv unchanged")
+curl -s -X POST --data-binary "@%T%\gui\period_slow.json" "%U%/api/control" > "%WORK%\er.out"
+curl -s -X POST --data-binary "@%T%\gui\play_null.csv" "%U%/api/load-csv" > "%WORK%\null_load.out"
+findstr /l /c:"rows" "%WORK%\null_load.out" >nul
+if errorlevel 1 (call :ng "memory dependent input loads successfully") else (call :ok "memory dependent input loads successfully")
+ping -n 2 127.0.0.1 >nul
+curl -s -X POST --data-binary "@%T%\gui\pause.json" "%U%/api/control" > "%WORK%\er.out"
+curl -s -X POST --data-binary "@%T%\gui\step5.json" "%U%/api/control" > "%WORK%\null_step.out"
+findstr /l /c:"NULL" "%WORK%\null_step.out" >nul
+if errorlevel 1 (call :ng "failed CSV step reports NULL") else (call :ok "failed CSV step reports NULL")
+findstr /l /c:"7" "%WORK%\null_step.out" >nul
+if errorlevel 1 (call :ng "failed CSV step reports value") else (call :ok "failed CSV step reports value")
+findstr /l /c:"stepsDone" "%WORK%\null_step.out" >nul
+if errorlevel 1 (call :ng "failed CSV step reports stepsDone") else (call :ok "failed CSV step reports stepsDone")
+powershell -NoProfile -Command "$s=Get-Content -Raw '%WORK%\null_step.out' | ConvertFrom-Json; if ($s.stepsDone -eq 1 -and $s.step -eq 2 -and !$s.running -and !$s.playback -and !$s.timedOut -and $s.error.Contains('CSV 3')) {exit 0} else {exit 1}" >nul
+if errorlevel 1 (call :ng "step N stops at the failing data row") else (call :ok "step N stops at the failing data row")
+curl -s "%U%/api/export.csv" > "%WORK%\null_export.csv"
+"%SIM%" run "%WORK%\null_export.csv" -o "%WORK%\onull_export" --quiet > "%WORK%\null_export.log" 2>&1
+set RC=%ERRORLEVEL%
+findstr /l /c:"OK 2, NG 0, NO Check 0" "%WORK%\null_export.log" >nul
+if errorlevel 1 (call :ng "failed cycle adds no call or record and two rows re-run OK") else if "%RC%"=="0" (call :ok "failed cycle adds no call or record and two rows re-run OK") else (call :ng "failed cycle adds no call or record and two rows re-run OK: exit %RC%")
+curl -s -X POST --data-binary "@%T%\gui\write_null.json" "%U%/api/write" > "%WORK%\er.out"
+curl -s -X POST --data-binary "@%T%\gui\step5.json" "%U%/api/control" > "%WORK%\null_write.out"
+findstr /l /c:"NULL" "%WORK%\null_write.out" >nul
+if errorlevel 1 (call :ng "write_null reports NULL") else (call :ok "write_null reports NULL")
+powershell -NoProfile -Command "$s=Get-Content -Raw '%WORK%\null_write.out' | ConvertFrom-Json; if ($s.stepsDone -eq 0 -and $s.step -eq 2 -and !$s.running) {exit 0} else {exit 1}" >nul
+if errorlevel 1 (call :ng "write_null stops without advancing") else (call :ok "write_null stops without advancing")
+curl -s "%U%/api/export.csv" > "%WORK%\null_after.csv"
+fc /b "%WORK%\null_export.csv" "%WORK%\null_after.csv" >nul
+if errorlevel 1 (call :ng "write_null adds no record") else (call :ok "write_null adds no record")
+curl -s -X POST --data-binary "@%T%\gui\release_null.json" "%U%/api/write" > "%WORK%\er.out"
+curl -s -X POST --data-binary "@%T%\gui\hold_null.json" "%U%/api/write" > "%WORK%\er.out"
+curl -s -X POST --data-binary "@%T%\gui\step5.json" "%U%/api/control" > "%WORK%\null_write.out"
+findstr /l /c:"NULL" "%WORK%\null_write.out" >nul
+if errorlevel 1 (call :ng "hold_null reports NULL") else (call :ok "hold_null reports NULL")
+powershell -NoProfile -Command "$s=Get-Content -Raw '%WORK%\null_write.out' | ConvertFrom-Json; if ($s.stepsDone -eq 0 -and $s.step -eq 2 -and !$s.running) {exit 0} else {exit 1}" >nul
+if errorlevel 1 (call :ng "hold_null stops without advancing") else (call :ok "hold_null stops without advancing")
+curl -s "%U%/api/export.csv" > "%WORK%\null_after.csv"
+fc /b "%WORK%\null_export.csv" "%WORK%\null_after.csv" >nul
+if errorlevel 1 (call :ng "hold_null adds no record") else (call :ok "hold_null adds no record")
+curl -s -X POST --data-binary "@%T%\gui\release_null.json" "%U%/api/write" > "%WORK%\er.out"
+curl -s -X POST --data-binary "@%T%\gui\watch_call_cnt.json" "%U%/api/watch" >nul
+curl -s -N --max-time 0.3 "%U%/api/stream" > "%WORK%\null_values" 2>nul
+powershell -NoProfile -Command "$v=Get-Content '%WORK%\null_values' | Where-Object {$_ -like 'data: *values*'} | Select-Object -First 1; $s=$v.Substring(6) | ConvertFrom-Json; if ($s.values.Count -eq 1 -and $s.values[0] -eq 2) {exit 0} else {exit 1}" >nul
+if errorlevel 1 (call :ng "failed CSV and writes never call the function") else (call :ok "failed CSV and writes never call the function")
+curl -s -X POST --data-binary "@%T%\gui\period_normal.json" "%U%/api/control" > "%WORK%\er.out"
+curl -s -X POST --data-binary "@%T%\gui\play_null.csv" "%U%/api/load-csv" >nul
+ping -n 2 127.0.0.1 >nul
+curl -s "%U%/api/info" > "%WORK%\null_auto_info"
+powershell -NoProfile -Command "$s=Get-Content -Raw '%WORK%\null_auto_info' | ConvertFrom-Json; if ($s.state.step -eq 2 -and !$s.state.running -and !$s.state.playback -and $s.state.error.Contains('NULL')) {exit 0} else {exit 1}" >nul
+if errorlevel 1 (call :ng "running CSV stops on input failure") else (call :ok "running CSV stops on input failure")
+curl -s -X POST --data-binary "@%T%\gui\play_three.csv" "%U%/api/load-csv" > "%WORK%\er.out"
+ping -n 2 127.0.0.1 >nul
+curl -s "%U%/api/info" > "%WORK%\three_info"
+powershell -NoProfile -Command "$s=Get-Content -Raw '%WORK%\three_info' | ConvertFrom-Json; if ($s.state.step -eq 3 -and !$s.state.running -and !$s.state.playback) {exit 0} else {exit 1}" >nul
+if errorlevel 1 (call :ng "three CSV rows finish paused at step three") else (call :ok "three CSV rows finish paused at step three")
+curl -s "%U%/api/export.csv" > "%WORK%\three_export.csv"
+"%SIM%" run "%WORK%\three_export.csv" -o "%WORK%\othree_export" --quiet > "%WORK%\three_export.log" 2>&1
+set RC=%ERRORLEVEL%
+findstr /l /c:"OK 3, NG 0, NO Check 0" "%WORK%\three_export.log" >nul
+if errorlevel 1 (call :ng "three CSV rows produce exactly three OK records") else if "%RC%"=="0" (call :ok "three CSV rows produce exactly three OK records") else (call :ng "three CSV rows produce exactly three OK records: exit %RC%")
 rem a long period wait wakes on /api/control: with periodMs 5000, run (the first step runs at once), pause, then step
 rem answers without waiting for the end of the period and advances to step 2
 curl -s --max-time 2 -X POST --data-binary "@%T%\gui\reset.json" "%U%/api/control" > nul

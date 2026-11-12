@@ -753,6 +753,74 @@ data: {"periodMs":2,"func":"TEST_cycle","names":["g_eng.state","TEST_cycle_cnt",
     CODE=$(curl -s -o "$WORK/lu16.out" -w '%{http_code}' -X POST --data-binary "@$T/gui/play_utf16.csv" "$U/api/load-csv")
     check "/api/load-csv で UTF-16 の CSV は分かるエラーで 400" sh -c "[ '$CODE' = 400 ] && grep -F -q 'UTF-16 の CSV には対応していません' '$WORK/lu16.out'"
 
+    # 入力エラーの拒否は原子的。先頭ブロックが空でも再生しない。
+    post release_adc.json er.out /api/write > /dev/null
+    post release_ign.json er.out /api/write > /dev/null
+    post reset_func_cycle.json er.out /api/control > /dev/null
+    post watch_call_cnt.json er.out /api/watch > /dev/null
+    post step1.json er.out /api/control > /dev/null
+    for fixture in play_out_of_range play_bad_value play_empty; do
+        curl -s "$U/api/info" > "$WORK/reject_info0"
+        curl -s "$U/api/export.csv" > "$WORK/reject_csv0"
+        CODE=$(post "$fixture.csv" reject.out /api/load-csv)
+        check "$fixture は 400" test "$CODE" = 400
+        if [ "$fixture" != play_empty ]; then
+            check "$fixture のエラーは入力名・値・データ行・列を示す" sh -c "grep -F -q '@a' '$WORK/reject.out' && grep -F -q '列目' '$WORK/reject.out' && grep -F -q '行目' '$WORK/reject.out'"
+        else
+            check "空 CSV のエラーはデータ行がない旨" contains "$WORK/reject.out" '再生するデータ行がありません'
+        fi
+        curl -s "$U/api/info" > "$WORK/reject_info1"
+        curl -s "$U/api/export.csv" > "$WORK/reject_csv1"
+        check "$fixture 拒否で info 不変" cmp -s "$WORK/reject_info0" "$WORK/reject_info1"
+        check "$fixture 拒否で記録不変" cmp -s "$WORK/reject_csv0" "$WORK/reject_csv1"
+    done
+
+    # 1 周期目だけ自動再生してから step 5。3 行目の NULL 書き込みで止まり、進むのは 1 周期だけ。
+    post period_slow.json er.out /api/control > /dev/null
+    CODE=$(post play_null.csv null_load.out /api/load-csv)
+    check "メモリ依存の入力は読み込み時には拒否しない" test "$CODE" = 200
+    sleep 0.2
+    post pause.json er.out /api/control > /dev/null
+    post step5.json null_step.out /api/control > /dev/null
+    check "step N は入力失敗で中断し進んだ数を返す" contains "$WORK/null_step.out" '"stepsDone":1,"timedOut":false'
+    check "CSV 入力失敗は名前・値・理由・データ行を返し停止" sh -c "grep -F -q 'CSV 3' '$WORK/null_step.out' && grep -F -q '*gp_log' '$WORK/null_step.out' && grep -F -q '7' '$WORK/null_step.out' && grep -F -q 'NULL' '$WORK/null_step.out' && grep -F -q '\"running\":false' '$WORK/null_step.out' && grep -F -q '\"playback\":false' '$WORK/null_step.out' && grep -F -q '\"step\":2' '$WORK/null_step.out'"
+    curl -s "$U/api/export.csv" > "$WORK/null_export.csv"
+    "$SIM" run "$WORK/null_export.csv" -o "$WORK/onull" --quiet > "$WORK/null_run.log" 2>&1
+    RC=$?
+    check "失敗周期は呼び出しも記録も増えず 2 行 OK で再実行" sh -c "[ $RC -eq 0 ] && grep -F -q 'OK 2, NG 0, NO Check 0' '$WORK/null_run.log'"
+    for fixture in write_null hold_null; do
+        post "$fixture.json" er.out /api/write > /dev/null
+        post step5.json null_write.out /api/control > /dev/null
+        check "$fixture の入力失敗は step 0 で停止し理由を返す" sh -c "grep -F -q '\"stepsDone\":0' '$WORK/null_write.out' && grep -F -q '\"running\":false' '$WORK/null_write.out' && grep -F -q 'NULL' '$WORK/null_write.out' && grep -F -q '*gp_log' '$WORK/null_write.out'"
+        curl -s "$U/api/export.csv" > "$WORK/null_after.csv"
+        check "$fixture の失敗周期は記録を追加しない" cmp -s "$WORK/null_export.csv" "$WORK/null_after.csv"
+        post release_null.json er.out /api/write > /dev/null
+    done
+    post watch_call_cnt.json er.out /api/watch > /dev/null
+    curl -s -N --max-time 0.3 "$U/api/stream" > "$WORK/null_values" 2>/dev/null
+    check "失敗した CSV・単発・固定の周期で関数カウンタが増えない" contains "$WORK/null_values" '"values":[2]'
+    post period_normal.json er.out /api/control > /dev/null
+    post play_null.csv er.out /api/load-csv > /dev/null
+    i=0
+    while [ $i -lt 50 ]; do
+        curl -s "$U/api/info" > "$WORK/null_auto_info"
+        grep -q '"running":false' "$WORK/null_auto_info" && break
+        i=$((i + 1)); sleep 0.1
+    done
+    check "実行中の CSV 入力失敗でも step 2 で再生停止" sh -c "grep -F -q '\"step\":2' '$WORK/null_auto_info' && grep -F -q '\"running\":false' '$WORK/null_auto_info' && grep -F -q '\"playback\":false' '$WORK/null_auto_info' && grep -F -q 'NULL' '$WORK/null_auto_info'"
+    post play_three.csv er.out /api/load-csv > /dev/null
+    i=0
+    while [ $i -lt 50 ]; do
+        curl -s "$U/api/info" > "$WORK/three_info"
+        grep -q '"running":false' "$WORK/three_info" && break
+        i=$((i + 1)); sleep 0.1
+    done
+    check "N 行 CSV は N 周期で再生を終えて一時停止" sh -c "grep -F -q '\"step\":3' '$WORK/three_info' && grep -F -q '\"running\":false' '$WORK/three_info' && grep -F -q '\"playback\":false' '$WORK/three_info'"
+    curl -s "$U/api/export.csv" > "$WORK/three_export.csv"
+    "$SIM" run "$WORK/three_export.csv" -o "$WORK/othree" --quiet > "$WORK/three_run.log" 2>&1
+    RC=$?
+    check "N 行 CSV の記録は余分な周期なしで 3 行 OK" sh -c "[ $RC -eq 0 ] && grep -F -q 'OK 3, NG 0, NO Check 0' '$WORK/three_run.log'"
+
     # 長い周期の待機は /api/control で起こせる。周期 5000ms で run（1 ステップ目はすぐ）→ pause → step が
     # 周期の終わりを待たずに応答し、ステップが 2 に進む（直す前は周期の終わりまで約 4.7 秒待たされた）
     ctl() { curl -s -o "$WORK/$2" -w '%{http_code}' --max-time "$3" -X POST --data-binary "@$T/gui/$1" "$U/api/control"; }
