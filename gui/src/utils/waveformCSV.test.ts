@@ -1,7 +1,13 @@
 import { readFileSync } from "node:fs";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { classifyReload } from "./classifyReload";
 import { decodeWaveformCSV } from "./waveformCSV";
+
+vi.mock("react-hot-toast", () => ({ default: Object.assign(vi.fn(), { error: vi.fn(), success: vi.fn() }) }));
+import toast from "react-hot-toast";
+import { useWaveformStore } from "../store/useWaveformStore";
+
+const multiBlock = 'mod,eng_judge_gear,test,1,1\n#COMMENT,@rpm,eng_judge_gear@@\n,900,3\n;mod,ignored,comment,0,0\n "MoD" ,calc_duty,test,1,2\n#COMMENT,@temp,calc_duty@@,name\n,90,0.25,1\n';
 
 const sample = (name: string) =>
   readFileSync(new URL(`../../docs/samples/compare/${name}`, import.meta.url), "utf8");
@@ -13,6 +19,31 @@ function expectAligned(decoded: ReturnType<typeof decodeWaveformCSV>) {
 }
 
 describe("decodeWaveformCSV", () => {
+  it("複数 mod ブロックは先頭だけを読み、総数を errors とは別に警告する", () => {
+    const d = decodeWaveformCSV(multiBlock);
+    expect(d.chartData).toEqual({ steps: [1], seriesMap: { "@rpm": [900], "eng_judge_gear@@": [3] } });
+    expect(d.errors).toEqual([]);
+    expect(d.warnings).toHaveLength(1);
+    expect(d.warnings[0]).toContain("2 個");
+    expect(d.warnings[0]).toContain("先頭のブロックだけを表示");
+  });
+
+  it("mod がない複数 #COMMENT は2つ目から除外し、総数を警告する", () => {
+    const d = decodeWaveformCSV("#COMMENT,A\n0,7\n#COMMENT,B\n0,99\n#COMMENT,C\n0,100\n");
+    expect(d.chartData).toEqual({ steps: [1], seriesMap: { A: [7] } });
+    expect(d.errors).toEqual([]);
+    expect(d.warnings[0]).toContain("3 個");
+  });
+
+  it.each(["parseWaveformCSV", "loadCompareCSV"] as const)("%s は読込を成功させ、警告を表示する", (method) => {
+    vi.mocked(toast).mockClear();
+    expect(useWaveformStore.getState()[method](multiBlock, "multi.csv")).toBe(true);
+    expect(toast).toHaveBeenCalledWith(expect.stringContaining("2 個"), expect.any(Object));
+    const state = useWaveformStore.getState();
+    const data = method === "parseWaveformCSV" ? state.chartData : state.compareChartData;
+    expect(data?.seriesMap["eng_judge_gear@@"]).toEqual([3]);
+  });
+
   it("同じ変数の入力列と出力列は、mod 行から出力側の列を採る", () => {
     const d = decodeWaveformCSV("mod,main,GUI記録,2,2\r\n#COMMENT,P1,P2,P2,P1\r\n,7,1,2,9\r\n,,3,4,8\r\n");
     expect(d.headers).toEqual(["P1", "P2"]);
@@ -29,6 +60,7 @@ describe("decodeWaveformCSV", () => {
 
   it("mod 行がなければ同名の列は最後の列を採る", () => {
     const d = decodeWaveformCSV("#COMMENT,A,B,A\n0,1,10,2\n1,3,11,4\n");
+    expect(d.warnings).toEqual([]);
     expect(d.headers).toEqual(["A", "B"]);
     expect(d.chartData.seriesMap).toEqual({ A: [2, 4], B: [10, 11] });
     expectAligned(d);
@@ -82,6 +114,7 @@ describe("decodeWaveformCSV", () => {
       const d = decodeWaveformCSV(sample(name));
       expect(d.headerIdx).toBe(0);
       expect(d.errors).toEqual([]);
+      expect(d.warnings).toEqual([]);
       expect(d.headers).toContain("EngineSpeed");
       expect(d.headers.every((h) => !h.includes("/"))).toBe(true);
       expect(d.chartData.steps.length).toBeGreaterThan(0);
@@ -94,6 +127,14 @@ describe("decodeWaveformCSV", () => {
 });
 
 describe("classifyReload と同名の列", () => {
+  it.each([
+    ["mod,main,t,0,1\n#COMMENT,A\n,7\n", "mod,sub,t,0,1\n#COMMENT,B\n,99\n"],
+    ["#COMMENT,A\n0,7\n", "#COMMENT,B\n0,99\n"],
+  ])("後続ブロックの追加を先頭ブロックのデータ増加と扱わない", (first, second) => {
+    expect(classifyReload(first, first + second)).toBe("restart");
+    expect(decodeWaveformCSV(first + second).chartData).toEqual(decodeWaveformCSV(first).chartData);
+  });
+
   it("同名の列がある記録に行を足すと追記と判定する", () => {
     const head = "mod,main,GUI記録,1,1\r\n#COMMENT,P1,P1\r\n,7,7\r\n";
     expect(classifyReload(head, head + ",8,8\r\n")).toBe("append");

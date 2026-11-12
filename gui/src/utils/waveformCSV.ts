@@ -1,8 +1,10 @@
 import Papa from "papaparse";
 
+const rowKind = (row: string[]) => row[0]?.replaceAll('"', "").trim().toLowerCase();
+
 /** `mod,関数名,題名,入力数,出力数` の入力数・出力数。読めなければ null。 */
 function readModCounts(row: string[] | undefined): { inputs: number; outputs: number } | null {
-  if (!row || row[0]?.trim() !== "mod") return null;
+  if (!row || rowKind(row) !== "mod") return null;
   const count = (cell: string | undefined) => {
     const text = cell?.trim() ?? "";
     return /^\d+$/.test(text) ? Number(text) : null;
@@ -77,9 +79,17 @@ export function decodeWaveformCSV(text: string) {
     .filter((line) => !line.trim().startsWith(";"))
     .join("\n");
   const parsed = Papa.parse<string[]>(cleanText, { skipEmptyLines: true });
-  const headerIdx = parsed.data.findIndex((row) => row[0] === "#COMMENT");
+  const modIndices = parsed.data.flatMap((row, i) => rowKind(row) === "mod" ? [i] : []);
+  const commentIndices = parsed.data.flatMap((row, i) => row[0] === "#COMMENT" ? [i] : []);
+  const blockCount = modIndices.length || commentIndices.length;
+  const end = (modIndices.length ? modIndices[1] : commentIndices[1]) ?? parsed.data.length;
+  const start = modIndices[0] ?? 0;
+  const headerIdx = parsed.data.findIndex((row, i) => i >= start && i < end && row[0] === "#COMMENT");
   const rawHeaders = parsed.data[headerIdx] ?? [];
-  const dataRows = parsed.data.slice(headerIdx + 1);
+  const dataRows = headerIdx < 0 ? [] : parsed.data.slice(headerIdx + 1, end);
+  const warnings = blockCount > 1
+    ? [`CSV にブロックが ${blockCount} 個あります。先頭のブロックだけを表示し、2 つ目以降は表示しません。`]
+    : [];
 
   const columns: { name: string; colIdx: number }[] = [];
   for (let i = 1; i < rawHeaders.length; i++) {
@@ -102,5 +112,5 @@ export function decodeWaveformCSV(text: string) {
     picked.forEach(({ colIdx }, i) => seriesMap[headers[i]].push(cellValue(row[colIdx])));
   });
 
-  return { chartData: { seriesMap, steps }, headers, headerIdx, errors: parsed.errors };
+  return { chartData: { seriesMap, steps }, headers, headerIdx, warnings, errors: parsed.errors };
 }

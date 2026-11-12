@@ -253,11 +253,12 @@ export const useWaveformStore = create<WaveformStore>((set, get) => ({
     if (yamlContent) setTimeout(() => get().parseMappingData(yamlContent, "yaml", false), 0);
   },
   loadCompareCSV: (text, filename) => {
-    const { chartData, headerIdx, errors } = decodeWaveformCSV(text);
+    const { chartData, headerIdx, errors, warnings } = decodeWaveformCSV(text);
     if (headerIdx < 0 || errors.length > 0) {
       toast.error("比較するCSVを開けません: CSVの形式または#COMMENT行を確認してください。");
       return false;
     }
+    warnings.forEach((warning) => toast(warning, { duration: 10_000 }));
     set({ compareChartData: chartData, compareFileName: filename,
       compareRawCSVText: text, compareHandle: null, compareFileVersion: null, compareEnabled: true, focusedDiffIndex: -1 });
     return true;
@@ -485,7 +486,7 @@ export const useWaveformStore = create<WaveformStore>((set, get) => ({
   },
 
   parseWaveformCSV: (text, filename, options) => {
-    const { chartData, headers, headerIdx, errors } = decodeWaveformCSV(text);
+    const { chartData, headers, headerIdx, errors, warnings } = decodeWaveformCSV(text);
     const { steps } = chartData;
     if (options?.preserveView && errors.length > 0) {
       toast.error("再読み込みを見送りました: CSVの形式が不正です。", { id: "waveform-reload-parse" });
@@ -500,6 +501,8 @@ export const useWaveformStore = create<WaveformStore>((set, get) => ({
       }
       return false;
     }
+
+    warnings.forEach((warning) => toast(warning, { duration: 10_000 }));
 
     // Existing settings
     const existingSettings = get().signalSettings;

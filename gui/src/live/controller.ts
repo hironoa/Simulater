@@ -45,6 +45,12 @@ export function createLiveController(deps: LiveControllerDeps = {}) {
 
   /** いまの対象関数（変わったらリセットと同じく手元の記録を消す）。 */
   let knownFunc = "";
+  /** 応答待ちの記録切替。SSE の巻き戻りで既に新しい記録になったかを共有する。 */
+  let recordSwitch: { received: boolean } | null = null;
+
+  function finishRecordSwitch(change: { received: boolean }) {
+    if (!change.received) clearLiveRecord();
+  }
   /** 最後に反映した `dropped`（JSON）。SSE と応答で同じものを受けても 1 回だけ反映・通知する。 */
   let droppedKey = "[]";
   /** 要求を送った時点の `dropped`。応答のあとに遅れて届いた古い state のものは反映しない。 */
@@ -113,7 +119,7 @@ export function createLiveController(deps: LiveControllerDeps = {}) {
   /** 対象関数が変わったと分かったら（応答・state・hello のどれで先に知っても 1 回だけ）記録を消す。 */
   function noteFunc(func: string | undefined) {
     if (!func) return;
-    if (knownFunc && func !== knownFunc) clearLiveRecord();
+    if (knownFunc && func !== knownFunc && !recordSwitch) clearLiveRecord();
     knownFunc = func;
   }
 
@@ -242,6 +248,10 @@ export function createLiveController(deps: LiveControllerDeps = {}) {
       for (const n of msg.names) record.ensureColumn(n);
     },
     samples: (msg) => {
+      if (recordSwitch && msg.rows.length &&
+          (msg.step0 <= 1 || (record.lastStep !== null && msg.step0 <= record.lastStep))) {
+        recordSwitch.received = true;
+      }
       // 既定の record は useWaveformStore.appendSamples が書く共有のライブ記録と同じもの
       const res = record === liveRecord
         ? waveform.getState().appendSamples(msg.step0, msg.names, msg.rows)
@@ -330,6 +340,9 @@ export function createLiveController(deps: LiveControllerDeps = {}) {
   }
 
   async function control(req: ControlRequest) {
+    const change = req.cmd === "reset" || (req.func !== undefined && req.func !== knownFunc)
+      ? { received: false } : null;
+    if (change) recordSwitch = change;
     try {
       const res = await resolvingRequest(() => api.control(req));
       const sim = store.getState().sim;
@@ -347,10 +360,12 @@ export function createLiveController(deps: LiveControllerDeps = {}) {
         set({ sim: { ...store.getState().sim, func: req.func } });
         noteFunc(req.func);
       }
-      if (req.cmd === "reset") clearLiveRecord();
+      if (change) finishRecordSwitch(change);
       if (req.cmd === "pause") scheduleCommit();
     } catch (e) {
       notify.error(`操作に失敗しました: ${(e as Error).message}`);
+    } finally {
+      if (recordSwitch === change) recordSwitch = null;
     }
   }
 
@@ -535,6 +550,8 @@ export function createLiveController(deps: LiveControllerDeps = {}) {
 
   // ---- CSV ----
   async function loadCsv(file: Blob) {
+    const change = { received: false };
+    recordSwitch = change;
     try {
       const res = await resolvingRequest(() => api.loadCsv(file));
       const s = store.getState();
@@ -544,7 +561,7 @@ export function createLiveController(deps: LiveControllerDeps = {}) {
         set({ watch: [...s.watch, ...added] });
         persist();
       }
-      record.clear();
+      finishRecordSwitch(change);
       syncSignals();
       notify.success(`テスト CSV を読み込みました（${res.rows} 行、${(res.names ?? []).length} 変数）`);
       // 一部だけを再生する（複数の mod ブロックのうち先頭だけ）などは、成功とは別に長く残る警告で知らせる
@@ -552,6 +569,8 @@ export function createLiveController(deps: LiveControllerDeps = {}) {
     } catch (e) {
       // 400（同じ名前の入力列、UTF-16 など）はサーバが何も変えないので、手元の記録・波形・入力パネルもそのまま
       notify.error(`テスト CSV を読み込めませんでした: ${(e as Error).message}`);
+    } finally {
+      if (recordSwitch === change) recordSwitch = null;
     }
   }
 

@@ -86,6 +86,7 @@ describe("ライブ制御（SSE の取り込み）", () => {
   let record: LiveRecord;
   /** /api/control の応答（state と同じ形） */
   let controlResponse: unknown;
+  let responseGate: Promise<void> | null;
   /** /api/load-csv の応答（status と本文） */
   let loadCsvResponse: { status: number; body: unknown };
   /** /api/write の応答（null なら 200 の {}） */
@@ -99,6 +100,7 @@ describe("ライブ制御（SSE の取り込み）", () => {
     posted = [];
     record = new LiveRecord();
     controlResponse = {};
+    responseGate = null;
     loadCsvResponse = { status: 200, body: { rows: 0, names: [] } };
     writeResponse = null;
     notify = { error: vi.fn(), success: vi.fn(), warn: vi.fn() };
@@ -122,6 +124,7 @@ describe("ライブ制御（SSE の取り込み）", () => {
         const errors = names.filter((n) => n === "zz" || n.startsWith("@")).map((name) => ({ name, message: "見つかりません" }));
         return new Response(JSON.stringify({ errors }));
       }
+      if (url.endsWith("/api/control") || url.endsWith("/api/load-csv")) await responseGate;
       if (url.endsWith("/api/control")) return new Response(JSON.stringify(controlResponse));
       if (url.endsWith("/api/load-csv")) return new Response(JSON.stringify(loadCsvResponse.body), { status: loadCsvResponse.status });
       if (url.endsWith("/api/write") && writeResponse) return new Response(JSON.stringify(writeResponse.body), { status: writeResponse.status });
@@ -228,6 +231,58 @@ describe("ライブ制御（SSE の取り込み）", () => {
     expect(posted.at(-1)).toEqual({ url: "/api/control", body: { cmd: "reset" } });
     expect(record.length).toBe(0);
     expect(useWaveformStore.getState().chartData).toBeNull();
+    live.stop();
+  });
+
+  describe.each(["CSV", "reset", "func"] as const)("%s の記録切替", (operation) => {
+    it.each(["応答が先", "新 samples が先", "応答待ちに旧 samples"])("%sでも新しい先頭からだけを残す", async (order) => {
+      const live = makeController();
+      await live.start();
+      const es = FakeEventSource.last!;
+      es.emit("samples", { step0: 1, names: ["a"], rows: [[90], [91], [92]] });
+      live.commit();
+      let release!: () => void;
+      responseGate = new Promise<void>((resolve) => { release = resolve; });
+      controlResponse = { func: operation === "func" ? "sub" : "main", running: false, step: 0 };
+      loadCsvResponse = { status: 200, body: { rows: 2, names: ["a"] } };
+      const pending = operation === "CSV" ? live.loadCsv(new Blob(["csv"]))
+        : live.control(operation === "reset" ? { cmd: "reset" } : { func: "sub", cmd: "step", steps: 2 });
+      if (order === "応答待ちに旧 samples") {
+        es.emit("samples", { step0: 4, names: ["a"], rows: [[93], [94]] });
+      }
+      const receiveNew = () => {
+        es.emit("samples", { step0: 1, names: ["a"], rows: [[10]] });
+        // samples より後で関数変更を知っても、新しい記録を消さない。
+        if (operation === "func") es.emit("state", { func: "sub" });
+      };
+      if (order !== "応答が先") receiveNew();
+      release();
+      await pending;
+      if (order === "応答が先") {
+        expect(record.length).toBe(0);
+        receiveNew();
+      } else {
+        expect(record.toChartData().seriesMap.a).toEqual([10]);
+      }
+      es.emit("samples", { step0: 2, names: ["a"], rows: [[11]] });
+      expect([...record.steps()]).toEqual([1, 2]);
+      expect(record.toChartData().seriesMap).toEqual({ a: [10, 11] });
+      live.commit();
+      expect(useWaveformStore.getState().chartData?.seriesMap.a).toEqual([10, 11]);
+      live.stop();
+    });
+  });
+
+  it("旧記録が空でも、応答前に完了した短い CSV の先頭サンプルを残す", async () => {
+    const live = makeController();
+    await live.start();
+    let release!: () => void;
+    responseGate = new Promise<void>((resolve) => { release = resolve; });
+    const pending = live.loadCsv(new Blob(["csv"]));
+    FakeEventSource.last!.emit("samples", { step0: 1, names: ["a"], rows: [[7]] });
+    release();
+    await pending;
+    expect(record.toChartData().seriesMap.a).toEqual([7]);
     live.stop();
   });
 
