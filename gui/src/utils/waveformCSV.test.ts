@@ -1,0 +1,102 @@
+import { readFileSync } from "node:fs";
+import { describe, expect, it } from "vitest";
+import { classifyReload } from "./classifyReload";
+import { decodeWaveformCSV } from "./waveformCSV";
+
+const sample = (name: string) =>
+  readFileSync(new URL(`../../docs/samples/compare/${name}`, import.meta.url), "utf8");
+
+/** すべての系列が steps と同じ長さか */
+function expectAligned(decoded: ReturnType<typeof decodeWaveformCSV>) {
+  for (const h of decoded.headers) expect(decoded.chartData.seriesMap[h]).toHaveLength(decoded.chartData.steps.length);
+  expect(Object.keys(decoded.chartData.seriesMap)).toEqual(decoded.headers);
+}
+
+describe("decodeWaveformCSV", () => {
+  it("同じ変数の入力列と出力列は、mod 行から出力側の列を採る", () => {
+    const d = decodeWaveformCSV("mod,main,GUI記録,2,2\r\n#COMMENT,P1,P2,P2,P1\r\n,7,1,2,9\r\n,,3,4,8\r\n");
+    expect(d.headers).toEqual(["P1", "P2"]);
+    expect(d.chartData.steps).toEqual([1, 2]);
+    expect(d.chartData.seriesMap).toEqual({ P1: [9, 8], P2: [2, 4] });
+    expectAligned(d);
+  });
+
+  it("サーバのエクスポート（P1 を入力と監視の両方に使った 1 ステップ）は 1 点になる", () => {
+    const d = decodeWaveformCSV("mod,main,GUI記録,1,1\r\n#COMMENT,P1,P1\r\n,7,7\r\n");
+    expect(d.chartData.seriesMap).toEqual({ P1: [7] });
+    expect(d.chartData.steps).toEqual([1]);
+  });
+
+  it("mod 行がなければ同名の列は最後の列を採る", () => {
+    const d = decodeWaveformCSV("#COMMENT,A,B,A\n0,1,10,2\n1,3,11,4\n");
+    expect(d.headers).toEqual(["A", "B"]);
+    expect(d.chartData.seriesMap).toEqual({ A: [2, 4], B: [10, 11] });
+    expectAligned(d);
+  });
+
+  it("mod 行の入力数・出力数が読めなければ最後の列を採る", () => {
+    const d = decodeWaveformCSV("mod,main,題名,x,1\n#COMMENT,A,A\n,1,2\n");
+    expect(d.chartData.seriesMap).toEqual({ A: [2] });
+  });
+
+  it("出力に同名がなければ入力どうしの同名は最後の列を採る", () => {
+    const d = decodeWaveformCSV("mod,main,題名,2,1\n#COMMENT,A,A,B\n,1,2,3\n");
+    expect(d.chartData.seriesMap).toEqual({ A: [2], B: [3] });
+  });
+
+  it("パスを除いた名前が衝突する列だけパスつきの最短の名前にする", () => {
+    const d = decodeWaveformCSV("#COMMENT,src/engine.c/s_cnt,src/sensor.c/s_cnt,Sample/Speed\n0,1,2,3\n1,4,5,6\n");
+    expect(d.headers).toEqual(["engine.c/s_cnt", "sensor.c/s_cnt", "Speed"]);
+    expect(d.chartData.seriesMap).toEqual({ "engine.c/s_cnt": [1, 4], "sensor.c/s_cnt": [2, 5], Speed: [3, 6] });
+    expectAligned(d);
+  });
+
+  it("末尾が同じパスでも区別がつくところまで遡る", () => {
+    const d = decodeWaveformCSV("#COMMENT,a/x/v,b/x/v,v\n0,1,2,3\n");
+    expect(d.headers).toEqual(["a/x/v", "b/x/v", "v"]);
+    expectAligned(d);
+  });
+
+  it("結果 CSV の実測?(期待) は実測値を採り、判定・時間の列は読まない", () => {
+    const text = [
+      "mod,func1,func1単体テスト,2,2",
+      "#COMMENT,@enable,@mode,gb_result.data,gb_result.ret_code",
+      ";,自由なコメント",
+      ",1,1,100,1,OK,0.0003ms",
+      ",1,2,\"5?(7)\",0x10?(0x11),NG,0.0004ms",
+      ",1,3,'abc',,NO Check,0.0002ms",
+    ].join("\r\n");
+    const d = decodeWaveformCSV(text);
+    expect(d.headers).toEqual(["@enable", "@mode", "gb_result.data", "gb_result.ret_code"]);
+    expect(d.chartData.seriesMap).toEqual({
+      "@enable": [1, 1, 1],
+      "@mode": [1, 2, 3],
+      "gb_result.data": [100, 5, null],
+      "gb_result.ret_code": [1, 16, null],
+    });
+    expectAligned(d);
+  });
+
+  it("SignalViewer2 形式のサンプルは従来どおり読める", () => {
+    for (const name of ["engine_test_A.csv", "engine_test_B.csv"]) {
+      const d = decodeWaveformCSV(sample(name));
+      expect(d.headerIdx).toBe(0);
+      expect(d.errors).toEqual([]);
+      expect(d.headers).toContain("EngineSpeed");
+      expect(d.headers.every((h) => !h.includes("/"))).toBe(true);
+      expect(d.chartData.steps.length).toBeGreaterThan(0);
+      expectAligned(d);
+    }
+    const a = decodeWaveformCSV(sample("engine_test_A.csv"));
+    expect(a.headers).toEqual(["PIG", "EngineSpeed", "WaterTemp", "JudgeFlag", "CurrentGear", "DriveMode", "OldSignal"]);
+    expect(a.chartData.seriesMap.EngineSpeed.slice(0, 3)).toEqual([8000, 8040, 8080]);
+  });
+});
+
+describe("classifyReload と同名の列", () => {
+  it("同名の列がある記録に行を足すと追記と判定する", () => {
+    const head = "mod,main,GUI記録,1,1\r\n#COMMENT,P1,P1\r\n,7,7\r\n";
+    expect(classifyReload(head, head + ",8,8\r\n")).toBe("append");
+    expect(decodeWaveformCSV(head + ",8,8\r\n").chartData.seriesMap.P1).toEqual([7, 8]);
+  });
+});

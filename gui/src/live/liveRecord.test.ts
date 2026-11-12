@@ -14,6 +14,13 @@ describe("LiveRecord", () => {
     expect(r.latest("b")).toBe(30);
   });
 
+  it("samples に同じ名前が重なっても、その列にはステップごとに 1 点だけ入る", () => {
+    const r = new LiveRecord(1000, 4);
+    r.append(0, ["P1", "P1"], [[7, 7], [8, 8]]);
+    expect(r.names).toEqual(["P1"]);
+    expect(r.toChartData()).toEqual({ seriesMap: { P1: [7, 8] }, steps: [1, 2] });
+  });
+
   it("容量を超えたら伸ばし、途中から増えた列の過去分は null で埋める", () => {
     const r = new LiveRecord(1000, 16);
     const rows = Array.from({ length: 40 }, (_, i) => [i]);
