@@ -240,6 +240,47 @@ if errorlevel 1 (call :ng "a hex input is saved as written") else (call :ok "a h
 set RC=%ERRORLEVEL%
 findstr /l /c:"OK 1, NG 0, NO Check 0" "%WORK%\rt_rerun.log" >nul
 if errorlevel 1 (call :ng "hex, $ and quoted string inputs re-run with all rows OK") else if "%RC%"=="0" (call :ok "hex, $ and quoted string inputs re-run with all rows OK") else (call :ng "hex, $ and quoted string inputs re-run: exit code 0, got %RC%")
+rem changing the function drops holds and watches the new function cannot resolve (@rpm), so they never write the old argument slot (@a)
+curl -s -X POST --data-binary "@%T%\gui\reset_func_gear.json" "%U%/api/control" > nul
+curl -s -X POST --data-binary "@%T%\gui\watch_rpm.json" "%U%/api/watch" > nul
+curl -s -X POST --data-binary "@%T%\gui\write_rpm_hold.json" "%U%/api/write" > nul
+curl -s -X POST --data-binary "@%T%\gui\reset_func_mul16.json" "%U%/api/control" > "%WORK%\rfm.out"
+findstr /l /c:"dropped" "%WORK%\rfm.out" >nul
+if errorlevel 1 (call :ng "/api/control reports dropped names") else (call :ok "/api/control reports dropped names")
+findstr /l /c:"watch" "%WORK%\rfm.out" >nul
+if errorlevel 1 (call :ng "/api/control reports the dropped watch") else (call :ok "/api/control reports the dropped watch")
+curl -s -X POST --data-binary "@%T%\gui\watch_mul16.json" "%U%/api/watch" > nul
+curl -s -X POST --data-binary "@%T%\gui\write_a3.json" "%U%/api/write" > nul
+curl -s -X POST --data-binary "@%T%\gui\write_b2.json" "%U%/api/write" > nul
+curl -s -X POST --data-binary "@%T%\gui\step1.json" "%U%/api/control" > "%WORK%\dstep.out"
+findstr /l /c:"rpm" "%WORK%\dstep.out" >nul
+if errorlevel 1 (call :ok "the dropped hold is not left in holds") else (call :ng "the dropped hold is not left in holds")
+curl -s "%U%/api/export.csv" > "%WORK%\drop_export.csv"
+rem the last cell of the last row is mul16@@, which must be 6 (14 when the old hold overwrote @a with 7)
+set "LAST="
+for /f "usebackq delims=" %%L in ("%WORK%\drop_export.csv") do set "LAST=%%L"
+if "%LAST:~-2%"==",6" (call :ok "a dropped hold does not overwrite another argument") else (call :ng "a dropped hold does not overwrite another argument: %LAST%")
+findstr /l /c:"rpm" "%WORK%\drop_export.csv" >nul
+if errorlevel 1 (call :ok "the saved CSV has no column for the dropped hold") else (call :ng "the saved CSV has no column for the dropped hold")
+"%SIM%" run "%WORK%\drop_export.csv" -o "%WORK%\odrop" --quiet > "%WORK%\drop_rerun.log" 2>&1
+set RC=%ERRORLEVEL%
+findstr /l /c:"OK 1, NG 0, NO Check 0" "%WORK%\drop_rerun.log" >nul
+if errorlevel 1 (call :ng "the record after dropping a hold re-runs with all rows OK") else if "%RC%"=="0" (call :ok "the record after dropping a hold re-runs with all rows OK") else (call :ng "the record after dropping a hold re-runs: exit code 0, got %RC%")
+rem the same when /api/load-csv changes the function
+curl -s -X POST --data-binary "@%T%\gui\reset_func_gear.json" "%U%/api/control" > nul
+curl -s -X POST --data-binary "@%T%\gui\write_rpm_hold.json" "%U%/api/write" > nul
+curl -s -X POST --data-binary "@%T%\gui\play_mul16.csv" "%U%/api/load-csv" > nul
+ping -n 2 127.0.0.1 >nul
+curl -s "%U%/api/info" > "%WORK%\lm_info.json"
+findstr /l /c:"dropped" "%WORK%\lm_info.json" >nul
+if errorlevel 1 (call :ng "/api/load-csv reports dropped names in state") else (call :ok "/api/load-csv reports dropped names in state")
+curl -s "%U%/api/export.csv" > "%WORK%\lm_export.csv"
+findstr /l /c:"rpm" "%WORK%\lm_export.csv" >nul
+if errorlevel 1 (call :ok "the playback record has no column for the dropped hold") else (call :ng "the playback record has no column for the dropped hold")
+"%SIM%" run "%WORK%\lm_export.csv" -o "%WORK%\olm" --quiet > "%WORK%\lm_rerun.log" 2>&1
+set RC=%ERRORLEVEL%
+findstr /l /c:"OK 2, NG 0, NO Check 0" "%WORK%\lm_rerun.log" >nul
+if errorlevel 1 (call :ng "the playback record re-runs with all rows OK") else if "%RC%"=="0" (call :ok "the playback record re-runs with all rows OK") else (call :ng "the playback record re-runs: exit code 0, got %RC%")
 curl -s "%U%/" > "%WORK%\index.html"
 findstr /l /c:"<html" "%WORK%\index.html" >nul
 if errorlevel 1 (call :ng "GET / returns a page") else (call :ok "GET / returns a page")

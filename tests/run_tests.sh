@@ -353,6 +353,53 @@ data: {"periodMs":2,"func":"TEST_cycle","names":["g_eng.state","TEST_cycle_cnt",
     RC=$?
     check "16 進・\$・',' を含む文字列の記録を sim run で再実行すると全行 OK（終了コード 0）" sh -c "[ $RC -eq 0 ] && grep -F -q '合計: 総数 1, OK 1, NG 0, NO Check 0' '$WORK/rt_rerun.log'"
 
+    # 関数を変えたら、新しい関数で解決できない固定・監視（@rpm）を外す。古い引数番号（@a）へ書き続けない
+    post reset_func_gear.json rfg.out /api/control > /dev/null
+    CODE=$(post watch_rpm.json wr.out /api/watch)
+    check "eng_judge_gear の @rpm を監視できる" contains "$WORK/wr.out" '"names":["@rpm","g_ms_tick"],"errors":[]'
+    post write_rpm_hold.json wrh.out /api/write > /dev/null
+    curl -s -N --max-time 2 "$U/api/stream" > "$WORK/drop_sse.txt" 2>/dev/null &
+    SSE_PID=$!
+    sleep 0.3
+    CODE=$(post reset_func_mul16.json rfm.out /api/control)
+    check "固定した引数のない関数（mul16）への変更は 200" test "$CODE" = 200
+    check "/api/control の dropped に外した固定（@rpm, hold）" contains "$WORK/rfm.out" '{"name":"@rpm","kind":"hold","message":"'
+    check "/api/control の dropped に外した監視（@rpm, watch）" contains "$WORK/rfm.out" '{"name":"@rpm","kind":"watch","message":"'
+    check "/api/control の holds に @rpm が残らない" contains "$WORK/rfm.out" '"holds":[]'
+    sleep 0.3
+    post watch_mul16.json wm.out /api/watch > /dev/null
+    post write_a3.json wa.out /api/write > /dev/null
+    post write_b2.json wb.out /api/write > /dev/null
+    post step1.json dstep.out /api/control > /dev/null
+    wait "$SSE_PID" 2>/dev/null
+    check "SSE の hello から外した監視（@rpm）が消える" contains "$WORK/drop_sse.txt" '"func":"mul16","names":["g_ms_tick"]}'
+    check "SSE の state に dropped" contains "$WORK/drop_sse.txt" '"dropped":[{"name":"@rpm","kind":"watch"'
+    curl -s "$U/api/export.csv" | tr -d '\r' > "$WORK/drop_export.csv"
+    RETS=$(awk -F, 'NR==2{for(i=1;i<=NF;i++) if($i=="mul16@@") c=i} NR>2&&c{printf "%s ", $c}' "$WORK/drop_export.csv")
+    check "外した固定が @a を上書きしない（mul16(3, 2) = ${RETS}）" test "$RETS" = "6 "
+    check "保存した CSV に @rpm の列がない" sh -c "! grep -q '@rpm' '$WORK/drop_export.csv'"
+    "$SIM" run "$WORK/drop_export.csv" -o "$WORK/odrop" --quiet > "$WORK/drop_rerun.log" 2>&1
+    RC=$?
+    check "固定を外した後の記録を sim run で再実行すると全行 OK（終了コード 0）" sh -c "[ $RC -eq 0 ] && grep -F -q '合計: 総数 1, OK 1, NG 0, NO Check 0' '$WORK/drop_rerun.log'"
+    # CSV の読み込みで関数が変わるときも同じ
+    post reset_func_gear.json rfg.out /api/control > /dev/null
+    post write_rpm_hold.json wrh.out /api/write > /dev/null
+    CODE=$(curl -s -o "$WORK/lm.out" -w '%{http_code}' -X POST --data-binary "@$T/gui/play_mul16.csv" "$U/api/load-csv")
+    check "固定した引数のない関数の CSV の読み込みは 200" test "$CODE" = 200
+    i=0
+    while [ $i -lt 50 ]; do
+        curl -s "$U/api/info" | grep -q '"running":false' && break
+        i=$((i + 1)); sleep 0.1
+    done
+    curl -s "$U/api/info" > "$WORK/lm_info.json"
+    check "CSV の読み込みで外した固定を state の dropped に出す" contains "$WORK/lm_info.json" '"dropped":[{"name":"@rpm","kind":"hold"'
+    check "CSV の読み込み後の holds に @rpm が残らない" contains "$WORK/lm_info.json" '"holds":[]'
+    curl -s "$U/api/export.csv" | tr -d '\r' > "$WORK/lm_export.csv"
+    check "CSV の再生の記録に @rpm の列がない" sh -c "! grep -q '@rpm' '$WORK/lm_export.csv'"
+    "$SIM" run "$WORK/lm_export.csv" -o "$WORK/olm" --quiet > "$WORK/lm_rerun.log" 2>&1
+    RC=$?
+    check "CSV の再生の記録を sim run で再実行すると全行 OK（終了コード 0）" sh -c "[ $RC -eq 0 ] && grep -F -q '合計: 総数 2, OK 2, NG 0, NO Check 0' '$WORK/lm_rerun.log'"
+
     PORT_USED_LOG="$WORK/gui2.log"
     "$SIM" gui --no-browser --port "$PORT" > "$PORT_USED_LOG" 2>&1
     RC=$?

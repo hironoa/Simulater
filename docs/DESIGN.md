@@ -200,7 +200,7 @@ CPU コアは 1 億命令/秒以上を目標にする。`sim run` は終了時�
 | `GET /` | `sim_gui.html` を返す |
 | `GET /api/info` | `{"version","periodMs","func","functions":[名前...],"state":{...}}` |
 | `GET /api/symbols?q=文字列&limit=200` | 名前の部分一致検索。`[{"name","type","size","kind":"int|uint|float|ptr|struct|array","writable":bool,"members":[...子の名前]}]`。`members` は子の**完全名**（`g_cmd.mode`、`arr[2]`。配列は最大 256 要素、匿名メンバは親の名前に続けて展開） |
-| `POST /api/control` | `{"cmd":"run"|"pause"|"step"|"reset","steps":N,"speed":倍率,"periodMs":周期,"func":"関数名"}`。不明な `cmd` や対象にできない関数（浮動小数・構造体の引数など）は 400 で、そのときは関数・引数・速度・周期を何も変えない。`func` で対象関数が実際に変わったときは、`cmd` の前に `reset` と同じことをする（下記） |
+| `POST /api/control` | `{"cmd":"run"|"pause"|"step"|"reset","steps":N,"speed":倍率,"periodMs":周期,"func":"関数名"}`。不明な `cmd` や対象にできない関数（浮動小数・構造体の引数など）は 400 で、そのときは関数・引数・速度・周期を何も変えない。`func` で対象関数が実際に変わったときは、`cmd` の前に `reset` と同じことをする（下記）。応答は `state` と同じ形で、解決し直せずに外した固定・監視を `dropped` に載せる（下記「関数を変えたときの固定と監視」） |
 | `POST /api/watch` | `{"names":["変数",...]}` 監視する変数の一覧を置き換える。解決できなかった名前は `{"errors":[{"name","message"}]}` で返す |
 | `POST /api/write` | `{"name":"変数","value":数値または文字列,"hold":bool}` 次の周期の前に書き込む。`hold` が真なら毎周期書き続ける（入力の固定）。`{"name","release":true}` で固定を解除。止まっているときはすぐにも書く（`$` の確保だけは次の周期に 1 回書く）。改行を含む値は 400 |
 | `GET /api/stream` | Server-Sent Events。下記 |
@@ -212,13 +212,29 @@ CPU コアは 1 億命令/秒以上を目標にする。`sim run` は終了時�
 - `event: hello` — `{"periodMs","func","names":[監視名...]}`。接続時と監視一覧が変わったとき。
 - `event: samples` — `{"step0":先頭のステップ番号,"names":[...],"rows":[[値,...],...]}`。約 50ms ごとにまとめて送る。
   値は数値、読めなければ `null`。
-- `event: state` — `{"running":bool,"step":現在のステップ,"speed":倍率,"holds":[{"name","value"}],"overrun":bool}`。変化時と 1 秒ごと。
+- `event: state` — `{"running":bool,"step":現在のステップ,"speed":倍率,"holds":[{"name","value"}],"overrun":bool,
+  "periodMs","func","playback":bool,"error":文字列,"dropped":[{"name","kind":"hold"|"watch","message"}]}`。変化時と 1 秒ごと。
+  `dropped` は直近の `/api/control`・`/api/load-csv` で外した固定・監視（次の `/api/control`・`/api/load-csv` で空に戻る）。
 - `event: values` — `{"step":現在のステップ,"names":[監視名...],"values":[値,...]}`。監視変数の現在値（ステップは進めない）。
   接続時、監視一覧の変更時、停止中の書き込みの後、リセットの後に送る（一時停止中でも変数モニタに値を出すため）。
   約 50ms ごとの送信の間に何度か変われば最後の値だけを送る。読めなければ `null`。
 
 `reset` は「初期状態」（スタートアップ完了時点の CPU とメモリ）に戻す。ステップを 0 にし、記録と未消化の単発書き込みを捨てる
 （固定は残す）。
+
+### 関数を変えたときの固定と監視
+
+固定（`hold`）と監視の名前は、対象関数が変わるたびに（`/api/control` の `func`、`/api/load-csv` の `mod` 行）新しい関数で
+解決し直す（`reset` のときも同じ手順を通す）。`@引数` は引数の番号で覚えているので、前の解決結果を使い続けると
+別の引数を読み書きしてしまう（`eng_judge_gear` の `@rpm` の固定が `mul16` の `@a` を上書きする）。
+
+- 解決し直せない固定・監視は外す。新しい関数にない `@引数`、前の関数の戻り値 `前の関数@@` など。
+  固定は書き込めなくなったときも外す。関数の変更そのものは受け付ける。
+- 外したものは `state`（`/api/control` の応答と SSE の `event: state`）の `dropped` に
+  `{"name","kind":"hold"|"watch","message":理由}` で載せる。`holds` と `event: hello` の `names` は外した後の内容になる。
+- 外した固定は書かないので記録の入力列にも出ず、監視は出力列に出ない。保存した CSV に新しい関数にない列は残らず、
+  `sim run` でそのまま再実行できる。
+- `/api/control` で関数を変えたときは、読み込み済みの CSV の再生もやめる（入力列は前の関数で解決しているため）。
 
 ### 記録と CSV 保存
 

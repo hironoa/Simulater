@@ -48,6 +48,9 @@ typedef struct {
     int nholds;
     pend_t *pend;
     int npend;
+    /* 関数の変更などで解決し直せずに外した固定・監視（直近の /api/control・/api/load-csv の分）。
+     * JSON の {"name","kind","message"} を ',' で並べたもの。state の "dropped" に載せる */
+    sim_buf dropped;
 
     sim_csv_table play;
     sim_ref **play_refs;
@@ -329,7 +332,9 @@ static void json_state(sim_buf *b)
     sim_buf_json_str(b, G.func);
     sim_buf_printf(b, ",\"playback\":%s,\"error\":", G.play_active ? "true" : "false");
     sim_buf_json_str(b, G.error);
-    sim_buf_addc(b, '}');
+    sim_buf_adds(b, ",\"dropped\":[");
+    sim_buf_add(b, G.dropped.p ? G.dropped.p : "", G.dropped.len);
+    sim_buf_adds(b, "]}");
 }
 
 static void json_watch_names(sim_buf *b)
@@ -893,20 +898,56 @@ static void api_write(sim_sock s, req_t *r)
     sj_free(v);
 }
 
-/* 引数を参照している監視・固定は関数を変えたら解決し直す */
+static void add_dropped(const char *name, const char *kind, const char *msg)
+{
+    if (G.dropped.len) sim_buf_addc(&G.dropped, ',');
+    sim_buf_adds(&G.dropped, "{\"name\":");
+    sim_buf_json_str(&G.dropped, name);
+    sim_buf_printf(&G.dropped, ",\"kind\":\"%s\",\"message\":", kind);
+    sim_buf_json_str(&G.dropped, msg);
+    sim_buf_addc(&G.dropped, '}');
+}
+
+/* 引数・戻り値を参照している監視・固定は関数を変えたら解決し直す（リセット後も同じ手順を通す）。
+ * 解決し直せないもの（新しい関数にない @引数、前の関数の戻り値など）は外して dropped に載せる。
+ * 古い参照を残すと、前の関数の引数番号のまま新しい関数の別の引数を読み書きしてしまう */
 static void reresolve_locked(void)
 {
-    int i;
+    int i, n;
     char err[1024];
-    for (i = 0; i < G.nwatch; i++) {
+    for (i = n = 0; i < G.nwatch; i++) {
         sim_ref *r = sim_ref_parse(G.c, G.watch[i].name, err, sizeof err);
-        if (r) { sim_ref_free(G.watch[i].ref); G.watch[i].ref = r; }
+        if (!r) {
+            add_dropped(G.watch[i].name, "watch", err);
+            free(G.watch[i].name);
+            sim_ref_free(G.watch[i].ref);
+            continue;
+        }
+        sim_ref_free(G.watch[i].ref);
+        G.watch[i].ref = r;
+        G.watch[n++] = G.watch[i];
     }
-    for (i = 0; i < G.nholds; i++) {
+    G.nwatch = n;
+    for (i = n = 0; i < G.nholds; i++) {
         sim_ref *r = sim_ref_parse(G.c, G.holds[i].name, err, sizeof err);
-        if (r) { sim_ref_free(G.holds[i].ref); G.holds[i].ref = r; }
+        if (r && !sim_ref_writable(r)) {
+            snprintf(err, sizeof err, "'%s' には書き込めません", G.holds[i].name);
+            sim_ref_free(r);
+            r = NULL;
+        }
+        if (!r) {
+            add_dropped(G.holds[i].name, "hold", err);
+            free_hold(&G.holds[i]);
+            continue;
+        }
+        sim_ref_free(G.holds[i].ref);
+        G.holds[i].ref = r;
+        G.holds[n++] = G.holds[i];
     }
+    G.nholds = n;
     G.watch_ver++;
+    state_changed();
+    values_changed();
 }
 
 /* 関数を探して対象にできるか確かめる（状態は変えない）。できなければ NULL と err */
@@ -964,6 +1005,8 @@ static void reset_locked(void)
     values_changed();
 }
 
+static void free_play_locked(void);
+
 static void api_control(sim_sock s, req_t *r)
 {
     sj_value *v = parse_body(s, r);
@@ -994,6 +1037,7 @@ static void api_control(sim_sock s, req_t *r)
         }
     }
     G.error[0] = 0;
+    G.dropped.len = 0;
     if ((x = sj_get(v, "speed")) && x->type == SJ_NUM) {
         double sp = x->num;
         if (sp <= 0) sp = 0;
@@ -1008,6 +1052,8 @@ static void api_control(sim_sock s, req_t *r)
         /* 対象関数が変わったらターゲットをリセットして記録を区切る（前の関数の記録は消す）。
          * sim run は mod ブロックの初めにリセットするので、保存した CSV を再実行すると同じ結果になる */
         commit_func_locked(fn, nf);
+        /* 読み込んだ CSV の入力列は前の関数で解決してあり、その mod 行も前の関数なので再生をやめる */
+        free_play_locked();
         reset_locked();
     }
     if (strcmp(cmd, "run") == 0) G.running = 1;
@@ -1086,6 +1132,7 @@ static void api_load_csv(sim_sock s, req_t *r)
     }
     G.running = 0;
     G.budget = 0;
+    G.dropped.len = 0;
     if (nf) commit_func_locked(t.func, nf);
     free_play_locked();
     G.play = t;
