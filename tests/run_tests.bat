@@ -433,6 +433,46 @@ rem the outputs at the end of the row are P1 and P1_bit.no0 (both 1 when P1 = 1 
 set "LAST="
 for /f "usebackq delims=" %%L in ("%WORK%\po_export.csv") do set "LAST=%%L"
 if "%LAST:~-4%"==",1,1" (call :ok "CSV playback keeps the input column order of the CSV") else (call :ng "CSV playback keeps the input column order of the CSV: %LAST%")
+rem input columns with the same name: sim run writes them from left to right (P1=0, P1_bit.no0=1, P1=2 gives P1 = 2);
+rem /api/load-csv rejects the CSV with 400 and changes nothing
+"%SIM%" run "%T%\gui\play_dup.csv" -o "%WORK%\odup" --quiet > "%WORK%\dup_run.log" 2>&1
+set RC=%ERRORLEVEL%
+findstr /l /c:"OK 1, NG 0, NO Check 0" "%WORK%\dup_run.log" >nul
+if errorlevel 1 (call :ng "sim run writes input columns with the same name from left to right") else if "%RC%"=="0" (call :ok "sim run writes input columns with the same name from left to right") else (call :ng "sim run writes input columns with the same name: exit code 0, got %RC%")
+curl -s -X POST --data-binary "@%T%\gui\watch_p1only.json" "%U%/api/watch" > nul
+curl -s -X POST --data-binary "@%T%\gui\rt_p1_hold.json" "%U%/api/write" > nul
+curl -s -X POST --data-binary "@%T%\gui\step1.json" "%U%/api/control" > nul
+curl -s "%U%/api/info" > "%WORK%\dup_info0.json"
+curl -s "%U%/api/export.csv" > "%WORK%\dup_export0.csv"
+set "CODE="
+for /f "usebackq delims=" %%C in (`curl -s -o "%WORK%\dup.out" -w "%%{http_code}" -X POST --data-binary "@%T%\gui\play_dup.csv" "%U%/api/load-csv"`) do set "CODE=%%C"
+findstr /l /c:"sim run" "%WORK%\dup.out" >nul
+if errorlevel 1 (call :ng "/api/load-csv rejects input columns with the same name") else if "%CODE%"=="400" (call :ok "/api/load-csv rejects input columns with the same name") else (call :ng "/api/load-csv rejects input columns with the same name: 400 expected, got %CODE%")
+ping -n 2 127.0.0.1 >nul
+curl -s "%U%/api/info" > "%WORK%\dup_info1.json"
+curl -s "%U%/api/export.csv" > "%WORK%\dup_export1.csv"
+fc /b "%WORK%\dup_info0.json" "%WORK%\dup_info1.json" >nul
+if errorlevel 1 (call :ng "a rejected CSV with same-name inputs changes nothing (info)") else (call :ok "a rejected CSV with same-name inputs changes nothing (info)")
+fc /b "%WORK%\dup_export0.csv" "%WORK%\dup_export1.csv" >nul
+if errorlevel 1 (call :ng "a rejected CSV with same-name inputs changes nothing (record)") else (call :ok "a rejected CSV with same-name inputs changes nothing (record)")
+curl -s -X POST --data-binary "@%T%\gui\release_p1.json" "%U%/api/write" > nul
+rem input columns spelled differently for the same memory (P1 and P1_bit.no0, a[0] and a[ 0 ], g.x and g .x) are separate
+rem columns written in column order; same-name outputs and an input with the name of an output are accepted
+set "CODE="
+for /f "usebackq delims=" %%C in (`curl -s -o "%WORK%\al.out" -w "%%{http_code}" -X POST --data-binary "@%T%\gui\play_alias.csv" "%U%/api/load-csv"`) do set "CODE=%%C"
+if "%CODE%"=="200" (call :ok "/api/load-csv accepts inputs spelled differently for the same memory") else (call :ng "/api/load-csv accepts inputs spelled differently for the same memory: 200 expected, got %CODE%")
+ping -n 2 127.0.0.1 >nul
+curl -s "%U%/api/export.csv" > "%WORK%\al_export.csv"
+"%SIM%" run "%WORK%\al_export.csv" -o "%WORK%\oal" --quiet > "%WORK%\al_rerun.log" 2>&1
+set RC=%ERRORLEVEL%
+findstr /l /c:"OK 1, NG 0, NO Check 0" "%WORK%\al_rerun.log" >nul
+if errorlevel 1 (call :ng "the record of differently spelled inputs re-runs with all rows OK") else if "%RC%"=="0" (call :ok "the record of differently spelled inputs re-runs with all rows OK") else (call :ng "the record of differently spelled inputs re-runs: exit code 0, got %RC%")
+rem a CSV with two mod blocks plays only the first one and says so in the response
+set "CODE="
+for /f "usebackq delims=" %%C in (`curl -s -o "%WORK%\mb.out" -w "%%{http_code}" -X POST --data-binary "@%T%\gui\play_multi.csv" "%U%/api/load-csv"`) do set "CODE=%%C"
+findstr /l /c:"\"blocks\":2,\"warning\":" "%WORK%\mb.out" >nul
+if errorlevel 1 (call :ng "/api/load-csv reports the mod blocks it does not play") else if "%CODE%"=="200" (call :ok "/api/load-csv reports the mod blocks it does not play") else (call :ng "/api/load-csv reports the mod blocks it does not play: 200 expected, got %CODE%")
+ping -n 2 127.0.0.1 >nul
 rem round trip: GUI operations, /api/export.csv, then sim run without --expect-actual gives all rows OK
 rem (overlapping inputs, strings and arrays, $ptr, holds with one-shot writes, release, a reset in the middle, CSV playback)
 curl -s -X POST --data-binary "@%T%\gui\reset_func_mul16.json" "%U%/api/control" > nul

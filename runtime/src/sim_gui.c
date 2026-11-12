@@ -1260,6 +1260,24 @@ static void api_load_csv(sim_sock s, req_t *r)
     const sim_func *nf = NULL, *f;
     sim_ref **refs;
     if (sim_csv_load_table(r->body, r->body_len, &t, err, sizeof err)) { send_error(s, 400, err); return; }
+    /* 同じ名前（前後の空白を除いて完全一致）の入力列が複数あれば、何も変えずに 400。
+     * GUI の記録は入力 1 名 = 1 列（同じステップで同じ列に書いたら最後の値）なので、sim run のように
+     * 左から順に別々に書く動作を再現できず、保存した CSV とも往復しない。表記が違うだけで同じメモリを指す列
+     * （P1 と P1_bit.no0 など）は別の列として受け付ける。出力列の同名・入力と出力の同名も受け付ける */
+    for (i = 0; i < t.nin; i++) {
+        int k;
+        for (k = 0; k < i && strcmp(t.names[k], t.names[i]) != 0; k++) {}
+        if (k < i) {
+            char m[1200];
+            snprintf(m, sizeof m,
+                     "入力 %d 列目と %d 列目が同じ名前 '%.256s' です。GUI では同じ名前の入力列が複数ある CSV は"
+                     "読み込めません（sim run では実行できます。左から順に書きます）",
+                     k + 2, i + 2, t.names[i]);
+            sim_csv_table_free(&t);
+            send_error(s, 400, m);
+            return;
+        }
+    }
     sim_mutex_lock(G.mu);
     /* 関数と入力列をすべて確かめてから差し替える。400 を返すときは以前の関数・再生・実行状態をそのまま残す */
     if (t.func[0] && strcmp(t.func, G.func) != 0) {
@@ -1309,7 +1327,18 @@ static void api_load_csv(sim_sock s, req_t *r)
         if (i) sim_buf_addc(&b, ',');
         sim_buf_json_str(&b, t.names[i]);
     }
-    sim_buf_adds(&b, "]}");
+    sim_buf_addc(&b, ']');
+    /* 2 つ目以降の mod ブロックは再生しない。黙って一部だけ再生しないように応答で知らせる */
+    if (t.nblocks > 1) {
+        char m[512];
+        snprintf(m, sizeof m,
+                 "CSV に mod ブロックが %d 個あります。GUI では先頭のブロック（%.128s）だけを再生し、"
+                 "2 つ目以降は再生しません（sim run ではすべて実行します）",
+                 t.nblocks, t.func[0] ? t.func : G.func);
+        sim_buf_printf(&b, ",\"blocks\":%d,\"warning\":", t.nblocks);
+        sim_buf_json_str(&b, m);
+    }
+    sim_buf_addc(&b, '}');
     sim_mutex_unlock(G.mu);
     send_json(s, 200, &b);
     sim_buf_free(&b);

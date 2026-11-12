@@ -570,6 +570,48 @@ data: {"periodMs":2,"func":"TEST_cycle","names":["g_eng.state","TEST_cycle_cnt",
     RC=$?
     check "同じ CSV を sim run で実行しても P1 = 1（終了コード 0）" test "$RC" -eq 0
 
+    # 同じ名前の入力列が複数ある CSV: sim run は左から順に書く（P1=0, P1_bit.no0=1, P1=2 で P1 = 2）。
+    # GUI の記録は入力 1 名 = 1 列なので /api/load-csv は 400 で拒否し、何も変えない
+    "$SIM" run "$T/gui/play_dup.csv" -o "$WORK/odup" --quiet > "$WORK/dup_run.log" 2>&1
+    RC=$?
+    check "sim run は同じ名前の入力列を左から順に書く（P1 = 2 で OK、終了コード 0）" sh -c "[ $RC -eq 0 ] && grep -F -q '合計: 総数 1, OK 1, NG 0, NO Check 0' '$WORK/dup_run.log'"
+    post watch_p1only.json wdup.out /api/watch > /dev/null
+    post rt_p1_hold.json hdup.out /api/write > /dev/null
+    post step1.json s1.out /api/control > /dev/null
+    curl -s "$U/api/info" > "$WORK/dup_info0.json"
+    curl -s "$U/api/export.csv" > "$WORK/dup_export0.csv"
+    CODE=$(curl -s -o "$WORK/dup.out" -w '%{http_code}' -X POST --data-binary "@$T/gui/play_dup.csv" "$U/api/load-csv")
+    check "/api/load-csv は同じ名前の入力列が複数ある CSV を 400 で拒否する（名前・列番号・sim run の案内）" sh -c "[ '$CODE' = 400 ] && grep -F -q \"'P1'\" '$WORK/dup.out' && grep -F -q '2 列目' '$WORK/dup.out' && grep -F -q '4 列目' '$WORK/dup.out' && grep -F -q 'sim run では実行できます' '$WORK/dup.out'"
+    sleep 0.3
+    curl -s "$U/api/info" > "$WORK/dup_info1.json"
+    curl -s "$U/api/export.csv" > "$WORK/dup_export1.csv"
+    check "同じ名前の入力列で 400 なら関数・再生・記録・固定・監視を変えない" sh -c "cmp -s '$WORK/dup_info0.json' '$WORK/dup_info1.json' && cmp -s '$WORK/dup_export0.csv' '$WORK/dup_export1.csv' && grep -q '\"playback\":false' '$WORK/dup_info1.json'"
+    post release_p1.json rdup.out /api/write > /dev/null
+
+    # 表記が違うだけで同じメモリを指す入力列（P1 と P1_bit.no0、a[0] と a[ 0 ]、g.x と g .x）は別の列として列順に書く。
+    # 出力列の同名・入力と出力の同名は受け付ける
+    CODE=$(curl -s -o "$WORK/al.out" -w '%{http_code}' -X POST --data-binary "@$T/gui/play_alias.csv" "$U/api/load-csv")
+    i=0
+    while [ $i -lt 50 ]; do
+        curl -s "$U/api/info" | grep -q '"running":false' && break
+        i=$((i + 1)); sleep 0.1
+    done
+    curl -s "$U/api/export.csv" | tr -d '\r' > "$WORK/al_export.csv"
+    ALV=$(awk -F, 'NR==2{for(i=1;i<=NF;i++){if($i=="P1")a=i; if($i=="g_gear_up_rpm[0]")b=i; if($i=="g_eng.rpm")c=i}} NR>2{printf "%s %s %s", $a, $b, $c}' "$WORK/al_export.csv")
+    check "表記の違う同じ先の入力列は列順に書く（P1 g_gear_up_rpm[0] g_eng.rpm: ${ALV}）" test "$CODE" = 200 -a "$ALV" = "1 7 200"
+    "$SIM" run "$WORK/al_export.csv" -o "$WORK/oal" --quiet > "$WORK/al_rerun.log" 2>&1
+    RC=$?
+    check "その記録を sim run で再実行すると全行 OK（終了コード 0）" sh -c "[ $RC -eq 0 ] && grep -F -q '合計: 総数 1, OK 1, NG 0, NO Check 0' '$WORK/al_rerun.log'"
+
+    # mod ブロックが複数ある CSV は先頭のブロックだけを再生し、そのことを応答で知らせる
+    CODE=$(curl -s -o "$WORK/mb.out" -w '%{http_code}' -X POST --data-binary "@$T/gui/play_multi.csv" "$U/api/load-csv")
+    check "/api/load-csv で mod ブロックが 2 つなら先頭だけ再生し、応答の blocks と warning で知らせる" sh -c "[ '$CODE' = 200 ] && grep -F -q '{\"rows\":1,\"names\":[\"@a\",\"@b\",\"mul16@@\"],\"blocks\":2,\"warning\":\"' '$WORK/mb.out' && grep -F -q '2 つ目以降' '$WORK/mb.out'"
+    i=0
+    while [ $i -lt 50 ]; do
+        curl -s "$U/api/info" | grep -q '"running":false' && break
+        i=$((i + 1)); sleep 0.1
+    done
+
     # 往復の性質: GUI で操作 -> /api/export.csv -> sim run（--expect-actual なし）で全行 OK。
     # 重なる入力先・文字列/配列・$ptr・固定と単発の併用・固定の解除・途中のリセット・CSV の再生を混ぜる
     post reset_func_mul16.json rt0.out /api/control > /dev/null

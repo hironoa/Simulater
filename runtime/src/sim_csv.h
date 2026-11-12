@@ -25,13 +25,14 @@ int sim_csv_run_file(sim_ctx *c, const char *path, const sim_csv_opts *o, sim_cs
 /* CSV のセルを b に足す。',' '"' や前後の空白を含むなら "..." で囲み、'"' は二重にする（読み込みと対） */
 void sim_csv_cell(sim_buf *b, const char *v);
 
-/* GUI の読み込み用: 先頭の mod ブロックを表にする */
+/* GUI の読み込み用: 先頭の mod ブロックを表にする（2 つ目以降のブロックは読まず、数だけを nblocks に数える） */
 typedef struct {
     char *func;
     int nin, nout;
     char **names;           /* nin + nout 個 */
     int nrows;
     char ***cells;          /* nrows 行 × nin 列（空セルは NULL） */
+    int nblocks;            /* ファイル中の mod ブロックの数（先頭のブロックを含む） */
 } sim_csv_table;
 
 int sim_csv_load_table(const char *data, size_t len, sim_csv_table *t, char *err, size_t errlen);

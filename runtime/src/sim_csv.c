@@ -675,6 +675,7 @@ int sim_csv_load_table(const char *data, size_t len, sim_csv_table *t, char *err
         t->cells = sim_xrealloc(t->cells, (size_t)(t->nrows + 1) * sizeof *t->cells);
         t->cells[t->nrows++] = row;
     }
+    for (t->nblocks = 1; i < n; i++) if (is_mod(&ls[i])) t->nblocks++;
     free_lines(ls, n);
     return 0;
 fail:
