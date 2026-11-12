@@ -1,0 +1,13 @@
+; 64 ビット・double・float に収まらない期待値は、入力ならエラーになる値と同じく不一致（NG）にする
+mod,mul16,範囲外の期待値,1,1
+#COMMENT,g_mode,g_mode
+,255,18446744073709551616
+,255,-0xFFFFFFFFFFFFFFFF
+mod,mul16,浮動小数の範囲外の期待値,1,1
+#COMMENT,g_fan_duty,g_fan_duty
+,1,1e400
+,1,1e39
+mod,mul16,INT64_MAX を超える 10 進は 64 ビットの符号なしとして書いて比べる,1,1
+#COMMENT,0x100:8,0x100:8
+,18446744073709551615,18446744073709551615
+,18446744073709551615,0xFFFFFFFFFFFFFFFF

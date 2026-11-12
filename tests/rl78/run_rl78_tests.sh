@@ -125,9 +125,18 @@ check "const（ROM の変数）には書けない" contains "$WORK/r.log" "'g_lu
 # ヒープの排他的終端が奇数でも、最後のバイトの後の確保をヒープ外（0xFE162）に置かない
 rl78_run "1 バイトのヒープ（終端が奇数）で 2 回目の \$ の確保はエラー（終了コード 2）" 2 "ヒープ（0xFE160〜0xFE160）が足りません" -- --abs "$TP" --cfg "$R/cfg/heap_odd.cfg" "$R/csv/synth_heap_odd.csv"
 check "ヒープ外の 2 回目の確保は結果に OK と書かない" sh -c "! grep -q '^,1,0,0,0xE162,OK' '$WORK/r_out/synth_heap_odd.csv'"
-"$RS" info --abs "$TP" --cfg "$R/cfg/heap_over.cfg" -v > "$WORK/r.log" 2>&1
-check "アドレス空間を越えるヒープの指定は読めない設定として警告" contains "$WORK/r.log" "sim.cfg: heap = 0xFFFF0:0x100 を読めません"
-check "アドレス空間を越えるヒープの指定は使わず自動で選ぶ" contains "$WORK/r.log" "ヒープ（\$ptr）: 0xFE160〜0xFEFFF（自動: 使われていない RAM）"
+# 読めない設定値（範囲外・単位付き・負の値）は、既定値や自動の値に置き換えずにエラー（終了コード 2）
+cfg_err() {
+    _name=$1; _cfg=$2; _msg=$3
+    "$RS" info --abs "$TP" --cfg "$R/cfg/$_cfg" > "$WORK/r.log" 2>&1
+    _rc=$?
+    if [ "$_rc" -eq 2 ] && grep -F -q -- "$_msg" "$WORK/r.log"; then ok "$_name"
+    else ng "$_name" "終了コード ${_rc}、出力: $(head -2 "$WORK/r.log")"; fi
+}
+cfg_err "アドレス空間を越えるヒープの指定は自動で選び直さずにエラー" heap_over.cfg "sim.cfg: heap = 0xFFFF0:0x100 を読めません"
+cfg_err "cpu_hz = 32MHz を 32 Hz にしない" bad_cpu_hz.cfg "sim.cfg: cpu_hz = 32MHz を読めません"
+cfg_err "max_insns = -1 を 2^64-1 にしない" bad_max_insns.cfg "sim.cfg: max_insns = -1 を読めません"
+cfg_err "sentinel = 0x1EFFF0 を 0xEFFF0 に切り詰めない" bad_sentinel.cfg "sim.cfg: sentinel = 0x1EFFF0 を読めません"
 printf 'bogus_key = 1\n' > "$WORK/bogus.cfg"
 "$RS" info --abs "$TP" --cfg "$WORK/bogus.cfg" -v > "$WORK/r.log" 2>&1
 check "知らない設定は警告" contains "$WORK/r.log" "知らない設定 'bogus_key'"

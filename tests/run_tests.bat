@@ -79,6 +79,23 @@ call :err_case index_range.csv "g_gear_up_rpm[5]"
 call :err_case overflow.csv "300"
 call :err_case null_deref.csv "NULL"
 call :err_case bad_mod.csv "'x'"
+call :err_case big_decimal.csv "g_mode"
+
+echo == numeric ranges and spellings (never silently another value)
+"%SIM%" run "%T%\csv\err\num_range.csv" -o "%WORK%\onr" --quiet > "%WORK%\nr.log" 2>&1
+set RC=%ERRORLEVEL%
+if "%RC%"=="2" (call :ok "out-of-range values, indexes and addresses exit 2") else (call :ng "out-of-range values, indexes and addresses exit 2, got %RC%")
+findstr /l /c:"18446744073709551615" "%WORK%\nr.log" >nul
+if errorlevel 1 (call :ng "a decimal above INT64_MAX does not fit 8 bits") else (call :ok "a decimal above INT64_MAX does not fit 8 bits")
+findstr /l /c:"1e+39" "%WORK%\nr.log" >nul
+if errorlevel 1 (call :ng "1e39 does not fit a float") else (call :ok "1e39 does not fit a float")
+findstr /l /c:"'010'" "%WORK%\nr.log" >nul
+if errorlevel 1 (call :ng "index 010 is not read as octal") else (call :ok "index 010 is not read as octal")
+findstr /l /c:"'99999999999999999999'" "%WORK%\nr.log" >nul
+if errorlevel 1 (call :ng "an index above 64 bits is not saturated") else (call :ok "an index above 64 bits is not saturated")
+findstr /l /c:"'0100:1'" "%WORK%\nr.log" >nul
+if errorlevel 1 (call :ng "address 0100 is not read as octal") else (call :ok "address 0100 is not read as octal")
+call :run_cmp expect_num_range.csv 1
 
 echo == never overwrite an input, whatever the path spelling
 mkdir "%WORK%\same"
@@ -129,6 +146,11 @@ if errorlevel 1 (call :ng "a quoted result CSV reads back with the expected side
 set RC=%ERRORLEVEL%
 findstr /l /c:"OK 4, NG 0, NO Check 0" "%WORK%\quote_rb2.log" >nul
 if errorlevel 1 (call :ng "a quoted result CSV with --expect-actual is all OK") else if "%RC%"=="0" (call :ok "a quoted result CSV with --expect-actual is all OK") else (call :ng "a quoted result CSV with --expect-actual: exit code 0, got %RC%")
+
+echo == numeric options of sim gui (out of range or trailing garbage is an error)
+call :gui_opt "--port 70000 is not truncated" "70000" --port 70000
+call :gui_opt "--port 8765x is not read as 8765" "8765x" --port 8765x
+call :gui_opt "--period-ms 1e400 (inf) is rejected" "1e400" --period-ms 1e400
 
 echo == GUI server API
 where curl >nul 2>nul
@@ -414,6 +436,18 @@ curl -s "%U%/api/export.csv" > "%WORK%\rt2_export.csv"
 set RC=%ERRORLEVEL%
 findstr /l /c:"OK 5, NG 0, NO Check 0" "%WORK%\rt2_rerun.log" >nul
 if errorlevel 1 (call :ng "round trip: playback followed by operations re-runs with all rows OK") else if "%RC%"=="0" (call :ok "round trip: playback followed by operations re-runs with all rows OK") else (call :ng "round trip: playback followed by operations re-runs: exit code 0, got %RC%")
+rem numbers out of range are rejected with 400 instead of being clamped or rounded
+curl -s -X POST --data-binary "@%T%\gui\control_bad_speed.json" "%U%/api/control" > "%WORK%\nv1.out"
+findstr /l /c:"\"error\":" "%WORK%\nv1.out" >nul
+if errorlevel 1 (call :ng "speed 1000 is rejected, not clamped to 100") else (call :ok "speed 1000 is rejected, not clamped to 100")
+curl -s -X POST --data-binary "@%T%\gui\control_bad_steps.json" "%U%/api/control" > "%WORK%\nv2.out"
+findstr /l /c:"\"error\":" "%WORK%\nv2.out" >nul
+if errorlevel 1 (call :ng "steps 0 is rejected, not turned into 1") else (call :ok "steps 0 is rejected, not turned into 1")
+curl -s -X POST --data-binary "@%T%\gui\write_u64_exact.json" "%U%/api/write" > nul
+curl -s "%U%/api/info" > "%WORK%\nv6.json"
+findstr /l /c:"9007199254740993" "%WORK%\nv6.json" >nul
+if errorlevel 1 (call :ng "a large integer is written as typed, not rounded") else (call :ok "a large integer is written as typed, not rounded")
+curl -s -X POST --data-binary "@%T%\gui\release_u64.json" "%U%/api/write" > nul
 curl -s "%U%/" > "%WORK%\index.html"
 findstr /l /c:"<html" "%WORK%\index.html" >nul
 if errorlevel 1 (call :ng "GET / returns a page") else (call :ok "GET / returns a page")
@@ -465,6 +499,15 @@ set RC=%ERRORLEVEL%
 popd
 fc /b "%WORK%\same\unit_all.csv" "%T%\csv\unit_all.csv" >nul
 if errorlevel 1 (call :ng "%~1: input overwritten") else if "%RC%"=="2" (call :ok "%~1") else (call :ng "%~1: exit code 2, got %RC%")
+exit /b 0
+
+:gui_opt
+rem %1 = name, %2 = text in the message, %3 %4 = option and value; expects exit code 2
+rem --stop-here is not an option: if the value were accepted, sim exits at it instead of starting the server
+"%SIM%" gui --no-browser %3 %4 --stop-here > "%WORK%\gopt.log" 2>&1
+set RC=%ERRORLEVEL%
+findstr /l /c:"%~2" "%WORK%\gopt.log" >nul
+if errorlevel 1 (call :ng "%~1: message contains %~2") else if "%RC%"=="2" (call :ok "%~1") else (call :ng "%~1: exit code 2, got %RC%")
 exit /b 0
 
 :err_case

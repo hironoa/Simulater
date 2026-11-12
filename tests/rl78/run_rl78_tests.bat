@@ -73,9 +73,11 @@ rem a 1-byte heap with an odd exclusive end must not hand out 0xFE162 on the sec
 call :run "1-byte heap (odd end): second $ allocation is an error (exit code 2)" 2 "0xFE160" --abs "%TP%" --cfg "%R%\cfg\heap_odd.cfg" "%R%\csv\synth_heap_odd.csv"
 findstr /b /l /c:",1,0,0,0xE162,OK" "%WORK%\r_out\synth_heap_odd.csv" >nul 2>nul
 if errorlevel 1 (call :ok "allocation outside the heap is not reported as OK") else (call :ng "allocation outside the heap is not reported as OK")
-"%RS%" info --abs "%TP%" --cfg "%R%\cfg\heap_over.cfg" -v > "%WORK%\r.log" 2>&1
-call :has "%WORK%\r.log" "heap = 0xFFFF0:0x100" "heap beyond the address space is rejected with a warning"
-call :has "%WORK%\r.log" "0xFE160" "heap beyond the address space falls back to the automatic heap"
+rem unreadable config values (out of range, with a unit, negative) are errors (exit code 2), not defaults
+call :cfg_err "heap beyond the address space is an error" heap_over.cfg "heap = 0xFFFF0:0x100"
+call :cfg_err "cpu_hz = 32MHz is not read as 32 Hz" bad_cpu_hz.cfg "cpu_hz = 32MHz"
+call :cfg_err "max_insns = -1 is not read as a huge count" bad_max_insns.cfg "max_insns = -1"
+call :cfg_err "sentinel = 0x1EFFF0 is not truncated" bad_sentinel.cfg "sentinel = 0x1EFFF0"
 call :run "core = S2" 0 "OK 2, NG 0" --abs "%TP%" --cfg "%R%\cfg\core_s2.cfg" "%R%\csv\synth_core.csv"
 call :run "core = S3, mdu = off" 0 "OK 2, NG 0" --abs "%TP%" --cfg "%R%\cfg\core_s3_nomdu.cfg" "%R%\csv\synth_nomdu.csv"
 call :run "stub = read_io:AMSTB_read_io" 0 "OK 3, NG 0" --abs "%TP%" --cfg "%R%\cfg\stub.cfg" "%R%\csv\synth_stub.csv"
@@ -108,6 +110,14 @@ rem :has file text name
 :has
 findstr /l /c:"%~2" "%~1" >nul
 if errorlevel 1 (call :ng "%~3") else (call :ok "%~3")
+exit /b 0
+
+rem :cfg_err name cfg-file expected_text  (sim info exits 2 with the text)
+:cfg_err
+"%RS%" info --abs "%TP%" --cfg "%R%\cfg\%~2" > "%WORK%\r.log" 2>&1
+set RC=%ERRORLEVEL%
+findstr /l /c:"%~3" "%WORK%\r.log" >nul
+if errorlevel 1 (call :ng "%~1: message contains %~3") else if "%RC%"=="2" (call :ok "%~1") else (call :ng "%~1: exit code 2, got %RC%")
 exit /b 0
 
 rem :run name expected_exit_code expected_text sim-run-args...

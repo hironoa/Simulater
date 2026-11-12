@@ -2,6 +2,8 @@
 #include "sim_json.h"
 #include "sim_util.h"
 
+#include <errno.h>
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -150,6 +152,13 @@ static sj_value *parse_container(sj_parser *ps, int is_obj)
     }
 }
 
+/* 指数より前に 0 でない数字があるか */
+static int nonzero_mantissa(const char *s)
+{
+    for (; *s && *s != 'e' && *s != 'E'; s++) if (*s >= '1' && *s <= '9') return 1;
+    return 0;
+}
+
 static sj_value *parse_value(sj_parser *ps)
 {
     sj_value *v;
@@ -188,10 +197,17 @@ static sj_value *parse_value(sj_parser *ps)
         memcpy(tmp, st, n);
         tmp[n] = 0;
         v = new_val(SJ_NUM);
+        errno = 0;
         v->num = strtod(tmp, &end);
         v->raw = st;
         v->rawlen = n;
-        if (*end) { fail(ps, "不正な数値"); sj_free(v); v = NULL; }
+        if (*end || end == tmp) { fail(ps, "不正な数値"); sj_free(v); v = NULL; }
+        /* 1e400 のようなあふれ（inf）と、0 でない値が 0 になるアンダーフローは別の値になるので受け付けない */
+        else if (!isfinite(v->num) || (errno == ERANGE && v->num == 0 && nonzero_mantissa(tmp))) {
+            fail(ps, "数値が範囲外です（double で表せません）");
+            sj_free(v);
+            v = NULL;
+        }
         break;
     }
     }

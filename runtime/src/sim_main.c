@@ -17,6 +17,7 @@
 #include "sim_gui.h"
 #include "sim_platform.h"
 
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -130,18 +131,44 @@ static int cmd_gui(int argc, char **argv)
     o.speed = 1;
     o.open_browser = 1;
     o.record_max = 200000;
+    /* 数値は文字列全体を読み、範囲外や末尾のごみ（8765x、1e400、nan）を別の値にせずエラーにする */
     for (i = 0; i < argc; i++) {
-        if (strcmp(argv[i], "--port") == 0 && i + 1 < argc) o.port = atoi(argv[++i]);
-        else if (strcmp(argv[i], "--period-ms") == 0 && i + 1 < argc) o.period_ms = atof(argv[++i]);
-        else if (strcmp(argv[i], "--func") == 0 && i + 1 < argc) o.func = argv[++i];
-        else if (strcmp(argv[i], "--speed") == 0 && i + 1 < argc) o.speed = atof(argv[++i]);
-        else if (strcmp(argv[i], "--record-max") == 0 && i + 1 < argc) o.record_max = atoi(argv[++i]);
+        uint64_t u;
+        double d;
+        if (strcmp(argv[i], "--port") == 0 && i + 1 < argc) {
+            i++;
+            if (sim_parse_uint(argv[i], 65535, &u) || u == 0) {
+                fprintf(stderr, "エラー: --port %s は 1〜65535 の整数にしてください\n", argv[i]);
+                return 2;
+            }
+            o.port = (int)u;
+        } else if (strcmp(argv[i], "--period-ms") == 0 && i + 1 < argc) {
+            i++;
+            if (sim_parse_double(argv[i], &d) || !(d >= 0.01 && d <= 60000)) {
+                fprintf(stderr, "エラー: --period-ms %s は 0.01〜60000 の数にしてください\n", argv[i]);
+                return 2;
+            }
+            o.period_ms = d;
+        } else if (strcmp(argv[i], "--func") == 0 && i + 1 < argc) o.func = argv[++i];
+        else if (strcmp(argv[i], "--speed") == 0 && i + 1 < argc) {
+            i++;
+            if (sim_parse_double(argv[i], &d) || !(d == 0 || (d >= 0.1 && d <= 100))) {
+                fprintf(stderr, "エラー: --speed %s は 0（最速）か 0.1〜100 の数にしてください\n", argv[i]);
+                return 2;
+            }
+            o.speed = d;
+        } else if (strcmp(argv[i], "--record-max") == 0 && i + 1 < argc) {
+            i++;
+            if (sim_parse_uint(argv[i], INT_MAX, &u) || u == 0) {
+                fprintf(stderr, "エラー: --record-max %s は 1〜%d の整数にしてください\n", argv[i], INT_MAX);
+                return 2;
+            }
+            o.record_max = (int)u;
+        }
         else if (strcmp(argv[i], "--html-dir") == 0 && i + 1 < argc) o.html_dir = argv[++i];
         else if (strcmp(argv[i], "--no-browser") == 0) o.open_browser = 0;
         else { fprintf(stderr, "エラー: 不明なオプション %s\n", argv[i]); usage(); return 2; }
     }
-    if (o.port <= 0 || o.port > 65535) { fprintf(stderr, "エラー: --port が不正です\n"); return 2; }
-    if (o.period_ms <= 0) { fprintf(stderr, "エラー: --period-ms は正の数にしてください\n"); return 2; }
     c = open_ctx();
     if (!c) return 2;
     return sim_gui_run(c, &o);

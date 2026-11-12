@@ -80,7 +80,8 @@ sim gui --abs DefaultBuild\project.abs --func <周期関数> --period-ms 5
 
 ## 設定ファイル sim.cfg
 
-`.abs` と同じフォルダに置くと自動で読む。見本は [example/sim.cfg](example/sim.cfg)。主な項目:
+`.abs` と同じフォルダに置くと自動で読む。見本は [example/sim.cfg](example/sim.cfg)。読めない値（数値でない、範囲外など）は、
+既定値に置き換えずにエラー（終了コード 2）で止まる。主な項目:
 
 | キー | 内容 |
 |---|---|

@@ -1,0 +1,21 @@
+mod,mul16,INT64_MAX を超える 10 進は 64 ビットの符号なし（8 ビットには収まらない）,1,0
+#COMMENT,g_mode
+,18446744073709551615
+mod,mul16,-0x8000000000000000 より小さい負の 16 進,1,0
+#COMMENT,g_mode
+,-0xFFFFFFFFFFFFFFFF
+mod,mul16,double のあふれ,1,0
+#COMMENT,g_fan_duty
+,1e400
+mod,mul16,float のあふれ,1,0
+#COMMENT,g_fan_duty
+,1e39
+mod,mul16,0 で始まる添字（8 進と紛れる）,1,0
+#COMMENT,g_gear_up_rpm[010]
+,1
+mod,mul16,64 ビットを超える添字,1,0
+#COMMENT,g_gear_up_rpm[99999999999999999999]
+,1
+mod,mul16,0 で始まる 10 進のアドレス,1,0
+#COMMENT,0100:1
+,1

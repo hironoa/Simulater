@@ -2,6 +2,7 @@
 #include "sim_expr.h"
 
 #include <ctype.h>
+#include <errno.h>
 #include <math.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -493,10 +494,15 @@ sim_ref *sim_ref_parse(sim_ctx *c, const char *text, char *err, size_t errlen)
 
     /* アドレス直接指定（0xFFF10、0xFFF10:2）。SFR などデバッグ情報にない場所用 */
     if (*p >= '0' && *p <= '9') {
-        char *end;
-        unsigned long long a = strtoull(p, &end, 0);
+        const char *end = p;
+        uint64_t a = 0;
+        int rc;
+        while (isalnum((unsigned char)*end)) end++;
+        rc = sim_parse_uint_n(p, (size_t)(end - p), UINT64_MAX, &a);
         while (*end == ' ') end++;
-        if (*end) FAIL("'%s': アドレスとして読めません（例: 0xFFF10、0xFFF10:2）", r->text);
+        if (rc == SIM_NUM_OCTAL) FAIL("'%s': アドレスが 0 で始まる 10 進です（8 進数には対応していません。0x で書いてください）", r->text);
+        if (rc == SIM_NUM_RANGE) FAIL("'%s': アドレスが 64 ビットの範囲を超えています", r->text);
+        if (rc || *end) FAIL("'%s': アドレスとして読めません（例: 0xFFF10、0xFFF10:2）", r->text);
         if (r->prefix == '$' || r->prefix == '*') FAIL("'%s': アドレス直接指定には '%c' を付けられません", r->text, r->prefix);
         r->base = RB_MEM;
         r->addr = a;
@@ -631,30 +637,40 @@ sim_ref *sim_ref_parse(sim_ctx *c, const char *text, char *err, size_t errlen)
             }
             r->type = m->type;
         } else if (*p == '[') {
-            char *end;
-            long long idx;
+            const char *end;
+            uint64_t idx = 0;
+            int rc;
             const sim_type *t = r->type;
             p++;
             while (*p == ' ') p++;
-            idx = strtoll(p, &end, 0);
+            if (*p == '-') FAIL("'%s': 添字が負です", buf);
+            if (*p == '+') p++;
+            /* 10 進か 0x 16 進。添字全体を読み、64 ビットに収まらない値や 8 進と紛れる 010 を別の添字にしない */
+            for (end = p; isalnum((unsigned char)*end); end++) {}
             if (end == p) FAIL("'%s': 添字が数値ではありません", buf);
+            rc = sim_parse_uint_n(p, (size_t)(end - p), (uint64_t)INT64_MAX, &idx);
+            if (rc == SIM_NUM_OCTAL)
+                FAIL("'%s': 添字 '%.*s' が 0 で始まる 10 進です（8 進数には対応していません。10 進か 0x で書いてください）", buf, (int)(end - p), p);
+            if (rc == SIM_NUM_RANGE) FAIL("'%s': 添字 '%.*s' が大きすぎます", buf, (int)(end - p), p);
+            if (rc) FAIL("'%s': 添字 '%.*s' が数値ではありません", buf, (int)(end - p), p);
             p = end;
             while (*p == ' ') p++;
             if (*p != ']') FAIL("'%s': ']' がありません", buf);
             p++;
-            if (idx < 0) FAIL("'%s': 添字が負です", buf);
             if (t && t->kind == SIM_T_ARRAY) {
                 if (at_slot(r)) FAIL("'%s': 配列の値渡しには対応していません", buf);
-                if (t->count > 0 && (unsigned long long)idx >= t->count)
-                    FAIL("'%s': 添字 %lld は配列の要素数 %u の範囲外です", buf, idx, t->count);
+                if (t->count > 0 && idx >= t->count)
+                    FAIL("'%s': 添字 %llu は配列の要素数 %u の範囲外です", buf, (unsigned long long)idx, t->count);
                 if (!t->target) FAIL("'%s': 配列の要素の型が分かりません", buf);
-                if (add_step(r, ST_ADD, idx * (long long)t->target->size, err, errlen)) { sim_ref_free(r); return NULL; }
+                if (t->target->size && idx > (uint64_t)INT64_MAX / t->target->size) FAIL("'%s': 添字 %llu が大きすぎます", buf, (unsigned long long)idx);
+                if (add_step(r, ST_ADD, (int64_t)(idx * t->target->size), err, errlen)) { sim_ref_free(r); return NULL; }
                 r->type = t->target;
             } else if (t && t->kind == SIM_T_PTR) {
                 if (!t->target || t->target->kind == SIM_T_VOID || t->target->size == 0)
                     FAIL("'%s': void ポインタには添字を付けられません", buf);
+                if (idx > (uint64_t)INT64_MAX / t->target->size) FAIL("'%s': 添字 %llu が大きすぎます", buf, (unsigned long long)idx);
                 if (add_step_t(r, ST_DEREF, 0, t, err, errlen)) { sim_ref_free(r); return NULL; }
-                if (idx && add_step(r, ST_ADD, idx * (long long)t->target->size, err, errlen)) { sim_ref_free(r); return NULL; }
+                if (idx && add_step(r, ST_ADD, (int64_t)(idx * t->target->size), err, errlen)) { sim_ref_free(r); return NULL; }
                 r->type = t->target;
             } else {
                 FAIL("'%s': 添字の左が配列でもポインタでもありません", buf);
@@ -844,15 +860,37 @@ static int write_raw(sim_ctx *c, const sim_ref *r, const loc_t *L, const sim_typ
 }
 
 /* 値 -> 生のビット列 */
+/* 整数の項目を double にする（16 進と INT64_MAX を超える値は符号なし） */
+static double item_double(const sim_item *it)
+{
+    if (it->kind == SIM_ITEM_FLOAT) return it->f;
+    return (it->hex_digits || it->u64) ? (double)(uint64_t)it->i : (double)it->i;
+}
+
+double sim_item_double(const sim_item *it)
+{
+    if (it->too_big) return NAN;
+    return item_double(it);
+}
+
 static int encode(const sim_type *t, uint32_t bit_size, const sim_item *it, const char *name, uint64_t *raw,
                   char *err, size_t errlen)
 {
     unsigned bits = bit_size ? bit_size : type_bits(t);
+    if (it->too_big) {
+        if (it->kind == SIM_ITEM_FLOAT) snprintf(err, errlen, "'%s' に書く値が double の範囲を超えています（あふれるか、0 になるほど小さい）", name);
+        else snprintf(err, errlen, "'%s' に書く値が 64 ビットの整数の範囲を超えています", name);
+        return -1;
+    }
     if (t->kind == SIM_T_FLOAT) {
-        double d = it->kind == SIM_ITEM_INT ? (it->hex_digits ? (double)(uint64_t)it->i : (double)it->i) : it->f;
+        double d = item_double(it);
         if (t->size == 4) {
             float f = (float)d;
             uint32_t u;
+            if (isinf(f)) {
+                snprintf(err, errlen, "'%s' は float です。値 %g は収まりません", name, d);
+                return -1;
+            }
             memcpy(&u, &f, 4);
             *raw = u;
         } else {
@@ -873,16 +911,18 @@ static int encode(const sim_type *t, uint32_t bit_size, const sim_item *it, cons
         } else {
             v = it->i;
         }
-        if (bits < 64 && !it->hex_digits) {
+        if (bits < 64 && !it->hex_digits && !it->u64) {
             int64_t lo = -(int64_t)(1ULL << (bits - 1));
             uint64_t hi = (1ULL << bits) - 1;
             if (v < lo || (v > 0 && (uint64_t)v > hi)) {
                 snprintf(err, errlen, "'%s' は %u ビットです。値 %lld は収まりません", name, bits, (long long)v);
                 return -1;
             }
-        } else if (bits < 64 && it->hex_digits) {
+        } else if (bits < 64) {
+            /* 16 進と、INT64_MAX を超える 10 進・2 進は 64 ビットの符号なしとして比べる */
             if ((uint64_t)v >> bits) {
-                snprintf(err, errlen, "'%s' は %u ビットです。値 0x%llX は収まりません", name, bits, (unsigned long long)v);
+                if (it->hex_digits) snprintf(err, errlen, "'%s' は %u ビットです。値 0x%llX は収まりません", name, bits, (unsigned long long)v);
+                else snprintf(err, errlen, "'%s' は %u ビットです。値 %llu は収まりません", name, bits, (unsigned long long)v);
                 return -1;
             }
         }
@@ -919,8 +959,9 @@ static int item_match(const sim_type *t, uint32_t bit_size, uint64_t raw, const 
 {
     num_t a = decode(t, bit_size, raw);
     if (a.is_float) {
-        double e = it->kind == SIM_ITEM_INT ? (it->hex_digits ? (double)(uint64_t)it->i : (double)it->i) : it->f;
-        if (t->size == 4) return (float)e == (float)a.f;
+        double e = item_double(it);
+        if (it->too_big) return 0;
+        if (t->size == 4) return !isinf((float)e) && (float)e == (float)a.f;
         return e == a.f;
     }
     {
@@ -985,6 +1026,7 @@ static int parse_number(const char *s, size_t n, sim_item *it, char *err, size_t
     tmp[n] = 0;
     p = tmp;
     if (*p == '+' || *p == '-') { neg = *p == '-'; p++; }
+    it->kind = SIM_ITEM_INT;
     if (p[0] == '0' && (p[1] == 'x' || p[1] == 'X')) {
         const char *h = p + 2;
         uint64_t v = 0;
@@ -1001,9 +1043,14 @@ static int parse_number(const char *s, size_t n, sim_item *it, char *err, size_t
         }
         while (*h == 'u' || *h == 'U' || *h == 'l' || *h == 'L') h++;
         if (digits == 0 || *h) { snprintf(err, errlen, "値 '%s' を 16 進数として読めません", tmp); return -1; }
-        it->kind = SIM_ITEM_INT;
-        it->i = neg ? -(int64_t)v : (int64_t)v;
-        it->hex_digits = neg ? 0 : digits;
+        if (neg) {
+            /* -0x8000000000000000 までが 64 ビットの符号付き。それより小さい値を折り返して別の値にしない */
+            if (v > (1ULL << 63)) it->too_big = 1;
+            else it->i = (int64_t)(0 - v);
+            return 0;
+        }
+        it->i = (int64_t)v;
+        it->hex_digits = digits;
         it->hex_upper = upper || !lower;
         it->hex_prefix_upper = p[1] == 'X';
         return 0;
@@ -1014,8 +1061,13 @@ static int parse_number(const char *s, size_t n, sim_item *it, char *err, size_t
         int digits = 0;
         for (; *h == '0' || *h == '1'; h++, digits++) v = v * 2 + (uint64_t)(*h - '0');
         if (*h || digits > 64) { snprintf(err, errlen, "値 '%s' を 2 進数として読めません", tmp); return -1; }
-        it->kind = SIM_ITEM_INT;
-        it->i = neg ? -(int64_t)v : (int64_t)v;
+        if (neg) {
+            if (v > (1ULL << 63)) it->too_big = 1;
+            else it->i = (int64_t)(0 - v);
+        } else {
+            it->i = (int64_t)v;
+            it->u64 = v > (uint64_t)INT64_MAX;
+        }
         return 0;
     }
     {
@@ -1025,21 +1077,26 @@ static int parse_number(const char *s, size_t n, sim_item *it, char *err, size_t
         for (q = p; *q; q++) if (*q == '.' || *q == 'e' || *q == 'E') isf = 1;
         if (!isdigit((unsigned char)*p) && *p != '.') { snprintf(err, errlen, "値 '%s' を数値として読めません", tmp); return -1; }
         if (isf) {
-            double d = strtod(tmp, &end);
-            if (*end) { snprintf(err, errlen, "値 '%s' を数値として読めません", tmp); return -1; }
+            double d = 0;
+            int rc = sim_parse_double(tmp, &d);
+            if (rc == SIM_NUM_BAD) { snprintf(err, errlen, "値 '%s' を数値として読めません", tmp); return -1; }
             it->kind = SIM_ITEM_FLOAT;
-            it->f = d;
+            if (rc == SIM_NUM_RANGE) it->too_big = 1;   /* double のあふれ（1e400）や 0 になるほど小さい値 */
+            else it->f = d;
             return 0;
         } else {
             unsigned long long u;
-            const char *e2 = p;
+            errno = 0;
             u = strtoull(p, &end, 10);
-            (void)e2;
             while (*end == 'u' || *end == 'U' || *end == 'l' || *end == 'L') end++;
             if (*end) { snprintf(err, errlen, "値 '%s' を数値として読めません", tmp); return -1; }
-            if (neg && u > (1ULL << 63)) { snprintf(err, errlen, "値 '%s' が大きすぎます", tmp); return -1; }
-            it->kind = SIM_ITEM_INT;
-            it->i = neg ? (int64_t)(0 - u) : (int64_t)u;
+            /* 64 ビットを超える値は strtoull が飽和させる（ERANGE）。その値（-1 と同じビット列）にしない */
+            if (errno == ERANGE || (neg && u > (1ULL << 63))) { it->too_big = 1; return 0; }
+            if (neg) it->i = (int64_t)(0 - u);
+            else {
+                it->i = (int64_t)u;
+                it->u64 = u > (unsigned long long)INT64_MAX;
+            }
             return 0;
         }
     }
@@ -1095,7 +1152,8 @@ int sim_ref_check_value(const sim_ref *r, const sim_cellval *v, char *err, size_
     if (r->base == RB_RET && r->nsteps == 0) { snprintf(err, errlen, "'%s': 戻り値は入力にできません", r->text); return -1; }
     if (r->prefix == '$') {
         const sim_type *e = r->elem && r->elem->size ? r->elem : &g_byte_type;
-        if (v->n != 1 || v->is_string || v->items[0].kind != SIM_ITEM_INT || v->items[0].i < 0) {
+        if (v->n != 1 || v->is_string || v->items[0].kind != SIM_ITEM_INT || v->items[0].too_big || v->items[0].u64 ||
+            v->items[0].i < 0) {
             snprintf(err, errlen, "'%s': '$' の値は確保する要素数（0 以上の整数）です", r->text);
             return -1;
         }

@@ -69,24 +69,37 @@ typedef struct {
 
 /* ================================================================ 設定の値 */
 
+/* 10 進、0x 16 進、末尾 H の 16 進（0FFF0H のようなルネサス流）。文字列全体が数値でなければ -1。
+ * 符号（-1 が 2^64-1 になる）、64 ビットを超える値（飽和する）、8 進と紛れる 0 始まりの 10 進（010）、末尾のごみは読めない */
 static int parse_u64(const char *s, uint64_t *out)
 {
-    char *end;
     size_t n;
-    char tmp[64];
+    char tmp[80];
     if (!s) return -1;
     while (*s == ' ') s++;
     n = strlen(s);
-    if (!n || n >= sizeof tmp) return -1;
-    memcpy(tmp, s, n + 1);
-    /* 末尾の H（0FFF0H のようなルネサス流の 16 進） */
-    if (n > 1 && (tmp[n - 1] == 'h' || tmp[n - 1] == 'H')) {
-        tmp[n - 1] = 0;
-        *out = strtoull(tmp, &end, 16);
-        return *end ? -1 : 0;
+    while (n > 0 && s[n - 1] == ' ') n--;
+    if (!n) return -1;
+    if (n > 1 && (s[n - 1] == 'h' || s[n - 1] == 'H')) {
+        size_t i;
+        if (n + 1 >= sizeof tmp) return -1;
+        for (i = 0; i + 1 < n; i++) if (!isxdigit((unsigned char)s[i])) return -1;
+        tmp[0] = '0';
+        tmp[1] = 'x';
+        memcpy(tmp + 2, s, n - 1);
+        tmp[n + 1] = 0;
+        return sim_parse_uint(tmp, UINT64_MAX, out) ? -1 : 0;
     }
-    *out = strtoull(tmp, &end, 0);
-    return *end ? -1 : 0;
+    return sim_parse_uint_n(s, n, UINT64_MAX, out) ? -1 : 0;
+}
+
+/* RL78 のアドレス（0x00000〜0xFFFFF）。上位ビットを捨てて別のアドレスにしない */
+static int parse_addr(const char *s, uint32_t *out)
+{
+    uint64_t v;
+    if (parse_u64(s, &v) || v > 0xFFFFFu) return -1;
+    *out = (uint32_t)v;
+    return 0;
 }
 
 static int parse_onoff(const char *s, int *out)
@@ -138,14 +151,22 @@ static const rl78_funcinfo *find_func(be_t *z, const char *name)
     return hit;
 }
 
-/* 関数名、ELF のシンボル名、アドレスのどれかを解決する */
+#define ADDR_BAD "アドレスとして読めません（10 進か 0x / 末尾 H の 16 進で 0x00000〜0xFFFFF）"
+
+/* 関数名、ELF のシンボル名、アドレスのどれかを解決する。見つからなければ -1、数字で始まりアドレスとして読めなければ -2 */
 static int resolve_code(be_t *z, const char *s, uint32_t *addr, const char **name)
 {
     uint64_t v;
     const rl78_funcinfo *f;
     const rl78_sym *y;
     if (!s || !*s) return -1;
-    if (isdigit((unsigned char)s[0]) && !parse_u64(s, &v)) { *addr = (uint32_t)v; *name = s; return 0; }
+    if (isdigit((unsigned char)s[0])) {
+        /* 数字で始まる名前はないので、アドレスとして読めなければ -2（別のアドレスや名前にしない） */
+        if (parse_u64(s, &v) || v > 0xFFFFFu) return -2;
+        *addr = (uint32_t)v;
+        *name = s;
+        return 0;
+    }
     f = find_func(z, s);
     if (f) { *addr = (uint32_t)f->f.addr; *name = f->f.name; return 0; }
     y = rl78_elf_symbol(&z->elf, s);
@@ -187,7 +208,7 @@ static int overlaps_section(be_t *z, uint32_t lo, uint32_t hi)
     return 0;
 }
 
-static void layout(be_t *z)
+static int layout(be_t *z, char *err, size_t errlen)
 {
     int found1, found2, i;
     uint32_t v1, v2;
@@ -207,8 +228,10 @@ static void layout(be_t *z)
         z->ram_lo = lo != 0xFFFFFFFFu ? (lo & ~0xFFu) : 0xFE900u;
         z->ram_hi = 0xFFEE0u;
     }
-    if ((s = sim_cfg_get(&z->cfg, "ram")) && parse_range(s, &z->ram_lo, &z->ram_hi))
-        rl78_warn(&z->w, "sim.cfg: ram = %s を読めません（例: ram = 0xFBF00-0xFFEDF）", s);
+    if ((s = sim_cfg_get(&z->cfg, "ram")) && parse_range(s, &z->ram_lo, &z->ram_hi)) {
+        snprintf(err, errlen, "sim.cfg: ram = %s を読めません（例: ram = 0xFBF00-0xFFEDF。0x00000〜0xFFFFF の範囲）", s);
+        return -1;
+    }
     /* スタック */
     v1 = sym_value(z, "__STACK_ADDR_START", &found1);
     v2 = sym_value(z, "__STACK_ADDR_END", &found2);
@@ -217,9 +240,10 @@ static void layout(be_t *z)
         const rl78_sect *x = rl78_elf_section(&z->elf, ".stack_bss");
         if (x && x->size) { z->stack_lo = x->addr; z->stack_hi = x->addr + x->size; z->have_stack = 1; }
     }
+    return 0;
 }
 
-static void choose_heap(be_t *z)
+static int choose_heap(be_t *z, char *err, size_t errlen)
 {
     const char *s = sim_cfg_get(&z->cfg, "heap");
     span_t sp[512];
@@ -228,9 +252,10 @@ static void choose_heap(be_t *z)
     if (s) {
         if (parse_range(s, &z->heap_lo, &z->heap_hi) == 0) {
             snprintf(z->heap_desc, sizeof z->heap_desc, "sim.cfg の heap");
-            return;
+            return 0;
         }
-        rl78_warn(&z->w, "sim.cfg: heap = %s を読めません（例: heap = 0xFB000-0xFB3FF または heap = 0xFB000:0x400）", s);
+        snprintf(err, errlen, "sim.cfg: heap = %s を読めません（例: heap = 0xFB000-0xFB3FF または heap = 0xFB000:0x400。0x00000〜0xFFFFF の範囲）", s);
+        return -1;
     }
     for (i = 0; i < z->elf.nsect && n < 500; i++) {
         const rl78_sect *x = &z->elf.sect[i];
@@ -255,7 +280,7 @@ static void choose_heap(be_t *z)
         z->heap_lo = best_lo;
         z->heap_hi = best_lo + ((end - best_lo) & ~1u);
         snprintf(z->heap_desc, sizeof z->heap_desc, "自動: 使われていない RAM");
-        return;
+        return 0;
     }
     if (z->have_stack && z->stack_hi - z->stack_lo >= 512) {
         uint32_t len = (z->stack_hi - z->stack_lo) / 4;
@@ -263,21 +288,30 @@ static void choose_heap(be_t *z)
         z->heap_lo = (z->stack_lo + 1u) & ~1u;
         z->heap_hi = z->heap_lo + (len & ~1u);
         snprintf(z->heap_desc, sizeof z->heap_desc, "自動: スタックの底（使われていない RAM がないため）");
-        return;
+        return 0;
     }
     z->heap_lo = z->heap_hi = 0;
     snprintf(z->heap_desc, sizeof z->heap_desc, "なし（sim.cfg の heap で指定してください）");
+    return 0;
 }
 
-static void choose_sentinel(be_t *z)
+static int choose_sentinel(be_t *z, char *err, size_t errlen)
 {
     const char *s = sim_cfg_get(&z->cfg, "sentinel");
-    uint64_t v;
     uint32_t a;
-    if (s && !parse_u64(s, &v)) { z->sentinel = (uint32_t)v & 0xFFFFEu; return; }
+    if (s) {
+        /* 番兵には 2 バイト（BR $$）を置くので偶数のアドレス */
+        if (parse_addr(s, &a) || (a & 1u) || a > 0xFFFFEu) {
+            snprintf(err, errlen, "sim.cfg: sentinel = %s を読めません（0x00000〜0xFFFFE の偶数のアドレス）", s);
+            return -1;
+        }
+        z->sentinel = a;
+        return 0;
+    }
     for (a = 0xEFFF0u; a > 0x10000u; a -= 0x100u)
-        if (!overlaps_section(z, a, a + 16u)) { z->sentinel = a; return; }
+        if (!overlaps_section(z, a, a + 16u)) { z->sentinel = a; return 0; }
     z->sentinel = 0xEFFF0u;
+    return 0;
 }
 
 /* ================================================================ 実行 */
@@ -737,7 +771,7 @@ static int setup_core(be_t *z, char *err, size_t errlen)
     if ((s = sim_cfg_get(&z->cfg, "stop")) && !strcmp(s, "stop")) z->cc.stop_policy = RL78_SLEEP_RETURN;
     if ((s = sim_cfg_get(&z->cfg, "rom_size"))) {
         uint64_t v;
-        if (parse_u64(s, &v)) { snprintf(err, errlen, "sim.cfg: rom_size = %s を読めません", s); return -1; }
+        if (parse_u64(s, &v) || v > 0x100000u) { snprintf(err, errlen, "sim.cfg: rom_size = %s を読めません（0〜0x100000 のバイト数）", s); return -1; }
         z->cc.rom_size = (uint32_t)v;
     }
     snprintf(z->core_desc, sizeof z->core_desc, "%s%s%s", is_auto ? "auto（S3 の命令" : (core == RL78_CORE_S1 ? "S1" : core == RL78_CORE_S2 ? "S2" : "S3"),
@@ -756,9 +790,9 @@ static int setup_core(be_t *z, char *err, size_t errlen)
         z->cc.mirror_end = hi;
         z->cc.mirror_src = lo - 0xF0000u;
         if (src) {
-            uint64_t v;
-            if (parse_u64(src + 1, &v)) { snprintf(err, errlen, "sim.cfg: mirror の @ の後（写し元）を読めません"); return -1; }
-            z->cc.mirror_src = (uint32_t)v;
+            uint32_t v;
+            if (parse_addr(src + 1, &v)) { snprintf(err, errlen, "sim.cfg: mirror の @ の後（写し元）を読めません（0x00000〜0xFFFFF）"); return -1; }
+            z->cc.mirror_src = v;
         }
     } else if (core == RL78_CORE_S1) {
         z->cc.mirror_start = 0xF8000u;
@@ -779,12 +813,15 @@ static int setup_core(be_t *z, char *err, size_t errlen)
     return 0;
 }
 
-static void load_image(be_t *z)
+static int load_image(be_t *z, char *err, size_t errlen)
 {
     int i, nload = 0;
     const char *s = sim_cfg_get(&z->cfg, "ram_fill");
     uint64_t fill = 0;
-    if (s && parse_u64(s, &fill)) rl78_warn(&z->w, "sim.cfg: ram_fill = %s を読めません", s);
+    if (s && (parse_u64(s, &fill) || fill > 0xFFu)) {
+        snprintf(err, errlen, "sim.cfg: ram_fill = %s を読めません（0〜0xFF の 1 バイト）", s);
+        return -1;
+    }
     {
         /* RAM の初期値（実機では不定） */
         static uint8_t buf[4096];
@@ -817,14 +854,22 @@ static void load_image(be_t *z)
             rl78_load(z->cpu, x->addr, z->elf.data + x->offset, x->size);
         }
     }
+    return 0;
 }
 
 static int add_stub(be_t *z, const char *orig, const char *stub, char *err, size_t errlen)
 {
     uint32_t a1, a2;
     const char *n1, *n2;
-    if (resolve_code(z, orig, &a1, &n1)) { snprintf(err, errlen, "sim.cfg: stub の置き換え元 '%s' が見つかりません", orig); return -1; }
-    if (resolve_code(z, stub, &a2, &n2)) { snprintf(err, errlen, "sim.cfg: stub の置き換え先 '%s' が見つかりません", stub); return -1; }
+    int rc;
+    if ((rc = resolve_code(z, orig, &a1, &n1))) {
+        snprintf(err, errlen, "sim.cfg: stub の置き換え元 '%s' が%s", orig, rc == -2 ? ADDR_BAD : "見つかりません");
+        return -1;
+    }
+    if ((rc = resolve_code(z, stub, &a2, &n2))) {
+        snprintf(err, errlen, "sim.cfg: stub の置き換え先 '%s' が%s", stub, rc == -2 ? ADDR_BAD : "見つかりません");
+        return -1;
+    }
     if (a1 == a2) return 0;
     {
         int i;
@@ -939,6 +984,7 @@ sim_backend *sim_backend_open(const sim_open_opts *o, char *err, size_t errlen)
     const char *s;
     char cerr[1024];
     rl78_dwarf_opts dopt;
+    double hz = 32000000.0;
     int i;
     z->w.verbose = o->verbose;
     sim_cfg_init(&z->cfg);
@@ -973,10 +1019,16 @@ sim_backend *sim_backend_open(const sim_open_opts *o, char *err, size_t errlen)
     if ((s = sim_cfg_get(&z->cfg, "bitfield_order")) && !strcmp(s, "lsb")) dopt.bitfield_lsb = 1;
     for (i = 0; i < z->cfg.n; i++) {
         if (strncmp(z->cfg.e[i].key, "addr_class.", 11) == 0) {
-            int cls = atoi(z->cfg.e[i].key + 11), sz = atoi(z->cfg.e[i].value);
+            /* N も値も全体を読む（addr_class.1x = 2abc を addr_class.1 = 2 にしない） */
+            uint64_t cls, sz;
             z->cfg.e[i].used = 1;
-            if (cls >= 0 && cls < 16 && (sz == 2 || sz == 4)) dopt.addr_class_size[cls] = sz;
-            else rl78_warn(&z->w, "sim.cfg:%d: addr_class.N = 2 か 4 にしてください", z->cfg.e[i].line);
+            if (sim_parse_uint(z->cfg.e[i].key + 11, 15, &cls) || sim_parse_uint(z->cfg.e[i].value, 4, &sz) || (sz != 2 && sz != 4)) {
+                snprintf(err, errlen, "sim.cfg:%d: %s = %s を読めません（addr_class.N = 2 か 4、N は 0〜15）", z->cfg.e[i].line,
+                         z->cfg.e[i].key, z->cfg.e[i].value);
+                be_free(z);
+                return NULL;
+            }
+            dopt.addr_class_size[cls] = (int)sz;
         }
     }
     rl78_symtab_init(&z->st);
@@ -1001,12 +1053,11 @@ sim_backend *sim_backend_open(const sim_open_opts *o, char *err, size_t errlen)
     }
     if (!z->st.dwarf_ok) rl78_warn(&z->w, "デバッグ情報（DWARF）がないか読めませんでした。変数は 'name:バイト数' で指定してください");
 
-    layout(z);
+    if (layout(z, err, errlen)) { be_free(z); return NULL; }
     if (setup_core(z, err, errlen)) { be_free(z); return NULL; }
-    choose_sentinel(z);
-    choose_heap(z);
+    if (choose_sentinel(z, err, errlen) || choose_heap(z, err, errlen)) { be_free(z); return NULL; }
     z->heap_cur = z->heap_lo;
-    load_image(z);
+    if (load_image(z, err, errlen)) { be_free(z); return NULL; }
     rl78_reset(z->cpu);
     {
         uint8_t loop[2] = {0xEF, 0xFE}; /* BR $$（番兵の中身。ここで止めるので実行はされない） */
@@ -1014,14 +1065,22 @@ sim_backend *sim_backend_open(const sim_open_opts *o, char *err, size_t errlen)
     }
     z->max_insns = 100000000ULL;
     z->startup_max = 200000000ULL;
-    if ((s = sim_cfg_get(&z->cfg, "max_insns"))) { uint64_t v; if (!parse_u64(s, &v) && v) z->max_insns = v; else rl78_warn(&z->w, "sim.cfg: max_insns = %s を読めません", s); }
-    if ((s = sim_cfg_get(&z->cfg, "startup_max_insns"))) { uint64_t v; if (!parse_u64(s, &v) && v) z->startup_max = v; else rl78_warn(&z->w, "sim.cfg: startup_max_insns = %s を読めません", s); }
+    if ((s = sim_cfg_get(&z->cfg, "max_insns")) && (parse_u64(s, &z->max_insns) || !z->max_insns)) {
+        snprintf(err, errlen, "sim.cfg: max_insns = %s を読めません（1 以上の整数）", s);
+        be_free(z);
+        return NULL;
+    }
+    if ((s = sim_cfg_get(&z->cfg, "startup_max_insns")) && (parse_u64(s, &z->startup_max) || !z->startup_max)) {
+        snprintf(err, errlen, "sim.cfg: startup_max_insns = %s を読めません（1 以上の整数）", s);
+        be_free(z);
+        return NULL;
+    }
 
     if (setup_stubs(z, err, errlen)) { be_free(z); return NULL; }
     /* 初期設定終了アドレス */
     s = sim_cfg_get(&z->cfg, "init_end");
-    if (resolve_code(z, s ? s : "main", &z->init_end, &z->init_end_name)) {
-        if (s) snprintf(err, errlen, "sim.cfg: init_end = %s が見つかりません", s);
+    if ((i = resolve_code(z, s ? s : "main", &z->init_end, &z->init_end_name))) {
+        if (s) snprintf(err, errlen, "sim.cfg: init_end = %s が%s", s, i == -2 ? ADDR_BAD : "見つかりません");
         else snprintf(err, errlen, "初期設定終了アドレスが分かりません（main がありません）。sim.cfg の init_end = 関数名 または 0xアドレス で指定してください");
         be_free(z);
         return NULL;
@@ -1047,9 +1106,14 @@ sim_backend *sim_backend_open(const sim_open_opts *o, char *err, size_t errlen)
     /* SP は 16 ビット（F0000H〜FFFFFH の下位）。呼び出しはスタートアップが main を呼んだときの SP から積む */
     z->call_sp = 0xF0000u | (rl78_get_reg(z->cpu, RL78_REG_SP) & 0xFFFEu);
     if ((s = sim_cfg_get(&z->cfg, "call_sp"))) {
-        uint64_t v;
-        if (!parse_u64(s, &v)) z->call_sp = 0xF0000u | ((uint32_t)v & 0xFFFEu);
-        else rl78_warn(&z->w, "sim.cfg: call_sp = %s を読めません", s);
+        /* SP は 16 ビットで偶数。F0000H〜FFFFFH の 20 ビットでも、下位 16 ビットだけでも書ける。それ以外を切り詰めない */
+        uint32_t v;
+        if (parse_addr(s, &v) || (v > 0xFFFFu && v < 0xF0000u) || (v & 1u)) {
+            snprintf(err, errlen, "sim.cfg: call_sp = %s を読めません（偶数で 0x0000〜0xFFFF か 0xF0000〜0xFFFFE）", s);
+            be_free(z);
+            return NULL;
+        }
+        z->call_sp = 0xF0000u | (v & 0xFFFEu);
     }
     if (z->call_sp < z->ram_lo + 64u || z->call_sp > 0xFFEE0u) {
         rl78_warn(&z->w, "初期設定終了時の SP（0x%05X）が RAM の外なので、呼び出しには 0x%05X を使います", z->call_sp,
@@ -1064,6 +1128,15 @@ sim_backend *sim_backend_open(const sim_open_opts *o, char *err, size_t errlen)
         if (z->cfg.e[i].used) continue;
         for (k = 0; KNOWN_KEYS[k]; k++) if (!strcmp(KNOWN_KEYS[k], z->cfg.e[i].key)) known = 1;
         if (!known) rl78_warn(&z->w, "%s:%d: 知らない設定 '%s'", z->cfg.path ? z->cfg.path : "sim.cfg", z->cfg.e[i].line, z->cfg.e[i].key);
+    }
+
+    if ((s = sim_cfg_get(&z->cfg, "cpu_hz"))) {
+        /* 32MHz を 32 にしたり、1e400 を inf にしたりしない */
+        if (sim_parse_double(s, &hz) || !(hz > 0)) {
+            snprintf(err, errlen, "sim.cfg: cpu_hz = %s を読めません（正の数。例: cpu_hz = 32000000）", s);
+            be_free(z);
+            return NULL;
+        }
     }
 
     b = sim_xcalloc(1, sizeof *b);
@@ -1086,12 +1159,7 @@ sim_backend *sim_backend_open(const sim_open_opts *o, char *err, size_t errlen)
     b->ptr_to_addr = b_ptr_to_addr;
     b->exec_stats = b_exec_stats;
     b->print_info = b_print_info;
-    b->cpu_hz = 32000000.0;
-    if ((s = sim_cfg_get(&z->cfg, "cpu_hz"))) {
-        double hz = atof(s);
-        if (hz > 0) b->cpu_hz = hz;
-        else rl78_warn(&z->w, "sim.cfg: cpu_hz = %s を読めません", s);
-    }
+    b->cpu_hz = hz;
     b->impl = z;
     if (z->w.n && !z->w.verbose) fprintf(stderr, "sim: 読み込みの警告が %d 件あります（--verbose で表示）\n", z->w.n);
     return b;

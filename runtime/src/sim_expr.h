@@ -68,6 +68,8 @@ typedef struct {
     int hex_digits;     /* 0x 表記なら桁数、違えば 0 */
     int hex_upper;
     int hex_prefix_upper; /* 0X */
+    int u64;            /* i を 64 ビットの符号なしとして読む（INT64_MAX を超える 10 進・2 進） */
+    int too_big;        /* 64 ビットの整数（浮動小数なら double）に収まらない値。書き込めず、期待値なら不一致 */
 } sim_item;
 
 typedef struct {
@@ -80,6 +82,8 @@ typedef struct {
 int sim_parse_cell(const char *text, size_t len, sim_cellval *out, char *err, size_t errlen);
 /* 値が書いてあるか。空セルは 0、空文字列 '' は 1（入力なら終端の 0 を書き、期待値なら空文字列と比べる） */
 int sim_cellval_present(const sim_cellval *v);
+/* 項目の値を double で（16 進・INT64_MAX を超える値は符号なし。範囲外の値は NaN） */
+double sim_item_double(const sim_item *it);
 void sim_cellval_free(sim_cellval *v);
 
 /* 書き込める値か（const・戻り値・'$' の値・要素数・型に収まるか）をメモリに触れずに確かめる。失敗なら -1 と err。

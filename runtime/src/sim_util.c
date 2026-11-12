@@ -251,3 +251,61 @@ void sim_format_double(char *out, size_t n, double v, int is_float32)
         }
     }
 }
+
+/* ================================================================ 数値の文字列 */
+
+int sim_parse_uint_n(const char *s, size_t n, uint64_t max, uint64_t *out)
+{
+    char tmp[128];
+    char *end;
+    size_t i, start = 0;
+    int base = 10;
+    unsigned long long v;
+    if (n >= 2 && s[0] == '0' && (s[1] == 'x' || s[1] == 'X')) { base = 16; start = 2; }
+    if (start == n) return SIM_NUM_BAD;
+    for (i = start; i < n; i++) {
+        if (base == 16 ? !isxdigit((unsigned char)s[i]) : !isdigit((unsigned char)s[i])) return SIM_NUM_BAD;
+    }
+    /* 0 で始まる 10 進（010）は C では 8 進なので、どちらの意味か決められない */
+    if (base == 10 && n > 1 && s[0] == '0') return SIM_NUM_OCTAL;
+    if (n >= sizeof tmp) return SIM_NUM_RANGE;
+    memcpy(tmp, s, n);
+    tmp[n] = 0;
+    errno = 0;
+    v = strtoull(tmp + start, &end, base);
+    if (*end) return SIM_NUM_BAD;
+    if (errno == ERANGE || (uint64_t)v > max) return SIM_NUM_RANGE;
+    *out = (uint64_t)v;
+    return SIM_NUM_OK;
+}
+
+int sim_parse_uint(const char *s, uint64_t max, uint64_t *out)
+{
+    return sim_parse_uint_n(s, strlen(s), max, out);
+}
+
+int sim_parse_double(const char *s, double *out)
+{
+    const char *p = s;
+    char *end;
+    double d;
+    int digits = 0;
+    /* 10 進の数字・小数点・指数だけ（nan / inf / 16 進の浮動小数 / 前後の空白は受け付けない） */
+    if (*p == '+' || *p == '-') p++;
+    for (; *p; p++) {
+        if (isdigit((unsigned char)*p)) digits++;
+        else if (*p != '.' && *p != 'e' && *p != 'E' && *p != '+' && *p != '-') return SIM_NUM_BAD;
+    }
+    if (!digits) return SIM_NUM_BAD;
+    if (!isdigit((unsigned char)s[*s == '+' || *s == '-']) && s[*s == '+' || *s == '-'] != '.') return SIM_NUM_BAD;
+    errno = 0;
+    d = strtod(s, &end);
+    if (end == s || *end) return SIM_NUM_BAD;
+    if (!isfinite(d)) return SIM_NUM_RANGE;
+    /* あふれ（HUGE_VAL）と、0 でない値が 0 になるアンダーフロー。非正規化数で ERANGE を立てる実装もあるので、0 以外は受け付ける */
+    if (errno == ERANGE && d == 0) {
+        for (p = s; *p && *p != 'e' && *p != 'E'; p++) if (*p >= '1' && *p <= '9') return SIM_NUM_RANGE;
+    }
+    *out = d;
+    return SIM_NUM_OK;
+}

@@ -55,4 +55,17 @@ int sim_is_ident_char(int c);
 /* 浮動小数を、型の精度で往復できる最短の 10 進表記にする */
 void sim_format_double(char *out, size_t n, double v, int is_float32);
 
+/* 数値の文字列を検証して読む（黙って別の値にしない）。結果は SIM_NUM_* */
+enum {
+    SIM_NUM_OK = 0,
+    SIM_NUM_BAD = -1,    /* 数値ではない（空、空白、符号、末尾のごみ、"0x" だけ、nan / inf など） */
+    SIM_NUM_RANGE = -2,  /* 範囲外（64 ビット・max を超える、double のあふれ・0 へのアンダーフロー） */
+    SIM_NUM_OCTAL = -3   /* 0 で始まる 10 進（010）。C の 8 進と紛れるので受け付けない */
+};
+/* 符号なし整数: 10 進か 0x 16 進。文字列全体が数値で、max 以下のとき SIM_NUM_OK */
+int sim_parse_uint(const char *s, uint64_t max, uint64_t *out);
+int sim_parse_uint_n(const char *s, size_t n, uint64_t max, uint64_t *out);
+/* 10 進の浮動小数（符号・小数点・指数可）。有限の値だけ */
+int sim_parse_double(const char *s, double *out);
+
 #endif

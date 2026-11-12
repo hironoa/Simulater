@@ -114,6 +114,23 @@ err_case index_range.csv "添字 5 は配列の要素数 5 の範囲外です"
 err_case overflow.csv "値 300 は収まりません"
 err_case null_deref.csv "NULL ポインタの先は読み書きできません"
 err_case bad_mod.csv "入力数）'x' が数値ではありません"
+# 64 ビットを超える 10 進は飽和させて別の値（-1 = 255）にしない
+err_case big_decimal.csv "4 列目 'g_mode': 'g_mode' に書く値が 64 ビットの整数の範囲を超えています"
+
+echo "== 数値の範囲と表記（黙って別の値にしない）"
+"$SIM" run "$T/csv/err/num_range.csv" -o "$WORK/onr" --quiet > "$WORK/nr.log" 2>&1
+RC=$?
+check "範囲外の値・添字・アドレスはそれぞれエラー（終了コード 2、エラー 7）" sh -c "[ $RC -eq 2 ] && grep -F -q 'エラー 7' '$WORK/nr.log'"
+check "INT64_MAX を超える 10 進は 8 ビットに収まらない（-1 = 255 にしない）" contains "$WORK/nr.log" "'g_mode' は 8 ビットです。値 18446744073709551615 は収まりません"
+check "-0xFFFFFFFFFFFFFFFF を折り返して 1 にしない" contains "$WORK/nr.log" "num_range.csv:6: 2 列目 'g_mode': 'g_mode' に書く値が 64 ビットの整数の範囲を超えています"
+check "1e400 を inf にしない" contains "$WORK/nr.log" "'g_fan_duty' に書く値が double の範囲を超えています"
+check "float に収まらない 1e39 を inf にしない" contains "$WORK/nr.log" "'g_fan_duty' は float です。値 1e+39 は収まりません"
+check "添字 010 を 8 進の 8 と読まない" contains "$WORK/nr.log" "添字 '010' が 0 で始まる 10 進です"
+check "64 ビットを超える添字を飽和させない" contains "$WORK/nr.log" "添字 '99999999999999999999' が大きすぎます"
+check "アドレス 0100 を 8 進の 0x40 と読まない" contains "$WORK/nr.log" "'0100:1': アドレスが 0 で始まる 10 進です"
+run_cmp expect_num_range.csv 1
+"$SIM" run "$T/csv/expect_num_range.csv" -o "$WORK/oenr" --quiet > "$WORK/enr.log" 2>&1
+check "範囲外の期待値は NG、INT64_MAX を超える 10 進は 64 ビットで一致（総数 6, OK 2, NG 4）" contains "$WORK/enr.log" "合計: 総数 6, OK 2, NG 4, NO Check 0"
 "$SIM" run "$WORK/nonexistent.csv" -o "$WORK/oerr" > "$WORK/err.log" 2>&1
 RC=$?
 check "存在しない CSV（終了コード 2）" test "$RC" -eq 2
@@ -181,6 +198,21 @@ check "引用した結果 CSV を読み直すと期待側を採る（終了コ�
 RC=$?
 check "引用した結果 CSV を --expect-actual で読み直すと全行 OK（終了コード 0）" sh -c "[ $RC -eq 0 ] && grep -F -q '合計: 総数 4, OK 4, NG 0, NO Check 0' '$WORK/quote_rb2.log'"
 check "読み直した結果でも入力セル（\"'A,B'\"）はバイトそのまま" contains "$WORK/oquote_rb/expect_quote.csv" ",\"'A,B'\",65|44|66?('ABC'),NG,"
+
+echo "== sim gui の数値オプション（範囲外・末尾のごみはエラー）"
+gui_opt() {
+    _name=$1; _msg=$2; shift 2
+    # --stop-here は不明なオプション。値を受け付けてしまっても、サーバを立てずにそこで終わる
+    "$SIM" gui --no-browser "$@" --stop-here > "$WORK/gopt.log" 2>&1
+    _rc=$?
+    if [ "$_rc" -eq 2 ] && grep -F -q -- "$_msg" "$WORK/gopt.log"; then ok "$_name"
+    else ng "$_name" "終了コード ${_rc}、出力: $(head -2 "$WORK/gopt.log")"; fi
+}
+gui_opt "--port 70000（範囲外）は分かるエラー" "--port 70000 は 1〜65535 の整数にしてください" --port 70000
+gui_opt "--port 8765x を 8765 にしない" "--port 8765x は" --port 8765x
+gui_opt "--period-ms 1e400（inf）は受け付けない" "--period-ms 1e400 は 0.01〜60000" --period-ms 1e400
+gui_opt "--speed -1 は受け付けない" "--speed -1 は 0（最速）か 0.1〜100" --speed -1
+gui_opt "--record-max 4294967296 を切り詰めない" "--record-max 4294967296 は" --record-max 4294967296
 
 echo "== GUI サーバの API"
 if ! command -v curl > /dev/null 2>&1; then
@@ -544,6 +576,27 @@ data: {"periodMs":2,"func":"TEST_cycle","names":["g_eng.state","TEST_cycle_cnt",
     "$SIM" run "$WORK/rt2_export.csv" -o "$WORK/ort2" --quiet > "$WORK/rt2_rerun.log" 2>&1
     RC=$?
     check "往復: CSV の再生に続けて操作した記録を sim run で再実行すると全行 OK（終了コード 0）" sh -c "[ $RC -eq 0 ] && grep -F -q '合計: 総数 5, OK 5, NG 0, NO Check 0' '$WORK/rt2_rerun.log'"
+
+    # 数値の範囲: 丸め・切り詰めをせず 400。400 なら何も変えない
+    curl -s "$U/api/info" > "$WORK/nv0.json"
+    CODE=$(post control_bad_speed.json nv1.out /api/control)
+    check "/api/control の speed 1000 は 100 に丸めずに 400" sh -c "[ '$CODE' = 400 ] && grep -q 'speed' '$WORK/nv1.out'"
+    CODE=$(post control_bad_steps.json nv2.out /api/control)
+    check "/api/control の steps 0 は 1 にせずに 400" test "$CODE" = 400
+    CODE=$(post control_bad_period.json nv3.out /api/control)
+    check "/api/control の periodMs 1e400（inf）は 400" test "$CODE" = 400
+    curl -s "$U/api/info" > "$WORK/nv4.json"
+    NV0=$(grep -o '"step":[0-9]*,"speed":[^,]*\|"periodMs":[^,]*' "$WORK/nv0.json")
+    NV4=$(grep -o '"step":[0-9]*,"speed":[^,]*\|"periodMs":[^,]*' "$WORK/nv4.json")
+    check "400 の後も step・速度・周期は変わらない" test -n "$NV0" -a "$NV0" = "$NV4"
+    CODE=$(post write_u64_exact.json nv5.out /api/write)
+    curl -s "$U/api/info" > "$WORK/nv6.json"
+    check "/api/write の整数 9007199254740993 を double に丸めない" sh -c "[ '$CODE' = 200 ] && grep -F -q '{\"name\":\"0x100:8\",\"value\":\"9007199254740993\"}' '$WORK/nv6.json'"
+    post release_u64.json nv7.out /api/write > /dev/null
+    CODE=$(curl -s -o "$WORK/nv8.out" -w '%{http_code}' "$U/api/symbols?q=g_&limit=10x")
+    check "/api/symbols の limit=10x は 400" test "$CODE" = 400
+    CODE=$(curl -s -o "$WORK/nv9.out" -w '%{http_code}' -X POST -H 'Content-Length: 12abc' --data-binary '{"names":[]}' "$U/api/watch")
+    check "Content-Length が数値でなければ 400" test "$CODE" = 400
 
     PORT_USED_LOG="$WORK/gui2.log"
     "$SIM" gui --no-browser --port "$PORT" > "$PORT_USED_LOG" 2>&1

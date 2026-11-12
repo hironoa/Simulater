@@ -168,8 +168,7 @@ static void rec_set_in(char **in, int *nin, int col, const char *text)
 static double cell_first(const sim_cellval *v)
 {
     if (v->n != 1 || v->is_string) return NAN;
-    if (v->items[0].kind == SIM_ITEM_FLOAT) return v->items[0].f;
-    return (double)v->items[0].i;
+    return sim_item_double(&v->items[0]);
 }
 
 /* ================================================================ 周期実行 */
@@ -578,7 +577,19 @@ static int read_request(sim_sock s, req_t *r)
             int k;
             for (k = 0; k < 15; k++) key[k] = (char)((p[k] >= 'A' && p[k] <= 'Z') ? p[k] + 32 : p[k]);
             key[15] = 0;
-            if (strncmp(key, "content-length:", 15) == 0) clen = (size_t)strtoull(p + 15, NULL, 10);
+            if (strncmp(key, "content-length:", 15) == 0) {
+                /* 10 進の数字だけ（前後の空白は可）。読めない値を 0 や途中までの値にして本文を取り違えない */
+                const char *q = p + 15, *qe = eol;
+                uint64_t v;
+                int rc;
+                while (q < qe && (*q == ' ' || *q == '\t')) q++;
+                while (qe > q && (qe[-1] == ' ' || qe[-1] == '\t')) qe--;
+                if (q == qe || strspn(q, "0123456789") < (size_t)(qe - q)) { sim_buf_free(&b); return -3; }
+                while (q + 1 < qe && *q == '0') q++;   /* 先頭の 0 は HTTP では 10 進のまま */
+                rc = sim_parse_uint_n(q, (size_t)(qe - q), UINT64_MAX, &v);
+                if (rc) { sim_buf_free(&b); return -2; }   /* 数字だけなので、失敗は 64 ビットを超える大きさ */
+                clen = v > 64u * 1024u * 1024u ? (size_t)64u * 1024u * 1024u + 1u : (size_t)v;
+            }
         }
         p = eol + 2;
     }
@@ -724,7 +735,14 @@ static void api_symbols(sim_sock s, req_t *r)
     const sim_func *f;
     query_param(r->query, "q", q, sizeof q);
     st.limit = 200;
-    if (query_param(r->query, "limit", lim, sizeof lim) && atoi(lim) > 0) st.limit = atoi(lim);
+    if (query_param(r->query, "limit", lim, sizeof lim) && lim[0]) {
+        /* 1 以上の整数。上限 5000 を超える指定は 5000 件まで返す（件数の上限で、値の意味は変わらない） */
+        uint64_t lv;
+        int rc = sim_parse_uint(lim, UINT64_MAX, &lv);
+        if (rc == SIM_NUM_RANGE) lv = UINT64_MAX;
+        else if (rc || lv == 0) { send_error(s, 400, "limit は 1 以上の整数にしてください"); return; }
+        st.limit = lv > 5000 ? 5000 : (int)lv;
+    }
     if (st.limit > 5000) st.limit = 5000;
     st.q = q;
     st.count = 0;
@@ -863,6 +881,17 @@ static void drop_pending_locked(const char *name)
     }
 }
 
+/* JSON の数値の表記が整数（-?数字だけ）か */
+static int is_int_literal(const char *s, size_t n)
+{
+    size_t i = 0;
+    if (!s || n == 0) return 0;
+    if (s[0] == '-') i = 1;
+    if (i == n) return 0;
+    for (; i < n; i++) if (s[i] < '0' || s[i] > '9') return 0;
+    return 1;
+}
+
 /* 書き込みは止まっているときもすぐにはメモリへ反映しない。単発は反映待ち（名前ごとに最後の 1 個）、固定は固定の一覧に
  * 入れ、次のステップの開始時に apply_inputs_locked が入力列の順に書いて記録する（sim run が CSV の 1 行を処理するのと
  * 同じ規則なので、記録と保存した CSV の再実行が一致する）。値の検証はここで行い、だめなら 400 */
@@ -906,6 +935,11 @@ static void api_write(sim_sock s, req_t *r)
     }
     if (val->type == SJ_STR) text = val->str;
     else if (val->type == SJ_BOOL) snprintf(num, sizeof num, "%d", val->num != 0);
+    else if (is_int_literal(val->raw, val->rawlen) && val->rawlen < sizeof num) {
+        /* 整数はそのままの表記で読む（2^53 を超える整数を double に丸めて別の値にしない） */
+        memcpy(num, val->raw, val->rawlen);
+        num[val->rawlen] = 0;
+    }
     else if (val->num == floor(val->num) && fabs(val->num) < 9e18) snprintf(num, sizeof num, "%lld", (long long)val->num);
     else snprintf(num, sizeof num, "%.17g", val->num);
     ref = sim_ref_parse(G.c, name, err, sizeof err);
@@ -1117,6 +1151,9 @@ static void api_control(sim_sock s, req_t *r)
     sim_buf b;
     sj_value *x;
     const sim_func *nf = NULL;
+    int have_speed = 0, have_period = 0;
+    double speed = 0, period = 0;
+    uint64_t steps = 1;
     if (!v) return;
     cmd = sj_get_str(v, "cmd", "");
     /* 先に全部確かめる。400 を返すときは何も変えない */
@@ -1126,6 +1163,34 @@ static void api_control(sim_sock s, req_t *r)
         send_error(s, 400, err);
         sj_free(v);
         return;
+    }
+    /* 数値も先に確かめる。範囲外の値を丸めたり切り詰めたりして別の値で動かさない */
+    if ((x = sj_get(v, "speed"))) {
+        if (x->type != SJ_NUM || !(x->num == 0 || (x->num >= 0.1 && x->num <= 100))) {
+            send_error(s, 400, "\"speed\" は 0（最速）か 0.1〜100 の数値にしてください");
+            sj_free(v);
+            return;
+        }
+        have_speed = 1;
+        speed = x->num;
+    }
+    if ((x = sj_get(v, "periodMs"))) {
+        if (x->type != SJ_NUM || !(x->num >= 0.01 && x->num <= 60000)) {
+            send_error(s, 400, "\"periodMs\" は 0.01〜60000 の数値にしてください");
+            sj_free(v);
+            return;
+        }
+        have_period = 1;
+        period = x->num;
+    }
+    if ((x = sj_get(v, "steps"))) {
+        /* double で正確に表せる整数（2^53 未満）だけ */
+        if (x->type != SJ_NUM || x->num != floor(x->num) || x->num < 1 || x->num >= 9007199254740992.0) {
+            send_error(s, 400, "\"steps\" は 1 以上の整数にしてください");
+            sj_free(v);
+            return;
+        }
+        steps = (uint64_t)x->num;
     }
     sim_mutex_lock(G.mu);
     fn = sj_get_str(v, "func", NULL);
@@ -1140,16 +1205,8 @@ static void api_control(sim_sock s, req_t *r)
     }
     G.error[0] = 0;
     G.dropped.len = 0;
-    if ((x = sj_get(v, "speed")) && x->type == SJ_NUM) {
-        double sp = x->num;
-        if (sp <= 0) sp = 0;
-        else if (sp < 0.1) sp = 0.1;
-        else if (sp > 100) sp = 100;
-        G.speed = sp;
-    }
-    if ((x = sj_get(v, "periodMs")) && x->type == SJ_NUM && x->num > 0) {
-        G.period_ms = x->num < 0.01 ? 0.01 : (x->num > 60000 ? 60000 : x->num);
-    }
+    if (have_speed) G.speed = speed;
+    if (have_period) G.period_ms = period;
     if (nf) {
         /* 対象関数が変わったらターゲットをリセットして記録を区切る（前の関数の記録は消す）。
          * sim run は mod ブロックの初めにリセットするので、保存した CSV を再実行すると同じ結果になる */
@@ -1161,9 +1218,8 @@ static void api_control(sim_sock s, req_t *r)
     if (strcmp(cmd, "run") == 0) G.running = 1;
     else if (strcmp(cmd, "pause") == 0) { G.running = 0; G.budget = 0; }
     else if (strcmp(cmd, "step") == 0) {
-        double n = sj_get_num(v, "steps", 1);
         G.running = 0;
-        G.budget += n >= 1 ? (uint64_t)n : 1;
+        G.budget += steps;
     } else if (strcmp(cmd, "reset") == 0) {
         G.running = 0;
         reset_locked();
@@ -1412,6 +1468,7 @@ static void handle_conn(void *arg)
     sim_sock_set_timeout(s, 10000);
     rc = read_request(s, &r);
     if (rc == -2) { send_error(s, 413, "本文が大きすぎます"); sim_close_sock(s); return; }
+    if (rc == -3) { send_error(s, 400, "Content-Length が数値ではありません"); sim_close_sock(s); return; }
     if (rc) { sim_close_sock(s); return; }
     if (strcmp(r.method, "OPTIONS") == 0) send_resp(s, 204, "text/plain", "", 0, NULL);
     else if (strcmp(r.method, "GET") == 0 && (strcmp(r.path, "/") == 0 || strcmp(r.path, "/index.html") == 0 || strcmp(r.path, "/sim_gui.html") == 0)) serve_index(s);
