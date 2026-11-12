@@ -86,6 +86,8 @@ describe("ライブ制御（SSE の取り込み）", () => {
   let record: LiveRecord;
   /** /api/control の応答（state と同じ形） */
   let controlResponse: unknown;
+  /** /api/load-csv の応答（status と本文） */
+  let loadCsvResponse: { status: number; body: unknown };
   let notify: { error: ReturnType<typeof vi.fn>; success: ReturnType<typeof vi.fn>; warn: ReturnType<typeof vi.fn> };
 
   beforeEach(() => {
@@ -95,6 +97,7 @@ describe("ライブ制御（SSE の取り込み）", () => {
     posted = [];
     record = new LiveRecord();
     controlResponse = {};
+    loadCsvResponse = { status: 200, body: { rows: 0, names: [] } };
     notify = { error: vi.fn(), success: vi.fn(), warn: vi.fn() };
     const mem = new Map<string, string>();
     vi.stubGlobal("localStorage", {
@@ -109,7 +112,7 @@ describe("ライブ制御（SSE の取り込み）", () => {
   function makeController() {
     const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
-      if (init?.method === "POST") posted.push({ url, body: JSON.parse(String(init.body)) });
+      if (init?.method === "POST") posted.push({ url, body: url.endsWith("/api/load-csv") ? init.body : JSON.parse(String(init.body)) });
       if (url.endsWith("/api/info")) return new Response(JSON.stringify(info));
       if (url.endsWith("/api/watch")) {
         const names = (JSON.parse(String(init?.body)) as { names: string[] }).names;
@@ -117,6 +120,7 @@ describe("ライブ制御（SSE の取り込み）", () => {
         return new Response(JSON.stringify({ errors }));
       }
       if (url.endsWith("/api/control")) return new Response(JSON.stringify(controlResponse));
+      if (url.endsWith("/api/load-csv")) return new Response(JSON.stringify(loadCsvResponse.body), { status: loadCsvResponse.status });
       return new Response("{}");
     });
     return createLiveController({
@@ -454,6 +458,70 @@ describe("ライブ制御（SSE の取り込み）", () => {
       expect(notify.error.mock.calls[0][0]).toContain("ポインタ g_p の先が NULL です");
       es.emit("state", { running: false, error: "" });
       expect(useLiveStore.getState().sim.error).toBe("");
+      live.stop();
+    });
+  });
+
+  describe("テスト CSV の読み込み", () => {
+    it("mod ブロックが複数ある応答の warning は、成功とは別に警告で知らせる", async () => {
+      const live = makeController();
+      useLiveStore.setState({ watch: [] });
+      await live.start();
+      loadCsvResponse = { status: 200, body: {
+        rows: 2, names: ["@a", "@b", "mul16@@"], blocks: 2,
+        warning: "CSV に mod ブロックが 2 個あります。GUI では先頭のブロック（mul16）だけを再生し、2 つ目以降は再生しません",
+      } };
+      await live.loadCsv(new Blob(["mod,mul16,t,2,1\n"]));
+      expect(posted.at(-1)?.url).toBe("/api/load-csv");
+      expect(notify.success).toHaveBeenCalledTimes(1);
+      expect(notify.success.mock.calls[0][0]).toContain("2 行、3 変数");
+      expect(notify.warn).toHaveBeenCalledTimes(1);
+      expect(notify.warn.mock.calls[0][0]).toContain("先頭のブロック（mul16）だけを再生し");
+      expect(notify.error).not.toHaveBeenCalled();
+      expect(useLiveStore.getState().watch.map((w) => w.name)).toEqual(["@a", "@b", "mul16@@"]);
+      live.stop();
+    });
+
+    it("warning が無い（ブロックが 1 つ）・不正な形なら警告しない", async () => {
+      const live = makeController();
+      await live.start();
+      loadCsvResponse = { status: 200, body: { rows: 1, names: ["a"] } };
+      await live.loadCsv(new Blob(["x"]));
+      loadCsvResponse = { status: 200, body: { rows: 1, names: ["a"], blocks: "2", warning: 3 } };
+      await live.loadCsv(new Blob(["x"]));
+      expect(notify.success).toHaveBeenCalledTimes(2);
+      expect(notify.warn).not.toHaveBeenCalled();
+      live.stop();
+    });
+
+    it("400 ならサーバのメッセージをそのまま知らせ、記録・波形・入力パネル・監視を変えない", async () => {
+      const live = await startWithArgs();
+      const es = FakeEventSource.last!;
+      es.emit("samples", { step0: 0, names: ["g_out"], rows: [[1], [2]] });
+      live.commit();
+      const before = {
+        inputs: useLiveStore.getState().inputs,
+        watch: useLiveStore.getState().watch,
+        sim: useLiveStore.getState().sim,
+        chartData: useWaveformStore.getState().chartData,
+        saved: localStorage.getItem("sim-gui:layout:v1"),
+      };
+      expect(before.chartData).not.toBeNull();
+      const message = "入力 2 列目と 4 列目が同じ名前 'P1' です。GUI では同じ名前の入力列が複数ある CSV は読み込めません"
+        + "（sim run では実行できます。左から順に書きます）";
+      loadCsvResponse = { status: 400, body: { error: message } };
+      await live.loadCsv(new Blob(["mod,eng_judge_gear,t,3,0\n#COMMENT,P1,P1_bit.no0,P1\n,0,1,2\n"]));
+      expect(notify.error).toHaveBeenCalledTimes(1);
+      expect(notify.error.mock.calls[0][0]).toBe(`テスト CSV を読み込めませんでした: ${message}`);
+      expect(notify.success).not.toHaveBeenCalled();
+      expect(notify.warn).not.toHaveBeenCalled();
+      const s = useLiveStore.getState();
+      expect(s.inputs).toBe(before.inputs);
+      expect(s.watch).toBe(before.watch);
+      expect(s.sim).toBe(before.sim);
+      expect(record.length).toBe(2);
+      expect(useWaveformStore.getState().chartData).toBe(before.chartData);
+      expect(localStorage.getItem("sim-gui:layout:v1")).toBe(before.saved);
       live.stop();
     });
   });

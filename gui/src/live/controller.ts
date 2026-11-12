@@ -27,7 +27,8 @@ export function createLiveController(deps: LiveControllerDeps = {}) {
   const api = deps.api ?? createApi("");
   const record = deps.record ?? liveRecord;
   const notify = deps.notify ?? {
-    error: (m: string) => toast.error(m),
+    // サーバのメッセージ（列番号付きの 400 など）を読み切れるよう、幅を広げて少し長く出す
+    error: (m: string) => toast.error(m, { duration: 8_000, style: { whiteSpace: "pre-line", maxWidth: 520 } }),
     success: (m: string) => toast.success(m),
     warn: (m: string) => toast(m, { duration: 10_000, style: { whiteSpace: "pre-line", maxWidth: 520 } }),
   };
@@ -508,7 +509,10 @@ export function createLiveController(deps: LiveControllerDeps = {}) {
       record.clear();
       syncSignals();
       notify.success(`テスト CSV を読み込みました（${res.rows} 行、${(res.names ?? []).length} 変数）`);
+      // 一部だけを再生する（複数の mod ブロックのうち先頭だけ）などは、成功とは別に長く残る警告で知らせる
+      if (res.warning) (notify.warn ?? notify.error)(`テスト CSV の警告: ${res.warning}`);
     } catch (e) {
+      // 400（同じ名前の入力列、UTF-16 など）はサーバが何も変えないので、手元の記録・波形・入力パネルもそのまま
       notify.error(`テスト CSV を読み込めませんでした: ${(e as Error).message}`);
     }
   }

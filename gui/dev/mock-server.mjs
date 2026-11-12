@@ -274,17 +274,40 @@ function json(res, status, data) {
   res.end(JSON.stringify(data));
 }
 
-function parseTestCsv(text) {
-  const lines = text.split(/\r?\n/);
-  const head = (lines[0] ?? "").split(",");
-  const nIn = Number(head[3] ?? 0);
-  const nameRow = lines.find((l) => l.startsWith("#COMMENT"));
-  if (head[0] !== "mod" || !nameRow) throw new Error("mod 行または #COMMENT 行がありません");
-  const names = nameRow.split(",").slice(1).filter((n) => n.trim() !== "").map((n) => n.trim());
-  const start = lines.indexOf(nameRow) + 1;
-  const rows = lines.slice(start).filter((l) => l.trim() && !l.startsWith(";") && !l.startsWith("mod"))
+/**
+ * テスト CSV を読む（docs/DESIGN.md「文字コードと行の識別」「記録と CSV 保存」の要点だけを模擬）。
+ * UTF-8 BOM は読み飛ばし、UTF-16・NUL バイトはエラー。再生するのは先頭の mod ブロックだけで、ブロック数を blocks に返す。
+ * 同じ名前の入力列が複数あればエラー（GUI の記録は入力 1 名 = 1 列）。
+ */
+function parseTestCsv(buf) {
+  if ((buf[0] === 0xff && buf[1] === 0xfe) || (buf[0] === 0xfe && buf[1] === 0xff)) {
+    throw new Error("UTF-16 の CSV には対応していません");
+  }
+  let text = buf.toString("utf8");
+  if (text.startsWith("﻿")) text = text.slice(1);
+  const lines = text.split(/\r\n|\r|\n/);
+  const nul = lines.findIndex((l) => l.includes("\0"));
+  if (nul >= 0) throw new Error(`${nul + 1} 行目: NUL バイトを含む行があります（UTF-16 の CSV には対応していません）`);
+  const first = (l) => l.split(",")[0].trim().replace(/^"(.*)"$/, "$1").trim().toLowerCase();
+  const modAt = lines.map((l, i) => (first(l) === "mod" ? i : -1)).filter((i) => i >= 0);
+  if (!modAt.length) throw new Error("mod 行がありません");
+  const end = modAt[1] ?? lines.length;
+  const block = lines.slice(modAt[0], end);
+  const head = block[0].split(",");
+  const nameAt = block.findIndex((l) => first(l) === "#comment");
+  if (nameAt < 0) throw new Error("#COMMENT 行がありません");
+  const names = block[nameAt].split(",").slice(1).map((n) => n.trim()).filter((n) => n !== "");
+  const nIn = Number.isFinite(Number(head[3])) && head[3]?.trim() !== "" ? Number(head[3]) : names.length;
+  for (let i = 0; i < nIn && i < names.length; i++) {
+    const k = names.indexOf(names[i]);
+    if (k < i) {
+      throw new Error(`入力 ${k + 2} 列目と ${i + 2} 列目が同じ名前 '${names[i]}' です。GUI では同じ名前の入力列が複数ある CSV は`
+        + "読み込めません（sim run では実行できます。左から順に書きます）");
+    }
+  }
+  const rows = block.slice(nameAt + 1).filter((l) => l.trim() && !first(l).startsWith(";") && !first(l).startsWith("#"))
     .map((l) => l.split(",").slice(1));
-  return { names, nIn: Number.isFinite(nIn) ? nIn : names.length, rows };
+  return { func: head[1]?.trim() ?? "", names, nIn, rows, blocks: modAt.length };
 }
 
 function exportCsv() {
@@ -367,9 +390,9 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, { ok: true });
     }
     if (req.method === "POST" && url.pathname === "/api/load-csv") {
-      const text = (await readBody(req)).toString("utf8");
-      const parsed = parseTestCsv(text);
-      const csvFunc = (text.split(/\r?\n/)[0] ?? "").split(",")[1]?.trim();
+      // 読めない CSV（同じ名前の入力列・UTF-16 など）や使えない関数は、何も変えずに 400
+      const parsed = parseTestCsv(await readBody(req));
+      const csvFunc = parsed.func;
       if (csvFunc && !FUNCTIONS.includes(csvFunc)) return json(res, 400, { error: `関数 ${csvFunc} がありません` });
       dropped = [];
       if (csvFunc && csvFunc !== func) changeFunc(csvFunc);
@@ -377,7 +400,16 @@ const server = http.createServer(async (req, res) => {
       csvPlay = { ...parsed, index: 0 };
       setWatch([...new Set([...watch, ...parsed.names.filter(resolvable)])]);
       running = true; rebase(); broadcastState();
-      return json(res, 200, { rows: parsed.rows.length, names: parsed.names });
+      const out = { rows: parsed.rows.length, names: parsed.names };
+      if (parsed.blocks > 1) {
+        // 2 つ目以降の mod ブロックは再生しない。黙って一部だけ再生しないように応答で知らせる
+        Object.assign(out, {
+          blocks: parsed.blocks,
+          warning: `CSV に mod ブロックが ${parsed.blocks} 個あります。GUI では先頭のブロック（${csvFunc || func}）だけを再生し、`
+            + "2 つ目以降は再生しません（sim run ではすべて実行します）",
+        });
+      }
+      return json(res, 200, out);
     }
     if (req.method === "GET" && url.pathname === "/api/export.csv") {
       res.writeHead(200, { "Content-Type": "text/csv; charset=utf-8", "Content-Disposition": 'attachment; filename="sim_record.csv"' });

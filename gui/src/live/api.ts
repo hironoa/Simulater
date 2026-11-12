@@ -128,6 +128,25 @@ export interface WatchResult {
 export interface LoadCsvResult {
   rows: number;
   names: string[];
+  /** CSV の `mod` ブロックの数（2 つ以上のときだけサーバが付ける。再生するのは先頭のブロックだけ） */
+  blocks?: number;
+  /** 読み込みは成功したが利用者に知らせること（複数ブロックのうち先頭だけを再生する、など） */
+  warning?: string;
+}
+
+/**
+ * `/api/load-csv` の応答を読む。`rows` は数でなければ 0、`names` は文字列だけを残す。
+ * `blocks`（1 以上の整数）と `warning`（空でない文字列）は、無ければ・不正な形なら付けない。
+ */
+export function parseLoadCsvResult(res: unknown): LoadCsvResult {
+  const r = isObject(res) ? res : {};
+  const out: LoadCsvResult = {
+    rows: typeof r.rows === "number" && Number.isFinite(r.rows) ? r.rows : 0,
+    names: Array.isArray(r.names) ? r.names.filter((n): n is string => typeof n === "string") : [],
+  };
+  if (typeof r.blocks === "number" && Number.isInteger(r.blocks) && r.blocks >= 1) out.blocks = r.blocks;
+  if (typeof r.warning === "string" && r.warning.trim()) out.warning = r.warning;
+  return out;
 }
 
 export class ApiError extends Error {
@@ -181,12 +200,12 @@ export function createApi(base = "", fetchImpl: FetchLike = (input, init) => fet
       post<unknown>("/api/write", { name, value, hold }),
     release: (name: string) => post<unknown>("/api/write", { name, release: true }),
     /** CSV はバイト列のまま送る（Shift_JIS のテスト CSV をそのまま再生するため）。 */
-    loadCsv: (body: Blob | ArrayBuffer | string) =>
-      json<LoadCsvResult>("/api/load-csv", {
+    loadCsv: async (body: Blob | ArrayBuffer | string) =>
+      parseLoadCsvResult(await json<unknown>("/api/load-csv", {
         method: "POST",
         headers: { "Content-Type": "text/csv" },
         body,
-      }),
+      })),
     exportUrl: () => url("/api/export.csv"),
     streamUrl: () => url("/api/stream"),
   };

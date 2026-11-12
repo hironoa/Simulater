@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { ApiError, createApi, detectServer, memberPath, parseControlResponse, parseDropped, parsePending, parseState } from "./api";
+import { ApiError, createApi, detectServer, memberPath, parseControlResponse, parseDropped, parseLoadCsvResult, parsePending, parseState } from "./api";
 
 function fakeFetch(handler: (url: string, init?: RequestInit) => { status?: number; body: unknown }) {
   return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -40,6 +40,22 @@ describe("createApi", () => {
     const res = await api.loadCsv(bytes);
     expect(res).toEqual({ rows: 3, names: ["@a", "b"] });
     expect(f.mock.calls[0][1]?.body).toBe(bytes);
+  });
+
+  it("load-csv の blocks / warning を読み、無ければ付けず、不正な形は無視する", async () => {
+    const f = fakeFetch(() => ({ body: { rows: 1, names: ["a"], blocks: 2, warning: "先頭のブロックだけを再生します" } }));
+    expect(await createApi("", f as unknown as typeof fetch).loadCsv("x"))
+      .toEqual({ rows: 1, names: ["a"], blocks: 2, warning: "先頭のブロックだけを再生します" });
+    expect(parseLoadCsvResult({ rows: 1, names: ["a"] })).toEqual({ rows: 1, names: ["a"] });
+    expect(parseLoadCsvResult({ rows: 1, names: ["a", 3], blocks: "2", warning: 5 })).toEqual({ rows: 1, names: ["a"] });
+    expect(parseLoadCsvResult({ rows: 1, names: [], blocks: 1.5, warning: "  " })).toEqual({ rows: 1, names: [] });
+    expect(parseLoadCsvResult(null)).toEqual({ rows: 0, names: [] });
+  });
+
+  it("load-csv の 400 はサーバのメッセージをそのまま ApiError にする", async () => {
+    const message = "入力 2 列目と 4 列目が同じ名前 'P1' です。";
+    const f = fakeFetch(() => ({ status: 400, body: { error: message } }));
+    await expect(createApi("", f as unknown as typeof fetch).loadCsv("x")).rejects.toMatchObject({ status: 400, message });
   });
 
   it("エラー応答は本文の error を載せた ApiError にする", async () => {
