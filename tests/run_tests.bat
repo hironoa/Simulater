@@ -144,7 +144,7 @@ if errorlevel 1 (call :ng "/api/control step") else (call :ok "/api/control step
 curl -s "%U%/api/export.csv" > "%WORK%\export.csv"
 findstr /b /c:"mod,TEST_cycle," "%WORK%\export.csv" >nul
 if errorlevel 1 (call :ng "/api/export.csv") else (call :ok "/api/export.csv")
-findstr /b /l /c:",800,120,1,1,1,10,800" "%WORK%\export.csv" >nul
+findstr /b /l /c:",800,0x78,1,1,1,10,800" "%WORK%\export.csv" >nul
 if errorlevel 1 (call :ng "/api/export.csv first row") else (call :ok "/api/export.csv first row")
 start "" /b curl -s -N --max-time 3 "%U%/api/stream" > "%WORK%\sse.txt"
 ping -n 2 127.0.0.1 >nul
@@ -192,6 +192,54 @@ curl -s -X POST --data-binary "@%T%\gui\bad_play.csv" "%U%/api/load-csv" > nul
 curl -s "%U%/api/info" > "%WORK%\bp_info.json"
 findstr /l /c:"\"func\":\"TEST_cycle\"" "%WORK%\bp_info.json" >nul
 if errorlevel 1 (call :ng "a rejected /api/load-csv does not change the function") else (call :ok "a rejected /api/load-csv does not change the function")
+rem string and array inputs ('XYZ', 65|66|67) stay in the saved CSV and the CSV re-runs with all rows OK
+curl -s -X POST --data-binary "@%T%\gui\watch_name0.json" "%U%/api/watch" > nul
+curl -s -X POST --data-binary "@%T%\gui\reset.json" "%U%/api/control" > nul
+curl -s -X POST --data-binary "@%T%\gui\write_name_str.json" "%U%/api/write" > nul
+curl -s -X POST --data-binary "@%T%\gui\step1.json" "%U%/api/control" > nul
+curl -s -X POST --data-binary "@%T%\gui\write_name_arr.json" "%U%/api/write" > nul
+curl -s -X POST --data-binary "@%T%\gui\step1.json" "%U%/api/control" > nul
+curl -s "%U%/api/export.csv" > "%WORK%\str_export.csv"
+findstr /b /l /c:",'XYZ',88" "%WORK%\str_export.csv" >nul
+if errorlevel 1 (call :ng "a string input is saved as written") else (call :ok "a string input is saved as written")
+findstr /b /l /c:",65|66|67,65" "%WORK%\str_export.csv" >nul
+if errorlevel 1 (call :ng "an array input is saved as written") else (call :ok "an array input is saved as written")
+"%SIM%" run "%WORK%\str_export.csv" -o "%WORK%\ostr" --quiet > "%WORK%\str_rerun.log" 2>&1
+set RC=%ERRORLEVEL%
+findstr /l /c:"OK 2, NG 0, NO Check 0" "%WORK%\str_rerun.log" >nul
+if errorlevel 1 (call :ng "the saved string/array inputs re-run with all rows OK") else if "%RC%"=="0" (call :ok "the saved string/array inputs re-run with all rows OK") else (call :ng "the saved string/array inputs re-run: exit code 0, got %RC%")
+rem changing the target function resets the target and starts a new record
+curl -s -X POST --data-binary "@%T%\gui\watch_call_cnt.json" "%U%/api/watch" > nul
+curl -s -X POST --data-binary "@%T%\gui\reset.json" "%U%/api/control" > nul
+curl -s -X POST --data-binary "@%T%\gui\step1.json" "%U%/api/control" > nul
+curl -s -X POST --data-binary "@%T%\gui\step_func_name_len.json" "%U%/api/control" > "%WORK%\sfn.out"
+findstr /l /c:"\"step\":1," "%WORK%\sfn.out" >nul
+if errorlevel 1 (call :ng "changing the function restarts from step 1") else (call :ok "changing the function restarts from step 1")
+curl -s "%U%/api/export.csv" > "%WORK%\fn_export.csv"
+findstr /x /l /c:",1" "%WORK%\fn_export.csv" >nul
+if errorlevel 1 (call :ok "records of the previous function are not saved under the new one") else (call :ng "records of the previous function are not saved under the new one")
+"%SIM%" run "%WORK%\fn_export.csv" -o "%WORK%\ofn" --quiet > "%WORK%\fn_rerun.log" 2>&1
+set RC=%ERRORLEVEL%
+findstr /l /c:"OK 1, NG 0, NO Check 0" "%WORK%\fn_rerun.log" >nul
+if errorlevel 1 (call :ng "the record after a function change re-runs with all rows OK") else if "%RC%"=="0" (call :ok "the record after a function change re-runs with all rows OK") else (call :ng "the record after a function change re-runs: exit code 0, got %RC%")
+curl -s -X POST --data-binary "@%T%\gui\step_func_cycle.json" "%U%/api/control" > nul
+rem other round-trip losses: hex into a signed variable, $ while stopped (no double allocation), a string with ','
+curl -s -X POST --data-binary "@%T%\gui\watch_rt.json" "%U%/api/watch" > nul
+curl -s -X POST --data-binary "@%T%\gui\reset_func_name_len.json" "%U%/api/control" > nul
+curl -s -X POST --data-binary "@%T%\gui\write_alloc_bad.json" "%U%/api/write" > "%WORK%\wab.out"
+findstr /l /c:"\"error\":" "%WORK%\wab.out" >nul
+if errorlevel 1 (call :ng "/api/write rejects a negative $ count") else (call :ok "/api/write rejects a negative $ count")
+curl -s -X POST --data-binary "@%T%\gui\write_temp_hex.json" "%U%/api/write" > nul
+curl -s -X POST --data-binary "@%T%\gui\write_alloc.json" "%U%/api/write" > nul
+curl -s -X POST --data-binary "@%T%\gui\write_name_comma.json" "%U%/api/write" > nul
+curl -s -X POST --data-binary "@%T%\gui\step1.json" "%U%/api/control" > nul
+curl -s "%U%/api/export.csv" > "%WORK%\rt_export.csv"
+findstr /l /c:",0xFFFF," "%WORK%\rt_export.csv" >nul
+if errorlevel 1 (call :ng "a hex input is saved as written") else (call :ok "a hex input is saved as written")
+"%SIM%" run "%WORK%\rt_export.csv" -o "%WORK%\ort" --quiet > "%WORK%\rt_rerun.log" 2>&1
+set RC=%ERRORLEVEL%
+findstr /l /c:"OK 1, NG 0, NO Check 0" "%WORK%\rt_rerun.log" >nul
+if errorlevel 1 (call :ng "hex, $ and quoted string inputs re-run with all rows OK") else if "%RC%"=="0" (call :ok "hex, $ and quoted string inputs re-run with all rows OK") else (call :ng "hex, $ and quoted string inputs re-run: exit code 0, got %RC%")
 curl -s "%U%/" > "%WORK%\index.html"
 findstr /l /c:"<html" "%WORK%\index.html" >nul
 if errorlevel 1 (call :ng "GET / returns a page") else (call :ok "GET / returns a page")

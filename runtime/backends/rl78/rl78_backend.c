@@ -114,9 +114,13 @@ static int parse_range(const char *s, uint32_t *lo, uint32_t *hi)
     strcpy(b, sep + 1);
     while (n > 0 && a[n - 1] == ' ') a[--n] = 0;
     if (parse_u64(a, &x) || parse_u64(b, &y)) return -1;
+    /* RL78 のアドレス空間（0x00000〜0xFFFFF）に収まらない範囲は読めない設定にする（32 ビットへの切り詰めや加算のあふれも含む） */
+    if (x >= 0x100000u || y > 0x100000u) return -1;
+    y = is_size ? x + y : y + 1;
+    if (y <= x || y > 0x100000u) return -1;
     *lo = (uint32_t)x;
-    *hi = (uint32_t)(is_size ? x + y : y + 1);
-    return *hi > *lo ? 0 : -1;
+    *hi = (uint32_t)y;
+    return 0;
 }
 
 /* ================================================================ シンボル */
@@ -244,10 +248,12 @@ static void choose_heap(be_t *z)
         if (lo > cur && lo - cur > best_len) { best_lo = cur; best_len = lo - cur; }
         if (i < n && sp[i].hi > cur) cur = sp[i].hi;
     }
-    best_lo = (best_lo + 1u) & ~1u;
     if (best_len >= 256) {
+        /* 開始を偶数に上げた分だけ短くする（隙間の終端を越えて次のセクションに 1 バイト重ねない） */
+        uint32_t end = best_lo + best_len;
+        best_lo = (best_lo + 1u) & ~1u;
         z->heap_lo = best_lo;
-        z->heap_hi = best_lo + (best_len & ~1u);
+        z->heap_hi = best_lo + ((end - best_lo) & ~1u);
         snprintf(z->heap_desc, sizeof z->heap_desc, "自動: 使われていない RAM");
         return;
     }
@@ -581,7 +587,8 @@ static int b_alloc(sim_backend *b, size_t size, uint64_t *addr, char *err, size_
     uint32_t a = (z->heap_cur + 1u) & ~1u;
     static const uint8_t zero[256];
     size_t k;
-    if (!z->heap_hi || size > z->heap_hi - a) {
+    /* 終端が奇数なら、最後のバイトまで使った後の整列で a が終端を越える。引き算の前に確かめる */
+    if (!z->heap_hi || a > z->heap_hi || size > (size_t)(z->heap_hi - a)) {
         if (!z->heap_hi) snprintf(err, errlen, "$ptr 用のヒープがありません。sim.cfg の heap = 開始-終了 で RAM の空きを指定してください");
         else snprintf(err, errlen, "$ptr 用のヒープ（0x%05X〜0x%05X）が足りません（%zu バイト要求）。sim.cfg の heap で広げられます",
                       z->heap_lo, z->heap_hi - 1, size);

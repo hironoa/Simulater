@@ -69,6 +69,13 @@ call :run "runaway and undefined instruction make the row NG" 1 "OK 1, NG 2" --a
 call :has "%WORK%\r.log" "PC=0x002A5" "runaway message has PC"
 call :has "%WORK%\r.log" "61 19" "undefined instruction message has bytes"
 call :run "halt = stop" 1 "OK 0, NG 1" --abs "%TP%" --cfg "%R%\cfg\halt_stop.cfg" "%R%\csv\synth_halt.csv"
+rem a 1-byte heap with an odd exclusive end must not hand out 0xFE162 on the second allocation
+call :run "1-byte heap (odd end): second $ allocation is an error (exit code 2)" 2 "0xFE160" --abs "%TP%" --cfg "%R%\cfg\heap_odd.cfg" "%R%\csv\synth_heap_odd.csv"
+findstr /b /l /c:",1,0,0,0xE162,OK" "%WORK%\r_out\synth_heap_odd.csv" >nul 2>nul
+if errorlevel 1 (call :ok "allocation outside the heap is not reported as OK") else (call :ng "allocation outside the heap is not reported as OK")
+"%RS%" info --abs "%TP%" --cfg "%R%\cfg\heap_over.cfg" -v > "%WORK%\r.log" 2>&1
+call :has "%WORK%\r.log" "heap = 0xFFFF0:0x100" "heap beyond the address space is rejected with a warning"
+call :has "%WORK%\r.log" "0xFE160" "heap beyond the address space falls back to the automatic heap"
 call :run "core = S2" 0 "OK 2, NG 0" --abs "%TP%" --cfg "%R%\cfg\core_s2.cfg" "%R%\csv\synth_core.csv"
 call :run "core = S3, mdu = off" 0 "OK 2, NG 0" --abs "%TP%" --cfg "%R%\cfg\core_s3_nomdu.cfg" "%R%\csv\synth_nomdu.csv"
 call :run "stub = read_io:AMSTB_read_io" 0 "OK 3, NG 0" --abs "%TP%" --cfg "%R%\cfg\stub.cfg" "%R%\csv\synth_stub.csv"

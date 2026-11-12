@@ -423,7 +423,8 @@ static int b_alloc(sim_backend *b, size_t size, uint64_t *addr, char *err, size_
 {
     mock_t *m = b->impl;
     uint32_t a = (m->heap + 1u) & ~1u;
-    if (size > HEAP_END - a) {
+    /* 引き算の前に終端を越えていないか確かめる（HEAP_END が奇数になっても範囲外を返さない） */
+    if (a > HEAP_END || size > (size_t)(HEAP_END - a)) {
         snprintf(err, errlen, "ターゲットのヒープ（0x%X〜0x%X）が足りません（%zu バイト要求）", HEAP_BEGIN, HEAP_END - 1, size);
         return -1;
     }

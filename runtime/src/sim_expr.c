@@ -3,6 +3,7 @@
 
 #include <ctype.h>
 #include <math.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1091,8 +1092,10 @@ int sim_ref_write(sim_ctx *c, const sim_ref *r, const sim_cellval *v, char *err,
             return -1;
         }
         if (v->items[0].i > 0) {
-            if (v->items[0].i > 0x1000000) { snprintf(err, errlen, "'%s': 要素数が大きすぎます", r->text); return -1; }
-            if (c->b->alloc(c->b, (size_t)v->items[0].i * e->size, &addr, err, errlen)) return -1;
+            /* 要素数 × 要素サイズは 64 ビットで求め、size_t に収まらなければ（32 ビット環境）エラーにする */
+            uint64_t bytes = (uint64_t)v->items[0].i * e->size;
+            if (v->items[0].i > 0x1000000 || bytes > (uint64_t)SIZE_MAX) { snprintf(err, errlen, "'%s': 要素数が大きすぎます", r->text); return -1; }
+            if (c->b->alloc(c->b, (size_t)bytes, &addr, err, errlen)) return -1;
         }
         return write_raw(c, r, &L, r->type, -1, 0, addr, err, errlen);
     }

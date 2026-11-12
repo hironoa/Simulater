@@ -122,6 +122,12 @@ check "同名のファイル内 static はファイル名を求める" contains 
 printf 'mod,f_bits,x,1,0\n#COMMENT,g_lut[0]\n,1\n' > "$WORK/wconst.csv"
 "$RS" run --abs "$TP" "$WORK/wconst.csv" -o "$WORK/r_out" > "$WORK/r.log" 2>&1
 check "const（ROM の変数）には書けない" contains "$WORK/r.log" "'g_lut[0]' には書き込めません"
+# ヒープの排他的終端が奇数でも、最後のバイトの後の確保をヒープ外（0xFE162）に置かない
+rl78_run "1 バイトのヒープ（終端が奇数）で 2 回目の \$ の確保はエラー（終了コード 2）" 2 "ヒープ（0xFE160〜0xFE160）が足りません" -- --abs "$TP" --cfg "$R/cfg/heap_odd.cfg" "$R/csv/synth_heap_odd.csv"
+check "ヒープ外の 2 回目の確保は結果に OK と書かない" sh -c "! grep -q '^,1,0,0,0xE162,OK' '$WORK/r_out/synth_heap_odd.csv'"
+"$RS" info --abs "$TP" --cfg "$R/cfg/heap_over.cfg" -v > "$WORK/r.log" 2>&1
+check "アドレス空間を越えるヒープの指定は読めない設定として警告" contains "$WORK/r.log" "sim.cfg: heap = 0xFFFF0:0x100 を読めません"
+check "アドレス空間を越えるヒープの指定は使わず自動で選ぶ" contains "$WORK/r.log" "ヒープ（\$ptr）: 0xFE160〜0xFEFFF（自動: 使われていない RAM）"
 printf 'bogus_key = 1\n' > "$WORK/bogus.cfg"
 "$RS" info --abs "$TP" --cfg "$WORK/bogus.cfg" -v > "$WORK/r.log" 2>&1
 check "知らない設定は警告" contains "$WORK/r.log" "知らない設定 'bogus_key'"

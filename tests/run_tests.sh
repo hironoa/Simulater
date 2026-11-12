@@ -207,9 +207,9 @@ else
     curl -s "$U/api/export.csv" > "$WORK/export.csv"
     check "/api/export.csv の mod 行" grep -q "^mod,TEST_cycle,GUI記録,3,4" "$WORK/export.csv"
     check "/api/export.csv の #COMMENT 行" grep -q "^#COMMENT,AMSTB_adc_read@AMIN_adc\[0\],AMSTB_adc_read@AMIN_adc\[1\],P2_bit.no0,g_eng.state,TEST_cycle_cnt,g_ms_tick,AMSTB_adc_read@AMIN_adc\[0\]" "$WORK/export.csv"
-    # 1 ステップ目だけ 1 回書き込みの AMIN_adc[1] が入る。状態は STOP->CRANK->IDLE
+    # 1 ステップ目だけ 1 回書き込みの AMIN_adc[1] が入る（書いたときの表記 0x78 のまま）。状態は STOP->CRANK->IDLE
     tr -d '\r' < "$WORK/export.csv" | sed -n '3,7p' > "$WORK/export_rows.txt"
-    printf ',800,120,1,1,1,10,800\n,800,,1,2,2,20,800\n,800,,1,2,3,30,800\n,800,,1,2,4,40,800\n,800,,1,2,5,50,800\n' > "$WORK/export_expect.txt"
+    printf ',800,0x78,1,1,1,10,800\n,800,,1,2,2,20,800\n,800,,1,2,3,30,800\n,800,,1,2,4,40,800\n,800,,1,2,5,50,800\n' > "$WORK/export_expect.txt"
     check "/api/export.csv の記録（5 ステップ）" cmp -s "$WORK/export_rows.txt" "$WORK/export_expect.txt"
     check "/api/export.csv を sim run で読み直せる" sh -c "\"$SIM\" run \"$WORK/export.csv\" -o \"$WORK/oexp\" --quiet > /dev/null 2>&1"
 
@@ -302,6 +302,57 @@ data: {"periodMs":2,"func":"TEST_cycle","names":["g_eng.state","TEST_cycle_cnt",
         curl -s "$U/" > "$WORK/index2.html"
         check "sim_gui.html があればそれを返す" cmp -s "$WORK/index2.html" "$ROOT/gui/dist/sim_gui.html"
     fi
+    # 配列・文字列の入力（'XYZ'、65|66|67）を記録から落とさない。保存した CSV を再実行すると同じ結果になる
+    post watch_name0.json wn.out /api/watch > /dev/null
+    post reset.json rs.out /api/control > /dev/null
+    post write_name_str.json wns.out /api/write > /dev/null
+    post step1.json s1.out /api/control > /dev/null
+    post write_name_arr.json wna.out /api/write > /dev/null
+    post step1.json s1.out /api/control > /dev/null
+    curl -s "$U/api/export.csv" | tr -d '\r' > "$WORK/str_export.csv"
+    check "文字列・配列の入力を保存した CSV に残す（&g_eng_name 列）" sh -c "sed -n 2p '$WORK/str_export.csv' | grep -q '^#COMMENT,&g_eng_name,g_eng_name\[0\]\$'"
+    printf "mod,TEST_cycle,GUI記録,1,1\n#COMMENT,&g_eng_name,g_eng_name[0]\n,'XYZ',88\n,65|66|67,65\n" > "$WORK/str_expect.csv"
+    check "文字列・配列の入力は元の文字列のまま保存する" cmp -s "$WORK/str_export.csv" "$WORK/str_expect.csv"
+    "$SIM" run "$WORK/str_export.csv" -o "$WORK/ostr" --quiet > "$WORK/str_rerun.log" 2>&1
+    RC=$?
+    check "文字列・配列の入力の記録を sim run で再実行すると全行 OK（終了コード 0）" sh -c "[ $RC -eq 0 ] && grep -F -q '合計: 総数 2, OK 2, NG 0, NO Check 0' '$WORK/str_rerun.log'"
+
+    # 対象関数を変えたら記録を区切る（ターゲットもリセット）。保存した CSV を再実行すると全行 OK
+    post watch_call_cnt.json wcc.out /api/watch > /dev/null
+    post reset.json rs.out /api/control > /dev/null
+    post step1.json s1.out /api/control > /dev/null
+    CODE=$(post step_func_name_len.json sfn.out /api/control)
+    check "関数を変えて step（200、step 1 から数え直す）" sh -c "[ '$CODE' = 200 ] && grep -q '\"step\":1,' '$WORK/sfn.out' && grep -q '\"func\":\"eng_name_len\"' '$WORK/sfn.out'"
+    curl -s "$U/api/export.csv" | tr -d '\r' > "$WORK/fn_export.csv"
+    printf 'mod,eng_name_len,GUI記録,0,1\n#COMMENT,eng_update@call_cnt\n,0\n' > "$WORK/fn_expect.csv"
+    check "関数を変える前の記録を新しい関数の下に出さない" cmp -s "$WORK/fn_export.csv" "$WORK/fn_expect.csv"
+    "$SIM" run "$WORK/fn_export.csv" -o "$WORK/ofn" --quiet > "$WORK/fn_rerun.log" 2>&1
+    RC=$?
+    check "関数を変えた後の記録を sim run で再実行すると全行 OK（終了コード 0）" sh -c "[ $RC -eq 0 ] && grep -F -q '合計: 総数 1, OK 1, NG 0, NO Check 0' '$WORK/fn_rerun.log'"
+    post step_func_cycle.json sfc.out /api/control > /dev/null
+    post step1.json s1.out /api/control > /dev/null
+    curl -s "$U/api/export.csv" | tr -d '\r' > "$WORK/fn_export2.csv"
+    CALLS=$(awk -F, 'NR==2{for(i=1;i<=NF;i++) if($i=="eng_update@call_cnt") c=i} NR>2&&c{printf "%s ", $c}' "$WORK/fn_export2.csv")
+    check "TEST_cycle に戻すとリセットしてから数える（eng_update@call_cnt: ${CALLS}）" test "$CALLS" = "1 2 "
+
+    # 往復で失われていたほかの情報: 符号付きへの 16 進（0xFFFF）、止まっているときの $（二重に確保しない）、',' を含む文字列
+    post watch_rt.json wrt.out /api/watch > /dev/null
+    post reset_func_name_len.json rfn.out /api/control > /dev/null
+    CODE=$(post write_alloc_bad.json wab.out /api/write)
+    check "/api/write で \$ に負の要素数は 400" test "$CODE" = 400
+    post write_temp_hex.json wth.out /api/write > /dev/null
+    post write_alloc.json wal.out /api/write > /dev/null
+    post write_name_comma.json wnc.out /api/write > /dev/null
+    post step1.json s1.out /api/control > /dev/null
+    curl -s "$U/api/export.csv" | tr -d '\r' > "$WORK/rt_export.csv"
+    check "16 進の入力は書いた表記（0xFFFF）のまま保存する" grep -q ',0xFFFF,' "$WORK/rt_export.csv"
+    check "',' を含む文字列の入力は \"...\" で囲んで保存する" grep -q ",\"'A,B'\"," "$WORK/rt_export.csv"
+    # gp_log はヒープの先頭 0xE000（57344）。二重に確保すると 2 個目の 0xE004（57348）になる
+    check "止まっているときの \$ は次のステップで 1 回だけ確保する（gp_log = 57344）" sh -c "sed -n 3p '$WORK/rt_export.csv' | grep -q ',57344,' && ! grep -q '57348' '$WORK/rt_export.csv'"
+    "$SIM" run "$WORK/rt_export.csv" -o "$WORK/ort" --quiet > "$WORK/rt_rerun.log" 2>&1
+    RC=$?
+    check "16 進・\$・',' を含む文字列の記録を sim run で再実行すると全行 OK（終了コード 0）" sh -c "[ $RC -eq 0 ] && grep -F -q '合計: 総数 1, OK 1, NG 0, NO Check 0' '$WORK/rt_rerun.log'"
+
     PORT_USED_LOG="$WORK/gui2.log"
     "$SIM" gui --no-browser --port "$PORT" > "$PORT_USED_LOG" 2>&1
     RC=$?

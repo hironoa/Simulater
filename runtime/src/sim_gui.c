@@ -17,8 +17,12 @@
 
 typedef struct { char *name; sim_ref *ref; int col; } watch_t;
 typedef struct { char *name; sim_ref *ref; sim_cellval val; char *text; int col; } hold_t;
-typedef struct { char *name; sim_ref *ref; sim_cellval val; int col; } pend_t;
-typedef struct { uint64_t step; int nout, nin; double *v; } rec_row;   /* v = 出力 nout 個 + 入力 nin 個 */
+typedef struct { char *name; sim_ref *ref; sim_cellval val; char *text; int col; } pend_t;
+/* v = 出力 nout 個の数値（SSE の samples 用。読めなければ NAN）。
+ * txt = 出力 nout 個 + 入力 nin 個のセルの文字列を NUL 区切りで並べたもの（空文字列は値なし）。
+ * エクスポートはこの文字列を使う。入力は書いたセルの元の文字列（'XYZ'、1|2|3、0x78 など）、
+ * 出力は sim run が結果 CSV に書くのと同じ表記（配列は全要素）なので、保存した CSV を再実行すると同じ結果になる */
+typedef struct { uint64_t step; int nout, nin; double *v; char *txt; } rec_row;
 
 typedef struct {
     sim_ctx *c;
@@ -82,27 +86,79 @@ static int col_index(char ***cols, int *n, const char *name)
 static void rec_clear(void)
 {
     size_t i;
-    for (i = 0; i < G.cap; i++) { free(G.ring[i].v); G.ring[i].v = NULL; }
+    for (i = 0; i < G.cap; i++) {
+        free(G.ring[i].v);
+        free(G.ring[i].txt);
+        G.ring[i].v = NULL;
+        G.ring[i].txt = NULL;
+    }
     G.total = 0;
     G.epoch++;
 }
 
-static void rec_push(uint64_t step, const double *in, int nin)
+/* in = 入力 nin 個のセルの文字列（NULL は値なし） */
+static void rec_push(uint64_t step, char *const *in, int nin)
 {
     rec_row *r = &G.ring[G.total % G.cap];
+    char **out;
+    sim_buf tb;
     int i;
     free(r->v);
+    free(r->txt);
     r->step = step;
     r->nout = G.nout_cols;
     r->nin = nin;
-    r->v = sim_xmalloc(sizeof(double) * (size_t)(r->nout + r->nin + 1));
+    r->v = sim_xmalloc(sizeof(double) * (size_t)(r->nout + 1));
+    out = sim_xcalloc((size_t)r->nout + 1, sizeof *out);
     for (i = 0; i < r->nout; i++) r->v[i] = NAN;
     for (i = 0; i < G.nwatch; i++) {
         double d;
-        if (G.watch[i].col < r->nout && sim_ref_read_double(G.c, G.watch[i].ref, &d) == 0) r->v[G.watch[i].col] = d;
+        int col = G.watch[i].col, match;
+        char err[256];
+        sim_buf cb;
+        if (col >= r->nout) continue;
+        if (sim_ref_read_double(G.c, G.watch[i].ref, &d) == 0) r->v[col] = d;
+        sim_buf_init(&cb);
+        if (sim_ref_check(G.c, G.watch[i].ref, NULL, NULL, &cb, &match, err, sizeof err) == 0 && cb.len) {
+            free(out[col]);
+            out[col] = cb.p;   /* 持ち主を移す */
+        } else {
+            sim_buf_free(&cb);
+        }
     }
-    for (i = 0; i < nin; i++) r->v[r->nout + i] = in[i];
+    sim_buf_init(&tb);
+    for (i = 0; i < r->nout; i++) {
+        if (out[i]) sim_buf_adds(&tb, out[i]);
+        sim_buf_addc(&tb, 0);
+        free(out[i]);
+    }
+    free(out);
+    for (i = 0; i < nin; i++) {
+        if (in[i]) sim_buf_adds(&tb, in[i]);
+        sim_buf_addc(&tb, 0);
+    }
+    r->txt = tb.p;   /* 列が 0 個なら NULL */
     G.total++;
+}
+
+/* 記録のセルを idx に並べる（出力 0..nout-1、入力 nout..）。値がなければ "" */
+static void rec_cells(const rec_row *r, const char **idx)
+{
+    const char *p = r->txt;
+    int k;
+    for (k = 0; k < r->nout + r->nin; k++) {
+        idx[k] = p ? p : "";
+        if (p) p += strlen(p) + 1;
+    }
+}
+
+/* 入力の記録: in[col] を text に置き換える（同じステップで同じ列に何度も書いたら最後の値） */
+static void rec_set_in(char **in, int *nin, int col, const char *text)
+{
+    if (col < 0) return;
+    free(in[col]);
+    in[col] = sim_xstrdup(text);
+    if (col + 1 > *nin) *nin = col + 1;
 }
 
 static double cell_first(const sim_cellval *v)
@@ -121,17 +177,23 @@ static void set_error(const char *msg)
     state_changed();
 }
 
-static void apply_pending_locked(double *in, int *nin)
+static void free_pend(pend_t *p)
+{
+    free(p->name);
+    free(p->text);
+    sim_ref_free(p->ref);
+    sim_cellval_free(&p->val);
+}
+
+static void apply_pending_locked(char **in, int *nin)
 {
     int i;
     char err[1024];
     for (i = 0; i < G.npend; i++) {
         pend_t *p = &G.pend[i];
         if (sim_ref_write(G.c, p->ref, &p->val, err, sizeof err)) set_error(err);
-        else if (in && p->col >= 0) { in[p->col] = cell_first(&p->val); if (p->col + 1 > *nin) *nin = p->col + 1; }
-        free(p->name);
-        sim_ref_free(p->ref);
-        sim_cellval_free(&p->val);
+        else rec_set_in(in, nin, p->col, p->text);
+        free_pend(p);
     }
     G.npend = 0;
 }
@@ -139,14 +201,13 @@ static void apply_pending_locked(double *in, int *nin)
 static void do_step_locked(void)
 {
     char err[1024];
-    double *in = sim_xmalloc(sizeof(double) * (size_t)(G.nin_cols + 1));
+    char **in = sim_xcalloc((size_t)G.nin_cols + 1, sizeof *in);
     int i, nin = 0;
-    for (i = 0; i < G.nin_cols; i++) in[i] = NAN;
     apply_pending_locked(in, &nin);
     for (i = 0; i < G.nholds; i++) {
         hold_t *h = &G.holds[i];
         if (sim_ref_write(G.c, h->ref, &h->val, err, sizeof err)) set_error(err);
-        else if (h->col >= 0) { in[h->col] = cell_first(&h->val); if (h->col + 1 > nin) nin = h->col + 1; }
+        else rec_set_in(in, &nin, h->col, h->text);
     }
     if (G.play_active) {
         if (G.play_pos < G.play.nrows) {
@@ -160,9 +221,7 @@ static void do_step_locked(void)
                     snprintf(m, sizeof m, "CSV %d 行目のデータ: %s", G.play_pos + 1, err);
                     set_error(m);
                 } else {
-                    int col = G.play_col_ids[i];
-                    in[col] = cell_first(&v);
-                    if (col + 1 > nin) nin = col + 1;
+                    rec_set_in(in, &nin, G.play_col_ids[i], row[i]);
                 }
                 sim_cellval_free(&v);
             }
@@ -174,6 +233,7 @@ static void do_step_locked(void)
     }
     G.step++;
     rec_push(G.step, in, nin);
+    for (i = 0; i < G.nin_cols; i++) free(in[i]);
     free(in);
     if (G.play_active && G.play_pos >= G.play.nrows) {
         G.play_active = 0;
@@ -767,6 +827,14 @@ static void api_write(sim_sock s, req_t *r)
         sj_free(v);
         return;
     }
+    if (strchr(text, '\r') || strchr(text, '\n')) {
+        /* 記録を CSV に保存すると行が割れて再実行できないので受け付けない */
+        sim_ref_free(ref);
+        sim_mutex_unlock(G.mu);
+        send_error(s, 400, "値に改行は使えません");
+        sj_free(v);
+        return;
+    }
     if (sim_parse_cell(text, strlen(text), &cv, err, sizeof err)) {
         sim_ref_free(ref);
         sim_mutex_unlock(G.mu);
@@ -774,8 +842,19 @@ static void api_write(sim_sock s, req_t *r)
         sj_free(v);
         return;
     }
-    if (!G.running && !G.budget) {
-        /* 止まっていればすぐ書く */
+    if (sim_ref_prefix(ref) == '$' && cv.n > 0 &&
+        (cv.n != 1 || cv.is_string || cv.items[0].kind != SIM_ITEM_INT || cv.items[0].i < 0)) {
+        snprintf(err, sizeof err, "'%s': '$' の値は確保する要素数（0 以上の整数）です", name);
+        sim_ref_free(ref);
+        sim_cellval_free(&cv);
+        sim_mutex_unlock(G.mu);
+        send_error(s, 400, err);
+        sj_free(v);
+        return;
+    }
+    if (!G.running && !G.budget && sim_ref_prefix(ref) != '$') {
+        /* 止まっていればすぐ書く。'$'（確保）は次のステップで 1 回だけ書く（すぐ書いてからもう一度書くと
+         * 二重に確保してポインタが変わり、保存した CSV の再実行と合わなくなる） */
         if (sim_ref_write(G.c, ref, &cv, err, sizeof err)) {
             sim_ref_free(ref);
             sim_cellval_free(&cv);
@@ -803,6 +882,7 @@ static void api_write(sim_sock s, req_t *r)
         /* 止まっているときも次のステップの入力として記録するため、待ち行列に入れる（同じ値をもう一度書く） */
         G.pend = sim_xrealloc(G.pend, (size_t)(G.npend + 1) * sizeof *G.pend);
         G.pend[G.npend].name = sim_xstrdup(name);
+        G.pend[G.npend].text = sim_xstrdup(text);
         G.pend[G.npend].ref = ref;
         G.pend[G.npend].val = cv;
         G.pend[G.npend].col = col_index(&G.in_cols, &G.nin_cols, name);
@@ -864,11 +944,7 @@ static int set_func_locked(const char *name, char *err, size_t errlen)
 static void discard_pending_locked(void)
 {
     int i;
-    for (i = 0; i < G.npend; i++) {
-        free(G.pend[i].name);
-        sim_ref_free(G.pend[i].ref);
-        sim_cellval_free(&G.pend[i].val);
-    }
+    for (i = 0; i < G.npend; i++) free_pend(&G.pend[i]);
     G.npend = 0;
 }
 
@@ -928,7 +1004,12 @@ static void api_control(sim_sock s, req_t *r)
     if ((x = sj_get(v, "periodMs")) && x->type == SJ_NUM && x->num > 0) {
         G.period_ms = x->num < 0.01 ? 0.01 : (x->num > 60000 ? 60000 : x->num);
     }
-    if (nf) commit_func_locked(fn, nf);
+    if (nf) {
+        /* 対象関数が変わったらターゲットをリセットして記録を区切る（前の関数の記録は消す）。
+         * sim run は mod ブロックの初めにリセットするので、保存した CSV を再実行すると同じ結果になる */
+        commit_func_locked(fn, nf);
+        reset_locked();
+    }
     if (strcmp(cmd, "run") == 0) G.running = 1;
     else if (strcmp(cmd, "pause") == 0) { G.running = 0; G.budget = 0; }
     else if (strcmp(cmd, "step") == 0) {
@@ -1030,12 +1111,20 @@ static void api_load_csv(sim_sock s, req_t *r)
     sim_buf_free(&b);
 }
 
-static void fmt_val(sim_buf *b, double d)
+/* CSV のセル。',' '"' や前後の空白を含むなら "..." で囲み、'"' は二重にする（sim run の読み込みと対） */
+static void csv_cell(sim_buf *b, const char *v)
 {
-    char tmp[64];
-    if (isnan(d)) return;
-    if (d == floor(d) && fabs(d) < 9e15) sim_buf_printf(b, "%lld", (long long)d);
-    else { sim_format_double(tmp, sizeof tmp, d, 0); sim_buf_adds(b, tmp); }
+    size_t n = strlen(v);
+    int q = n > 0 && (v[0] == ' ' || v[0] == '\t' || v[n - 1] == ' ' || v[n - 1] == '\t' || v[0] == '"');
+    const char *p;
+    if (!q && (strchr(v, ',') || strchr(v, '"'))) q = 1;
+    if (!q) { sim_buf_adds(b, v); return; }
+    sim_buf_addc(b, '"');
+    for (p = v; *p; p++) {
+        if (*p == '"') sim_buf_addc(b, '"');
+        sim_buf_addc(b, *p);
+    }
+    sim_buf_addc(b, '"');
 }
 
 static void api_export(sim_sock s)
@@ -1044,37 +1133,48 @@ static void api_export(sim_sock s)
     uint64_t i, start;
     int k;
     int *in_used, *out_used, nin = 0, nout = 0;
+    const char **cells = NULL;
+    size_t ncells_cap = 0;
     sim_buf_init(&b);
     sim_mutex_lock(G.mu);
     start = G.total > G.cap ? G.total - G.cap : 0;
     in_used = sim_xcalloc((size_t)G.nin_cols + 1, sizeof *in_used);
     out_used = sim_xcalloc((size_t)G.nout_cols + 1, sizeof *out_used);
+    for (i = start; i < G.total; i++) {
+        size_t need = (size_t)(G.ring[i % G.cap].nout + G.ring[i % G.cap].nin) + 1;
+        if (need > ncells_cap) ncells_cap = need;
+    }
+    cells = sim_xcalloc(ncells_cap + 1, sizeof *cells);
     /* 記録に値がある列だけを出す */
     for (i = start; i < G.total; i++) {
         rec_row *r = &G.ring[i % G.cap];
-        for (k = 0; k < r->nout; k++) if (!isnan(r->v[k])) out_used[k] = 1;
-        for (k = 0; k < r->nin; k++) if (!isnan(r->v[r->nout + k])) in_used[k] = 1;
+        rec_cells(r, cells);
+        for (k = 0; k < r->nout; k++) if (cells[k][0]) out_used[k] = 1;
+        for (k = 0; k < r->nin; k++) if (cells[r->nout + k][0]) in_used[k] = 1;
     }
     for (k = 0; k < G.nin_cols; k++) nin += in_used[k];
     for (k = 0; k < G.nout_cols; k++) nout += out_used[k];
+    /* 対象関数を変えるとリセットして記録を消すので、記録はすべて今の関数のもの */
     sim_buf_printf(&b, "mod,%s,GUI記録,%d,%d\r\n#COMMENT", G.func, nin, nout);
     for (k = 0; k < G.nin_cols; k++) if (in_used[k]) sim_buf_printf(&b, ",%s", G.in_cols[k]);
     for (k = 0; k < G.nout_cols; k++) if (out_used[k]) sim_buf_printf(&b, ",%s", G.out_cols[k]);
     sim_buf_adds(&b, "\r\n");
     for (i = start; i < G.total; i++) {
         rec_row *r = &G.ring[i % G.cap];
+        rec_cells(r, cells);
         for (k = 0; k < G.nin_cols; k++) {
             if (!in_used[k]) continue;
             sim_buf_addc(&b, ',');
-            if (k < r->nin) fmt_val(&b, r->v[r->nout + k]);
+            if (k < r->nin) csv_cell(&b, cells[r->nout + k]);
         }
         for (k = 0; k < G.nout_cols; k++) {
             if (!out_used[k]) continue;
             sim_buf_addc(&b, ',');
-            if (k < r->nout) fmt_val(&b, r->v[k]);
+            if (k < r->nout) csv_cell(&b, cells[k]);
         }
         sim_buf_adds(&b, "\r\n");
     }
+    free(cells);
     sim_mutex_unlock(G.mu);
     free(in_used);
     free(out_used);
