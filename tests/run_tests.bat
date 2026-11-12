@@ -514,18 +514,15 @@ findstr /l /c:"OK 5, NG 0, NO Check 0" "%WORK%\rt2_rerun.log" >nul
 if errorlevel 1 (call :ng "round trip: playback followed by operations re-runs with all rows OK") else if "%RC%"=="0" (call :ok "round trip: playback followed by operations re-runs with all rows OK") else (call :ng "round trip: playback followed by operations re-runs: exit code 0, got %RC%")
 rem a step whose input and output cells are all empty is saved with "step N" in the comment column,
 rem so sim run does not skip it as an empty row and calls the function as many times as the GUI did
-rem a plain reset also releases holds left by earlier checks, so that empty steps are really empty
-curl -s -X POST --data-binary "@%T%\gui\reset.json" "%U%/api/control" > nul
+rem release the holds left by earlier checks (a reset keeps holds), so that empty steps are really empty
+curl -s -X POST --data-binary "@%T%\gui\release_adc.json" "%U%/api/write" > nul
+curl -s -X POST --data-binary "@%T%\gui\release_ign.json" "%U%/api/write" > nul
 curl -s -X POST --data-binary "@%T%\gui\watch_none.json" "%U%/api/watch" > nul
 curl -s -X POST --data-binary "@%T%\gui\reset_func_cycle.json" "%U%/api/control" > nul
 curl -s -X POST --data-binary "@%T%\gui\step1.json" "%U%/api/control" > nul
 curl -s -X POST --data-binary "@%T%\gui\watch_call_cnt.json" "%U%/api/watch" > nul
 curl -s -X POST --data-binary "@%T%\gui\step1.json" "%U%/api/control" > nul
 curl -s "%U%/api/export.csv" > "%WORK%\en_export.csv"
-rem show the saved record and the holds in the log, to diagnose a failure of the checks below
-type "%WORK%\en_export.csv"
-curl -s "%U%/api/info"
-echo.
 findstr /l /c:"step 1" "%WORK%\en_export.csv" >nul
 if errorlevel 1 (call :ng "an empty step before watching is saved with step 1 in the comment column") else (call :ok "an empty step before watching is saved with step 1 in the comment column")
 "%SIM%" run "%WORK%\en_export.csv" -o "%WORK%\oen" --quiet > "%WORK%\en_rerun.log" 2>&1
@@ -533,8 +530,9 @@ set RC=%ERRORLEVEL%
 findstr /l /c:"OK 1, NG 0, NO Check 1" "%WORK%\en_rerun.log" >nul
 if errorlevel 1 (call :ng "a record with an empty step re-runs with the same number of calls") else if "%RC%"=="0" (call :ok "a record with an empty step re-runs with the same number of calls") else (call :ng "a record with an empty step re-runs: exit code 0, got %RC%")
 rem a block with 0 inputs and 0 outputs (saved with nothing watched or written)
-rem a plain reset also releases holds left by earlier checks, so that empty steps are really empty
-curl -s -X POST --data-binary "@%T%\gui\reset.json" "%U%/api/control" > nul
+rem release the holds left by earlier checks (a reset keeps holds), so that empty steps are really empty
+curl -s -X POST --data-binary "@%T%\gui\release_adc.json" "%U%/api/write" > nul
+curl -s -X POST --data-binary "@%T%\gui\release_ign.json" "%U%/api/write" > nul
 curl -s -X POST --data-binary "@%T%\gui\watch_none.json" "%U%/api/watch" > nul
 curl -s -X POST --data-binary "@%T%\gui\reset_func_cycle.json" "%U%/api/control" > nul
 curl -s -X POST --data-binary "@%T%\gui\step3.json" "%U%/api/control" > nul
@@ -549,8 +547,9 @@ findstr /l /c:"OK 0, NG 0, NO Check 3" "%WORK%\e0_rerun.log" >nul
 if errorlevel 1 (call :ng "a 0 input 0 output record re-runs with 3 calls") else if "%RC%"=="0" (call :ok "a 0 input 0 output record re-runs with 3 calls") else (call :ng "a 0 input 0 output record re-runs: exit code 0, got %RC%")
 rem inputs and watches added and removed during the record (earlier rows have the later columns empty);
 rem the last row watches eng_update@call_cnt to check the number of calls
-rem a plain reset also releases holds left by earlier checks, so that empty steps are really empty
-curl -s -X POST --data-binary "@%T%\gui\reset.json" "%U%/api/control" > nul
+rem release the holds left by earlier checks (a reset keeps holds), so that empty steps are really empty
+curl -s -X POST --data-binary "@%T%\gui\release_adc.json" "%U%/api/write" > nul
+curl -s -X POST --data-binary "@%T%\gui\release_ign.json" "%U%/api/write" > nul
 curl -s -X POST --data-binary "@%T%\gui\watch_none.json" "%U%/api/watch" > nul
 curl -s -X POST --data-binary "@%T%\gui\reset_func_cycle.json" "%U%/api/control" > nul
 curl -s -X POST --data-binary "@%T%\gui\step1.json" "%U%/api/control" > nul
