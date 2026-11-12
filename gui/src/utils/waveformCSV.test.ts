@@ -19,6 +19,42 @@ function expectAligned(decoded: ReturnType<typeof decodeWaveformCSV>) {
 }
 
 describe("decodeWaveformCSV", () => {
+  it("comment_col_only の空行を除き、コメント欄だけの周期も数える", () => {
+    const d = decodeWaveformCSV("mod,TEST_cycle,t,0,1\n#COMMENT,call_cnt\n,,\nnote,\n,,\n,2\n");
+    expect(d.chartData).toEqual({ steps: [1, 2], seriesMap: { call_cnt: [null, 2] } });
+  });
+
+  it("空白・引用つきのコメントと空行を除き、step N の1セル行も数える", () => {
+    const d = decodeWaveformCSV('mod,TEST_cycle,t,0,1\n　 " #comment " ,A\n,,\n ,　 , \n　 " ; note " ,99\n " #skip " ,99\nstep 1,\nstep 2\n,3\n');
+    expect(d.chartData).toEqual({ steps: [1, 2, 3], seriesMap: { A: [null, null, 3] } });
+    expect(d.errors).toEqual([]);
+    expectAligned(d);
+  });
+
+  it("実行側と同じく引用された空セルだけの行もデータ行とする", () => {
+    const d = decodeWaveformCSV('mod,TEST_cycle,t,0,1\n#COMMENT,A\n"",\n');
+    expect(d.chartData).toEqual({ steps: [1], seriesMap: { A: [null] } });
+  });
+
+  it("従来形式でも空行と # 行だけを除き、数値の1列目を保つ", () => {
+    const d = decodeWaveformCSV("#COMMENT,A\n0,7\n,,\n#skip,99\n10,8\n");
+    expect(d.chartData).toEqual({ steps: [1, 2], seriesMap: { A: [7, 8] } });
+  });
+
+  it("自動再読込と A/B 比較も実行するデータ行だけを数える", () => {
+    const head = "mod,TEST_cycle,t,0,1\n#COMMENT,A\n";
+    const skipped = ",,\n#skip,99\n";
+    expect(classifyReload(head, head + skipped)).toBe("incomplete");
+    const first = head + "note,\n";
+    const next = first + skipped + ",2\n";
+    expect(classifyReload(first, next)).toBe("append");
+    expect(useWaveformStore.getState().parseWaveformCSV(next, "A.csv")).toBe(true);
+    expect(useWaveformStore.getState().loadCompareCSV(first + ",2\n", "B.csv")).toBe(true);
+    const state = useWaveformStore.getState();
+    expect(state.chartData).toEqual(state.compareChartData);
+    expect(state.chartData.steps).toEqual([1, 2]);
+  });
+
   it("複数 mod ブロックは先頭だけを読み、総数を errors とは別に警告する", () => {
     const d = decodeWaveformCSV(multiBlock);
     expect(d.chartData).toEqual({ steps: [1], seriesMap: { "@rpm": [900], "eng_judge_gear@@": [3] } });
@@ -117,7 +153,12 @@ describe("decodeWaveformCSV", () => {
       expect(d.warnings).toEqual([]);
       expect(d.headers).toContain("EngineSpeed");
       expect(d.headers.every((h) => !h.includes("/"))).toBe(true);
-      expect(d.chartData.steps.length).toBeGreaterThan(0);
+      const lines = sample(name).trim().split(/\r?\n/).filter((line) => !line.startsWith(";"));
+      const legacyRows = lines.slice(1).map((line) => line.split(","));
+      expect(d.chartData.steps).toEqual(legacyRows.map((_, i) => i + 1));
+      d.headers.forEach((h, col) => {
+        expect(d.chartData.seriesMap[h]).toEqual(legacyRows.map((row) => row[col + 1].trim() === "" ? null : Number(row[col + 1])));
+      });
       expectAligned(d);
     }
     const a = decodeWaveformCSV(sample("engine_test_A.csv"));

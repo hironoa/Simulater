@@ -1,6 +1,9 @@
 import Papa from "papaparse";
 
-const rowKind = (row: string[]) => row[0]?.replaceAll('"', "").trim().toLowerCase();
+// sim_csv.c の first_key と同じく、前後の空白（全角を含む）と外側の引用を除く。
+const firstKey = (row: string[]) => (row[0] ?? "").trim().replace(/^"(.*)"$/s, "$1").trim();
+const rowKind = (row: string[]) => firstKey(row).toLowerCase();
+const isHeader = (row: string[]) => rowKind(row).startsWith("#comment");
 
 /** `mod,関数名,題名,入力数,出力数` の入力数・出力数。読めなければ null。 */
 function readModCounts(row: string[] | undefined): { inputs: number; outputs: number } | null {
@@ -74,17 +77,25 @@ function cellValue(cell: string | undefined): number | null {
  * 見出しが完全に同じ列は 1 列だけ採る（`pickColumns`）。判定・時間の列は見出しがないので読まない。
  */
 export function decodeWaveformCSV(text: string) {
-  const cleanText = text
-    .split(/\r?\n/)
-    .filter((line) => !line.trim().startsWith(";"))
-    .join("\n");
-  const parsed = Papa.parse<string[]>(cleanText, { skipEmptyLines: true });
+  const parsed: { data: string[][]; errors: Papa.ParseError[] } = { data: [], errors: [] };
+  let cursor = 0;
+  Papa.parse<string[]>(text, {
+    skipEmptyLines: true,
+    step(result) {
+      const raw = text.slice(cursor, result.meta.cursor).replace(/\r?\n$/, "");
+      cursor = result.meta.cursor;
+      parsed.errors.push(...result.errors);
+      // sim_csv.c の all_empty は生のセルを見る。引用された空文字 ("") は空行ではない。
+      if (/^[ \t\u3000,\r\n]*$/.test(raw) || firstKey(result.data).startsWith(";")) return;
+      parsed.data.push(result.data);
+    },
+  });
   const modIndices = parsed.data.flatMap((row, i) => rowKind(row) === "mod" ? [i] : []);
-  const commentIndices = parsed.data.flatMap((row, i) => row[0] === "#COMMENT" ? [i] : []);
+  const commentIndices = parsed.data.flatMap((row, i) => isHeader(row) ? [i] : []);
   const blockCount = modIndices.length || commentIndices.length;
   const end = (modIndices.length ? modIndices[1] : commentIndices[1]) ?? parsed.data.length;
   const start = modIndices[0] ?? 0;
-  const headerIdx = parsed.data.findIndex((row, i) => i >= start && i < end && row[0] === "#COMMENT");
+  const headerIdx = parsed.data.findIndex((row, i) => i >= start && i < end && isHeader(row));
   const rawHeaders = parsed.data[headerIdx] ?? [];
   const dataRows = headerIdx < 0 ? [] : parsed.data.slice(headerIdx + 1, end);
   const warnings = blockCount > 1
@@ -106,9 +117,10 @@ export function decodeWaveformCSV(text: string) {
   headers.forEach((h) => (seriesMap[h] = []));
   const steps: number[] = [];
 
-  dataRows.forEach((row, idx) => {
-    if (row.length < 2) return;
-    steps.push(idx + 1);
+  dataRows.forEach((row) => {
+    const key = firstKey(row);
+    if (key.startsWith(";") || key.startsWith("#")) return;
+    steps.push(steps.length + 1);
     picked.forEach(({ colIdx }, i) => seriesMap[headers[i]].push(cellValue(row[colIdx])));
   });
 
