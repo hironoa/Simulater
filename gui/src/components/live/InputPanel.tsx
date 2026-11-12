@@ -72,18 +72,21 @@ function InputCard({ item, current }: { item: InputItem; current: number | null 
       const wait = minMs - (performance.now() - pressedAt.current);
       if (wait > 0) await new Promise((r) => setTimeout(r, Math.min(wait, 2000)));
       // 押している間は固定で 1 を書き続け、離したら 0 に戻す（固定 ON の項目は 0 で固定し直す）
-      await live.api.release(item.name).catch(() => undefined);
-      await live.write(item.name, 0, item.hold);
+      await live.releaseButton(item.name);
     }
   };
 
   const on = (current ?? 0) !== 0;
+  const unmonitored = item.monitor === false;
 
   return (
     <div className="rounded border border-gray-200 dark:border-slate-700 p-1.5 flex flex-col gap-1 bg-white dark:bg-slate-800">
       <div className="flex items-center gap-1">
         <span className="font-mono text-xs font-bold truncate flex-1" title={item.name}>{item.name}</span>
-        <span className="font-mono text-xs text-gray-500 dark:text-gray-400" title="現在値">= {formatValue(current, "dec")}</span>
+        <span className="font-mono text-xs text-gray-500 dark:text-gray-400"
+          title={unmonitored ? "今の対象関数では解決できないため監視から外れています。書き込めると監視に戻ります" : "現在値"}>
+          = {unmonitored ? "—" : formatValue(current, "dec")}
+        </span>
         <select className={cn(field, "text-[11px]")} value={item.widget} onChange={(e) => live.updateInput(item.name, { widget: e.target.value as InputWidget })}>
           {WIDGETS.map((w) => <option key={w.value} value={w.value}>{w.label}</option>)}
         </select>

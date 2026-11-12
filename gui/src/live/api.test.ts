@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { ApiError, createApi, detectServer, memberPath } from "./api";
+import { ApiError, createApi, detectServer, memberPath, parseControlResponse, parseDropped } from "./api";
 
 function fakeFetch(handler: (url: string, init?: RequestInit) => { status?: number; body: unknown }) {
   return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -85,5 +85,29 @@ describe("memberPath", () => {
     expect(memberPath("g_buf", "g_buf[2]")).toBe("g_buf[2]");
     expect(memberPath("p", "->next")).toBe("p->next");
     expect(memberPath("g_cmd", "g_cmd2")).toBe("g_cmd.g_cmd2");
+  });
+});
+
+describe("dropped と control の応答", () => {
+  it("parseDropped は無ければ空、配列でなければ undefined、不正な項目は捨てる", () => {
+    expect(parseDropped(undefined)).toEqual([]);
+    expect(parseDropped({})).toBeUndefined();
+    expect(parseDropped([{ name: "@a", kind: "hold", message: "m" }, { name: "@b", kind: "x" }, { name: 1, kind: "watch" }, null]))
+      .toEqual([{ name: "@a", kind: "hold", message: "m" }]);
+  });
+
+  it("control は応答の state を読む（state そのもの・{state} のどちらでも）", async () => {
+    const state = { running: false, step: 0, func: "mul16", dropped: [{ name: "@rpm", kind: "watch", message: "m" }] };
+    for (const body of [state, { ok: true, state }]) {
+      const api = createApi("", fakeFetch(() => ({ body })) as unknown as typeof fetch);
+      expect(await api.control({ func: "mul16" })).toEqual({ ...state });
+    }
+    expect(parseControlResponse({ ok: true })).toBeNull();
+  });
+
+  it("detectServer は info の state の dropped も読む", async () => {
+    const f = fakeFetch(() => ({ body: { version: "v", periodMs: 5, func: "f", functions: [], state: { holds: [], dropped: [{ name: "@a", kind: "hold", message: "m" }, 3] } } }));
+    const info = await detectServer(createApi("", f as unknown as typeof fetch), "http:");
+    expect(info?.state).toEqual({ holds: [], dropped: [{ name: "@a", kind: "hold", message: "m" }] });
   });
 });

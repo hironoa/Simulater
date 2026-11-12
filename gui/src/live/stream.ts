@@ -1,11 +1,12 @@
 // `/api/stream`（Server-Sent Events）の取り込み。
 
-import type { SimState } from "./api";
+import { parseState, type StateMessage } from "./api";
+
+export type { StateMessage } from "./api";
 
 export interface HelloMessage { periodMs?: number; func?: string; names: string[] }
 export interface SamplesMessage { step0: number; names: string[]; rows: (number | null)[][] }
 export interface ValuesMessage { step: number; names: string[]; values: (number | null)[] }
-export type StateMessage = Partial<SimState> & { periodMs?: number; func?: string };
 
 export interface StreamHandlers {
   hello: (msg: HelloMessage) => void;
@@ -59,20 +60,7 @@ export function dispatchStreamEvent(event: string, data: string, handlers: Strea
       return true;
     }
     case "state": {
-      const out: StateMessage = {};
-      if (typeof msg.running === "boolean") out.running = msg.running;
-      if (typeof msg.step === "number") out.step = msg.step;
-      if (typeof msg.speed === "number") out.speed = msg.speed;
-      if (typeof msg.overrun === "boolean") out.overrun = msg.overrun;
-      if (typeof msg.periodMs === "number") out.periodMs = msg.periodMs;
-      if (typeof msg.func === "string") out.func = msg.func;
-      if (Array.isArray(msg.holds)) {
-        out.holds = msg.holds.filter(isObject).map((h) => ({
-          name: String(h.name),
-          value: typeof h.value === "number" || typeof h.value === "string" ? h.value : String(h.value),
-        }));
-      }
-      handlers.state(out);
+      handlers.state(parseState(msg) ?? {});
       return true;
     }
     default:

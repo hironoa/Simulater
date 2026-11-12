@@ -18,7 +18,30 @@ describe("dispatchStreamEvent", () => {
     dispatchStreamEvent("samples", '{"step0":10,"names":["a","b"],"rows":[[1,null],[2,"x"]]}', h);
     expect(h.samples).toHaveBeenCalledWith({ step0: 10, names: ["a", "b"], rows: [[1, null], [2, null]] });
     dispatchStreamEvent("state", '{"running":true,"step":3,"speed":0,"holds":[{"name":"x","value":1}],"overrun":false}', h);
-    expect(h.state).toHaveBeenCalledWith({ running: true, step: 3, speed: 0, holds: [{ name: "x", value: 1 }], overrun: false });
+    expect(h.state).toHaveBeenCalledWith({ running: true, step: 3, speed: 0, holds: [{ name: "x", value: 1 }], overrun: false, dropped: [] });
+  });
+
+  it("state の dropped を読む（無ければ空、不正な項目は捨て、配列でなければ無視）", () => {
+    const h = handlers();
+    dispatchStreamEvent("state", JSON.stringify({
+      func: "mul16",
+      dropped: [
+        { name: "@rpm", kind: "hold", message: "引数がありません" },
+        { name: "@rpm", kind: "watch" },
+        { name: "x", kind: "other", message: "m" },
+        { kind: "hold", message: "名前なし" },
+        "bad",
+      ],
+    }), h);
+    expect(h.state).toHaveBeenLastCalledWith({
+      func: "mul16",
+      dropped: [
+        { name: "@rpm", kind: "hold", message: "引数がありません" },
+        { name: "@rpm", kind: "watch", message: "" },
+      ],
+    });
+    dispatchStreamEvent("state", '{"step":1,"dropped":"x"}', h);
+    expect(h.state).toHaveBeenLastCalledWith({ step: 1 });
   });
 
   it("values を検証して渡し、形式が違えば捨てる", () => {
@@ -60,6 +83,9 @@ describe("ライブ制御（SSE の取り込み）", () => {
   const info = { version: "t", periodMs: 2, func: "main", functions: ["main", "sub"], state: { running: true, step: 0, speed: 1, holds: [], overrun: false } };
   let posted: { url: string; body: unknown }[];
   let record: LiveRecord;
+  /** /api/control の応答（state と同じ形） */
+  let controlResponse: unknown;
+  let notify: { error: ReturnType<typeof vi.fn>; success: ReturnType<typeof vi.fn>; warn: ReturnType<typeof vi.fn> };
 
   beforeEach(() => {
     vi.useFakeTimers();
@@ -67,15 +93,29 @@ describe("ライブ制御（SSE の取り込み）", () => {
     useWaveformStore.setState({ chartData: null, signalSettings: {}, unassignedSignals: [], signalGroups: [], cursors: [], fileName: null });
     posted = [];
     record = new LiveRecord();
+    controlResponse = {};
+    notify = { error: vi.fn(), success: vi.fn(), warn: vi.fn() };
+    const mem = new Map<string, string>();
+    vi.stubGlobal("localStorage", {
+      getItem: (k: string) => mem.get(k) ?? null,
+      setItem: (k: string, v: string) => { mem.set(k, v); },
+      removeItem: (k: string) => { mem.delete(k); },
+      clear: () => mem.clear(),
+    });
   });
-  afterEach(() => vi.useRealTimers());
+  afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
 
   function makeController() {
     const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (init?.method === "POST") posted.push({ url, body: JSON.parse(String(init.body)) });
       if (url.endsWith("/api/info")) return new Response(JSON.stringify(info));
-      if (url.endsWith("/api/watch")) return new Response(JSON.stringify({ errors: [{ name: "zz", message: "見つかりません" }] }));
+      if (url.endsWith("/api/watch")) {
+        const names = (JSON.parse(String(init?.body)) as { names: string[] }).names;
+        const errors = names.filter((n) => n === "zz" || n.startsWith("@")).map((name) => ({ name, message: "見つかりません" }));
+        return new Response(JSON.stringify({ errors }));
+      }
+      if (url.endsWith("/api/control")) return new Response(JSON.stringify(controlResponse));
       return new Response("{}");
     });
     return createLiveController({
@@ -83,7 +123,7 @@ describe("ライブ制御（SSE の取り込み）", () => {
       record,
       protocol: "http:",
       createEventSource: (u) => new FakeEventSource(u),
-      notify: { error: vi.fn(), success: vi.fn() },
+      notify,
     });
   }
 
@@ -179,6 +219,149 @@ describe("ライブ制御（SSE の取り込み）", () => {
     expect(posted.at(-1)).toEqual({ url: "/api/control", body: { cmd: "reset" } });
     expect(record.length).toBe(0);
     expect(useWaveformStore.getState().chartData).toBeNull();
+    live.stop();
+  });
+
+  const droppedRpm = [
+    { name: "@rpm", kind: "hold", message: "引数 '@rpm' は関数 mul16 にありません" },
+    { name: "@rpm", kind: "watch", message: "引数 '@rpm' は関数 mul16 にありません" },
+    { name: "@gear", kind: "watch", message: "引数 '@gear' は関数 mul16 にありません" },
+  ];
+
+  /** eng_judge_gear で @rpm を入力（固定）・@gear を監視にしてから始める */
+  async function startWithArgs() {
+    info.func = "eng_judge_gear";
+    info.state = { running: false, step: 0, speed: 1, holds: [{ name: "@rpm", value: 3000 }] as never[], overrun: false };
+    localStorage.setItem("sim-gui:layout:v1", JSON.stringify({
+      inputs: [{ name: "@rpm", widget: "number", min: 0, max: 100, step: 1, hold: true, value: 3000 }],
+      watch: [{ name: "@gear", plot: true, radix: "dec" }, { name: "g_out", plot: true, radix: "dec" }],
+    }));
+    const live = makeController();
+    await live.start();
+    return live;
+  }
+  afterEach(() => {
+    info.func = "main";
+    info.state = { running: true, step: 0, speed: 1, holds: [], overrun: false };
+  });
+
+  it("関数を変えた応答の dropped で固定を OFF にし、監視から外し、保存した構成にも反映する", async () => {
+    const live = await startWithArgs();
+    expect(useLiveStore.getState().inputs[0]).toMatchObject({ name: "@rpm", hold: true });
+    controlResponse = { running: false, step: 0, func: "mul16", holds: [], dropped: droppedRpm };
+    await live.control({ func: "mul16" });
+    const s = useLiveStore.getState();
+    expect(s.sim.func).toBe("mul16");
+    expect(s.inputs[0]).toMatchObject({ name: "@rpm", hold: false, monitor: false });
+    expect(s.watch.map((w) => w.name)).toEqual(["g_out"]);
+    const saved = JSON.parse(localStorage.getItem("sim-gui:layout:v1")!);
+    expect(saved.inputs[0]).toMatchObject({ name: "@rpm", hold: false, monitor: false });
+    expect(saved.watch.map((w: { name: string }) => w.name)).toEqual(["g_out"]);
+    // 送り直しても外した名前は送らない（errors にならない）
+    await live.syncWatch();
+    expect(posted.at(-1)).toEqual({ url: "/api/watch", body: { names: ["g_out"] } });
+    expect(useLiveStore.getState().watchErrors).toEqual({});
+    // 入力に追加し直すと監視に戻る
+    live.addInput("@rpm");
+    await vi.runOnlyPendingTimersAsync();
+    expect(useLiveStore.getState().inputs[0].monitor).toBeUndefined();
+    expect(posted.at(-1)).toEqual({ url: "/api/watch", body: { names: ["g_out", "@rpm"] } });
+    live.stop();
+  });
+
+  it("同じ dropped を応答と SSE の両方で受けても通知は 1 回だけ", async () => {
+    const live = await startWithArgs();
+    const es = FakeEventSource.last!;
+    controlResponse = { func: "mul16", holds: [], dropped: droppedRpm };
+    await live.control({ func: "mul16" });
+    es.emit("state", { func: "mul16", holds: [], dropped: droppedRpm });
+    es.emit("state", { func: "mul16", holds: [], dropped: droppedRpm });
+    expect(notify.warn).toHaveBeenCalledTimes(1);
+    const text = notify.warn.mock.calls[0][0] as string;
+    expect(text).toContain("@rpm（固定）: 引数 '@rpm' は関数 mul16 にありません");
+    expect(text).toContain("@gear（監視）");
+    // 外したあとに利用者が監視へ戻しても、1 秒ごとに届く同じ dropped では外し直さない
+    live.addWatch("g_new");
+    es.emit("state", { func: "mul16", holds: [], dropped: droppedRpm });
+    expect(useLiveStore.getState().watch.map((w) => w.name)).toEqual(["g_out", "g_new"]);
+    // 次の操作で空に戻り、また同じものを外したら改めて知らせる
+    controlResponse = { func: "eng_judge_gear", holds: [], dropped: [] };
+    await live.control({ func: "eng_judge_gear" });
+    es.emit("state", { func: "eng_judge_gear", holds: [], dropped: [] });
+    live.addWatch("@gear");
+    controlResponse = { func: "mul16", holds: [], dropped: [droppedRpm[2]] };
+    await live.control({ func: "mul16" });
+    expect(notify.warn).toHaveBeenCalledTimes(2);
+    live.stop();
+  });
+
+  it("SSE だけで届いた dropped（テスト CSV の読み込みなど）も反映して 1 回知らせる", async () => {
+    const live = await startWithArgs();
+    const es = FakeEventSource.last!;
+    es.emit("state", { func: "mul16", holds: [], dropped: droppedRpm });
+    es.emit("state", { func: "mul16", holds: [], dropped: droppedRpm });
+    expect(notify.warn).toHaveBeenCalledTimes(1);
+    expect(useLiveStore.getState().inputs[0]).toMatchObject({ hold: false, monitor: false });
+    expect(useLiveStore.getState().watch.map((w) => w.name)).toEqual(["g_out"]);
+    live.stop();
+  });
+
+  it("固定の表示はサーバの state.holds に合わせる（押している間だけのボタンは除く）", async () => {
+    const live = await startWithArgs();
+    const es = FakeEventSource.last!;
+    // サーバの固定が無くなった
+    es.emit("state", { holds: [] });
+    expect(useLiveStore.getState().inputs[0].hold).toBe(false);
+    // ボタンで一時的に固定しても固定 ON の表示にはしない
+    await live.write("@rpm", 1, true);
+    es.emit("state", { holds: [{ name: "@rpm", value: 1 }] });
+    expect(useLiveStore.getState().inputs[0].hold).toBe(false);
+    await live.releaseButton("@rpm");
+    es.emit("state", { holds: [] });
+    expect(useLiveStore.getState().inputs[0].hold).toBe(false);
+    // ほかから固定されたら ON にする
+    es.emit("state", { holds: [{ name: "@rpm", value: 5 }] });
+    expect(useLiveStore.getState().inputs[0].hold).toBe(true);
+    live.stop();
+  });
+
+  it("起動時に固定がサーバに無ければ OFF で表示する", async () => {
+    info.func = "eng_judge_gear";
+    localStorage.setItem("sim-gui:layout:v1", JSON.stringify({ inputs: [{ name: "@rpm", widget: "number", hold: true }] }));
+    const live = makeController();
+    await live.start();
+    expect(useLiveStore.getState().inputs[0].hold).toBe(false);
+    live.stop();
+  });
+
+  it("停止中に関数だけ変えても、手元の記録とライブ波形を消す（1 回だけ）", async () => {
+    const live = await startWithArgs();
+    const es = FakeEventSource.last!;
+    es.emit("samples", { step0: 0, names: ["g_out"], rows: [[1], [2]] });
+    live.commit();
+    expect(useWaveformStore.getState().chartData).not.toBeNull();
+    controlResponse = { running: false, step: 0, func: "mul16", holds: [], dropped: [] };
+    await live.control({ func: "mul16" });
+    expect(posted.at(-1)).toEqual({ url: "/api/control", body: { func: "mul16" } });
+    expect(record.length).toBe(0);
+    expect(useWaveformStore.getState().chartData).toBeNull();
+    // 新しい関数の記録は、同じ関数の state を受けても消さない
+    es.emit("samples", { step0: 0, names: ["g_out"], rows: [[7]] });
+    es.emit("state", { func: "mul16", running: false });
+    expect(record.length).toBe(1);
+    // 関数が変わらない応答では消さない
+    controlResponse = { func: "mul16" };
+    await live.control({ speed: 2 });
+    expect(record.length).toBe(1);
+    live.stop();
+  });
+
+  it("SSE で先に関数の変更を知っても記録を消す", async () => {
+    const live = await startWithArgs();
+    const es = FakeEventSource.last!;
+    es.emit("samples", { step0: 0, names: ["g_out"], rows: [[1]] });
+    es.emit("state", { func: "mul16" });
+    expect(record.length).toBe(0);
     live.stop();
   });
 });

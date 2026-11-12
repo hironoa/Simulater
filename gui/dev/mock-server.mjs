@@ -5,6 +5,8 @@
 //   node dev/mock-server.mjs [--port 8765] [--period-ms 5] [--html dist/sim_gui.html]
 //
 // 正弦波・カウンタ・書き込みに反応する値（ゲイン×正弦、ボタンの押下回数、目標値への一次遅れなど）を流す。
+// 対象関数ごとに `@引数` を持ち（func1 は @a @b、ctrl_task_5ms は @rpm）、関数を変えるとリセットして、
+// 新しい関数にない `@引数` の固定・監視を外して state の dropped に載せる。
 
 import http from "node:http";
 import fs from "node:fs";
@@ -20,8 +22,11 @@ const arg = (name, fallback) => {
 const PORT = Number(arg("--port", process.env.PORT ?? 8765));
 let periodMs = Number(arg("--period-ms", 5));
 const HTML = path.resolve(arg("--html", path.join(here, "..", "dist", "sim_gui.html")));
-const FUNCTIONS = ["sim_driver_main", "func1", "ctrl_task_5ms"];
+const FUNC_ARGS = { sim_driver_main: [], func1: ["@a", "@b"], ctrl_task_5ms: ["@rpm"] };
+const FUNCTIONS = Object.keys(FUNC_ARGS);
 let func = FUNCTIONS[0];
+/** @type {{name:string,kind:"hold"|"watch",message:string}[]} 直近の /api/control・/api/load-csv で外したもの */
+let dropped = [];
 
 // ---- 変数の表 ----
 /** @type {{name:string,type:string,size:number,kind:string,writable:boolean,members?:string[],init?:number}[]} */
@@ -63,8 +68,16 @@ const byName = new Map(symbols.map((s) => [s.name, s]));
 let values = new Float64Array(leaves.length);
 const resetValues = () => { values = new Float64Array(leaves.map((s) => s.init ?? 0)); };
 resetValues();
-const get = (n) => values[leafIndex.get(n)];
-const put = (n, v) => { values[leafIndex.get(n)] = v; };
+// 対象関数の引数（`@名前`）。関数を変えたりリセットしたりすると 0 に戻る
+let argValues = new Map();
+const argSym = (name) => ({ name, type: "int16_t", size: 2, kind: "int", writable: true, init: 0 });
+const isArg = (n) => FUNC_ARGS[func].includes(n);
+/** 今の関数で解決できる値の名前か */
+const resolvable = (n) => leafIndex.has(n) || isArg(n);
+const symOf = (n) => (isArg(n) ? argSym(n) : byName.get(n));
+const unresolvedMessage = (n) => (n.startsWith("@") ? `引数 '${n}' は関数 ${func} にありません` : `変数 '${n}' が見つかりません`);
+const get = (n) => (isArg(n) ? argValues.get(n) ?? 0 : values[leafIndex.get(n)]);
+const put = (n, v) => { if (isArg(n)) argValues.set(n, v); else values[leafIndex.get(n)] = v; };
 
 // ---- 実行状態 ----
 let running = false;
@@ -96,7 +109,7 @@ function clampType(sym, v) {
 }
 
 function writeVar(name, value) {
-  const sym = byName.get(name);
+  const sym = symOf(name);
   const v = typeof value === "string" ? Number(value.startsWith("0x") ? parseInt(value, 16) : value) : value;
   put(name, clampType(sym, Number.isFinite(v) ? v : 0));
 }
@@ -108,7 +121,7 @@ function runOneStep() {
       for (let i = 0; i < csvPlay.nIn; i++) {
         const cell = row[i];
         const name = csvPlay.names[i];
-        if (cell !== undefined && cell !== "" && byName.get(name)?.writable) writeVar(name, cell);
+        if (cell !== undefined && cell !== "" && symOf(name)?.writable) writeVar(name, cell);
       }
       csvPlay.index++;
     } else {
@@ -143,7 +156,7 @@ function runOneStep() {
   for (const [n, v] of holds) writeVar(n, v);
 
   if (pendingStep0 === null) pendingStep0 = step;
-  pendingRows.push(watch.map((n) => (leafIndex.has(n) ? get(n) : null)));
+  pendingRows.push(watch.map((n) => (resolvable(n) ? get(n) : null)));
   record.push([step, Float64Array.from(values)]);
   if (record.length > RECORD_MAX) record = record.slice(record.length - RECORD_MAX * 0.9);
   step++;
@@ -156,7 +169,10 @@ function send(res, event, data) {
   res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
 }
 const broadcast = (event, data) => { for (const c of clients) send(c, event, data); };
-const stateMsg = () => ({ running, step, speed, holds: [...holds].map(([name, value]) => ({ name, value })), overrun });
+const stateMsg = () => ({
+  running, step, speed, holds: [...holds].map(([name, value]) => ({ name, value })), overrun,
+  periodMs, func, playback: !!csvPlay, error: "", dropped,
+});
 let lastStateJson = "";
 function broadcastState(force = false) {
   const msg = stateMsg();
@@ -167,7 +183,7 @@ function broadcastState(force = false) {
 }
 const helloMsg = () => ({ periodMs, func, names: watch });
 // 監視変数の現在値（ステップは進めない）。約 50ms ごとの送信でまとめ、最後の値だけを送る
-const valuesMsg = () => ({ step, names: watch, values: watch.map((n) => (leafIndex.has(n) ? get(n) : null)) });
+const valuesMsg = () => ({ step, names: watch, values: watch.map((n) => (resolvable(n) ? get(n) : null)) });
 let valuesDirty = false;
 const markValues = () => { valuesDirty = true; };
 function flushSamples() {
@@ -186,6 +202,25 @@ function setWatch(names) {
   watch = names;
   broadcast("hello", helloMsg());
   markValues();
+}
+
+function resetTarget() {
+  flushSamples(); resetValues(); argValues = new Map(); step = 0; record = []; pending.clear(); prevButton = 0; rebase(); markValues();
+}
+
+/** 対象関数を変える: リセットして記録を区切り、新しい関数で解決できない固定・監視を外す。 */
+function changeFunc(name) {
+  func = name;
+  csvPlay = null;
+  resetTarget();
+  for (const n of watch) if (!resolvable(n)) dropped.push({ name: n, kind: "watch", message: unresolvedMessage(n) });
+  for (const n of [...holds.keys()]) {
+    if (resolvable(n)) continue;
+    dropped.push({ name: n, kind: "hold", message: unresolvedMessage(n) });
+    holds.delete(n);
+  }
+  for (const n of [...inputNames]) if (!resolvable(n)) inputNames.delete(n);
+  setWatch(watch.filter(resolvable));
 }
 
 // ---- 周期タイマ ----
@@ -251,7 +286,7 @@ function parseTestCsv(text) {
 function exportCsv() {
   const ins = [...inputNames].filter((n) => leafIndex.has(n));
   const outs = watch.filter((n) => leafIndex.has(n) && !inputNames.has(n));
-  const cols = [...ins, ...outs].map((n) => leafIndex.get(n));
+  const cols = [...ins, ...outs].map((n) => leafIndex.get(n)); // 引数は模擬の記録に残さない
   const lines = [`mod,${func},sim 記録,${ins.length},${outs.length}`, `#COMMENT,${[...ins, ...outs].join(",")}`];
   for (const [, row] of record) lines.push("," + cols.map((c) => String(row[c])).join(","));
   return lines.join("\r\n") + "\r\n";
@@ -274,7 +309,7 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "GET" && url.pathname === "/api/symbols") {
       const q = (url.searchParams.get("q") ?? "").toLowerCase();
       const limit = Number(url.searchParams.get("limit") ?? 200);
-      const hits = symbols.filter((s) => s.name.toLowerCase().includes(q)).slice(0, limit)
+      const hits = [...FUNC_ARGS[func].map(argSym), ...symbols].filter((s) => s.name.toLowerCase().includes(q)).slice(0, limit)
         .map(({ init, ...s }) => ({ ...s, members: s.members ?? [] }));
       return json(res, 200, hits);
     }
@@ -289,35 +324,33 @@ const server = http.createServer(async (req, res) => {
         if (!(Number(body.periodMs) > 0)) return json(res, 400, { error: "periodMs が不正です" });
         periodMs = Number(body.periodMs); rebase(); broadcast("hello", helloMsg());
       }
-      if (body.func !== undefined) {
-        if (!FUNCTIONS.includes(body.func)) return json(res, 400, { error: `関数 ${body.func} がありません` });
-        func = body.func; broadcast("hello", helloMsg());
-      }
+      if (body.func !== undefined && !FUNCTIONS.includes(body.func)) return json(res, 400, { error: `関数 ${body.func} がありません` });
+      if (![undefined, "run", "pause", "step", "reset"].includes(body.cmd)) return json(res, 400, { error: `cmd ${body.cmd} は使えません` });
+      dropped = [];
+      if (body.func !== undefined && body.func !== func) changeFunc(body.func);
       switch (body.cmd) {
         case "run": running = true; stepBudget = 0; rebase(); break;
         case "pause": running = false; stepBudget = 0; flushSamples(); break;
         case "step": running = true; stepBudget = Math.max(1, Math.floor(Number(body.steps ?? 1))); break;
-        case "reset":
-          flushSamples(); resetValues(); step = 0; record = []; pending.clear(); csvPlay = null; prevButton = 0; rebase(); markValues();
-          break;
-        case undefined: break;
-        default: return json(res, 400, { error: `cmd ${body.cmd} は使えません` });
+        case "reset": running = false; csvPlay = null; resetTarget(); break;
+        default: break;
       }
-      broadcastState();
-      return json(res, 200, { ok: true, state: stateMsg() });
+      broadcastState(true);
+      return json(res, 200, stateMsg()); // 応答は state と同じ形
     }
     if (req.method === "POST" && url.pathname === "/api/watch") {
       const body = JSON.parse((await readBody(req)).toString("utf8") || "{}");
       const names = Array.isArray(body.names) ? body.names.map(String) : [];
-      const errors = names.filter((n) => !leafIndex.has(n))
-        .map((name) => ({ name, message: byName.has(name) ? "構造体・配列は要素を指定してください" : "変数が見つかりません" }));
-      setWatch(names.filter((n) => leafIndex.has(n)));
+      const errors = names.filter((n) => !resolvable(n))
+        .map((name) => ({ name, message: byName.has(name) ? "構造体・配列は要素を指定してください" : unresolvedMessage(name) }));
+      setWatch(names.filter(resolvable));
       return json(res, 200, { errors });
     }
     if (req.method === "POST" && url.pathname === "/api/write") {
       const body = JSON.parse((await readBody(req)).toString("utf8") || "{}");
-      const sym = byName.get(body.name);
-      if (!sym || sym.members) return json(res, 404, { error: `変数 ${body.name} が見つかりません` });
+      if (typeof body.value === "string" && /[\r\n]/.test(body.value)) return json(res, 400, { error: "値に改行は使えません" });
+      const sym = symOf(body.name);
+      if (!sym || sym.members) return json(res, 404, { error: unresolvedMessage(String(body.name)) });
       if (body.release) { holds.delete(body.name); broadcastState(); return json(res, 200, { ok: true }); }
       if (!sym.writable) return json(res, 400, { error: `${body.name} は書き込めません` });
       inputNames.add(body.name);
@@ -330,9 +363,13 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "POST" && url.pathname === "/api/load-csv") {
       const text = (await readBody(req)).toString("utf8");
       const parsed = parseTestCsv(text);
+      const csvFunc = (text.split(/\r?\n/)[0] ?? "").split(",")[1]?.trim();
+      if (csvFunc && !FUNCTIONS.includes(csvFunc)) return json(res, 400, { error: `関数 ${csvFunc} がありません` });
+      dropped = [];
+      if (csvFunc && csvFunc !== func) changeFunc(csvFunc);
       parsed.names.slice(0, parsed.nIn).forEach((n) => inputNames.add(n));
       csvPlay = { ...parsed, index: 0 };
-      setWatch([...new Set([...watch, ...parsed.names.filter((n) => leafIndex.has(n))])]);
+      setWatch([...new Set([...watch, ...parsed.names.filter(resolvable)])]);
       running = true; rebase(); broadcastState();
       return json(res, 200, { rows: parsed.rows.length, names: parsed.names });
     }

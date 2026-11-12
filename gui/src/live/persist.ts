@@ -13,6 +13,11 @@ export interface InputItem {
   hold: boolean;
   /** 数値入力・スライダの最後の値（復元用） */
   value?: number;
+  /**
+   * false なら現在値を監視しない（関数の変更でサーバが監視から外したとき）。
+   * 書き込めたとき・入力に追加し直したときに監視へ戻す。省略は監視する。
+   */
+  monitor?: boolean;
 }
 
 export interface WatchItem {
@@ -64,6 +69,7 @@ export function sanitizeLayout(raw: unknown): LiveLayout {
         hold: !!it.hold,
       };
       if (typeof it.value === "number" && Number.isFinite(it.value)) item.value = it.value;
+      if (it.monitor === false) item.monitor = false;
       return [item];
     }),
     watch: watch.flatMap((it: any) => {

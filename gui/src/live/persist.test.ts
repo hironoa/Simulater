@@ -21,6 +21,11 @@ describe("構成の保存と復元", () => {
     expect(loadLayout(s)).toEqual(layout);
   });
 
+  it("監視から外した入力（monitor: false）を読み戻せる", () => {
+    const got = sanitizeLayout({ inputs: [{ name: "@rpm", monitor: false }, { name: "b", monitor: "no" }] });
+    expect(got.inputs.map((i) => i.monitor)).toEqual([false, undefined]);
+  });
+
   it("壊れた内容・重複・範囲外の値は直して読む", () => {
     const got = sanitizeLayout({
       inputs: [{ name: "a", widget: "???", step: -1 }, { name: "a" }, { nope: 1 }],

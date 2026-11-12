@@ -8,12 +8,68 @@ export interface SimState {
   overrun: boolean;
 }
 
+/** 関数の変更などで解決し直せずにサーバが外した固定・監視（直近の `/api/control`・`/api/load-csv` の分）。 */
+export interface DroppedItem {
+  name: string;
+  kind: "hold" | "watch";
+  message: string;
+}
+
+/** `state`（SSE の `event: state`、`/api/control` の応答、`/api/info` の `state`）を検証したもの。 */
+export type StateMessage = Partial<SimState> & { periodMs?: number; func?: string; dropped?: DroppedItem[] };
+
+const isObject = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
+
+/**
+ * `dropped` を読む。項目が無ければ空、配列でなければ undefined（不正な形は無視する）。
+ * 名前のない項目や kind が hold / watch でない項目は捨てる。
+ */
+export function parseDropped(v: unknown): DroppedItem[] | undefined {
+  if (v === undefined || v === null) return [];
+  if (!Array.isArray(v)) return undefined;
+  return v.flatMap((d) => {
+    if (!isObject(d) || typeof d.name !== "string" || !d.name) return [];
+    if (d.kind !== "hold" && d.kind !== "watch") return [];
+    return [{ name: d.name, kind: d.kind, message: typeof d.message === "string" ? d.message : "" }];
+  });
+}
+
+/** state の形をした値を検証する。オブジェクトでなければ null。 */
+export function parseState(msg: unknown): StateMessage | null {
+  if (!isObject(msg)) return null;
+  const out: StateMessage = {};
+  if (typeof msg.running === "boolean") out.running = msg.running;
+  if (typeof msg.step === "number") out.step = msg.step;
+  if (typeof msg.speed === "number") out.speed = msg.speed;
+  if (typeof msg.overrun === "boolean") out.overrun = msg.overrun;
+  if (typeof msg.periodMs === "number") out.periodMs = msg.periodMs;
+  if (typeof msg.func === "string") out.func = msg.func;
+  if (Array.isArray(msg.holds)) {
+    out.holds = msg.holds.filter(isObject).map((h) => ({
+      name: String(h.name),
+      value: typeof h.value === "number" || typeof h.value === "string" ? h.value : String(h.value),
+    }));
+  }
+  const dropped = parseDropped(msg.dropped);
+  if (dropped) out.dropped = dropped;
+  return out;
+}
+
+/** `/api/control` の応答から state を取り出す（state そのものでも `{"state":{...}}` でも読む）。 */
+export function parseControlResponse(res: unknown): StateMessage | null {
+  if (!isObject(res)) return null;
+  if (isObject(res.state)) return parseState(res.state);
+  // state の項目が 1 つもなければ state ではない（`{"ok":true}` など）
+  const keys = ["running", "step", "speed", "holds", "overrun", "periodMs", "func", "dropped"];
+  return keys.some((k) => k in res) ? parseState(res) : null;
+}
+
 export interface SimInfo {
   version: string;
   periodMs: number;
   func: string;
   functions: string[];
-  state: Partial<SimState>;
+  state: StateMessage;
 }
 
 export type SymbolKind = "int" | "uint" | "float" | "ptr" | "struct" | "array";
@@ -88,7 +144,8 @@ export function createApi(base = "", fetchImpl: FetchLike = (input, init) => fet
     info: (signal?: AbortSignal) => json<SimInfo>("/api/info", { signal }),
     symbols: (q: string, limit = 200, signal?: AbortSignal) =>
       json<SymbolEntry[]>(`/api/symbols?q=${encodeURIComponent(q)}&limit=${limit}`, { signal }),
-    control: (req: ControlRequest) => post<unknown>("/api/control", req),
+    /** 応答の state（読めなければ null） */
+    control: async (req: ControlRequest) => parseControlResponse(await post<unknown>("/api/control", req)),
     watch: (names: string[]) => post<WatchResult>("/api/watch", { names }),
     write: (name: string, value: number | string, hold = false) =>
       post<unknown>("/api/write", { name, value, hold }),
@@ -124,7 +181,7 @@ export async function detectServer(
       periodMs: info.periodMs,
       func: String(info.func ?? ""),
       functions: Array.isArray(info.functions) ? info.functions.map(String) : [],
-      state: info.state && typeof info.state === "object" ? info.state : {},
+      state: parseState(info.state) ?? {},
     };
   } catch {
     return null;

@@ -2,7 +2,7 @@
 
 import toast from "react-hot-toast";
 import { LIVE_FILE_NAME, useWaveformStore } from "../store/useWaveformStore";
-import { createApi, detectServer, type ControlRequest, type SimApi } from "./api";
+import { createApi, detectServer, type ControlRequest, type DroppedItem, type SimApi, type StateMessage } from "./api";
 import { liveRecord, type LiveRecord } from "./liveRecord";
 import { useLiveStore, type LiveStoreState } from "./liveStore";
 import { loadLayout, saveLayout, type InputItem, type InputWidget, type WatchItem } from "./persist";
@@ -17,7 +17,7 @@ export interface LiveControllerDeps {
   valueFlushMs?: number;
   /** 停止中に届いた samples（ステップ実行など）を Viewer に載せるまでの待ち */
   commitDelayMs?: number;
-  notify?: { error: (m: string) => void; success: (m: string) => void };
+  notify?: { error: (m: string) => void; success: (m: string) => void; warn?: (m: string) => void };
 }
 
 const unique = (names: string[]) => [...new Set(names.filter(Boolean))];
@@ -25,7 +25,11 @@ const unique = (names: string[]) => [...new Set(names.filter(Boolean))];
 export function createLiveController(deps: LiveControllerDeps = {}) {
   const api = deps.api ?? createApi("");
   const record = deps.record ?? liveRecord;
-  const notify = deps.notify ?? { error: (m: string) => toast.error(m), success: (m: string) => toast.success(m) };
+  const notify = deps.notify ?? {
+    error: (m: string) => toast.error(m),
+    success: (m: string) => toast.success(m),
+    warn: (m: string) => toast(m, { duration: 10_000, style: { whiteSpace: "pre-line", maxWidth: 520 } }),
+  };
   const valueFlushMs = deps.valueFlushMs ?? 200;
   const commitDelayMs = deps.commitDelayMs ?? 250;
   const store = useLiveStore;
@@ -37,6 +41,19 @@ export function createLiveController(deps: LiveControllerDeps = {}) {
   const pendingValues: Record<string, number | null> = {};
   let pendingDirty = false;
 
+  /** いまの対象関数（変わったらリセットと同じく手元の記録を消す）。 */
+  let knownFunc = "";
+  /** 最後に反映した `dropped`（JSON）。SSE と応答で同じものを受けても 1 回だけ反映・通知する。 */
+  let droppedKey = "[]";
+  /** 要求を送った時点の `dropped`。応答のあとに遅れて届いた古い state のものは反映しない。 */
+  let staleDroppedKey: string | null = null;
+  /** 応答待ちの `/api/control`・`/api/load-csv` の数（その間に届いた state の dropped は見送る）。 */
+  let resolving = 0;
+  /** 固定の切り替え・書き込みが応答待ちの名前（その間は state.holds に合わせない）。 */
+  const holdBusy = new Map<string, number>();
+  /** 押している間だけ 1 のボタンで一時的に固定している名前（固定 ON とは表示しない）。 */
+  const momentary = new Set<string>();
+
   const set = (patch: Partial<LiveStoreState>) => store.setState(patch);
 
   function persist() {
@@ -46,7 +63,7 @@ export function createLiveController(deps: LiveControllerDeps = {}) {
 
   function watchedNames() {
     const s = store.getState();
-    return unique([...s.watch.map((w) => w.name), ...s.inputs.map((i) => i.name)]);
+    return unique([...s.watch.map((w) => w.name), ...s.inputs.filter((i) => i.monitor !== false).map((i) => i.name)]);
   }
 
   function syncSignals() {
@@ -78,6 +95,125 @@ export function createLiveController(deps: LiveControllerDeps = {}) {
     commitTimer = setTimeout(() => { commitTimer = null; commit(); }, commitDelayMs);
   }
 
+  /** 手元のライブ記録と、Viewer に載せたライブ波形を消す（ファイルから開いた波形はそのまま）。 */
+  function clearLiveRecord() {
+    if (commitTimer) { clearTimeout(commitTimer); commitTimer = null; }
+    record.clear();
+    const live = waveform.getState().fileName === LIVE_FILE_NAME;
+    waveform.setState({ cursors: [], hoverCursor: null, ...(live ? { chartData: null, zoomRange: null } : {}) });
+  }
+
+  /** 対象関数が変わったと分かったら（応答・state・hello のどれで先に知っても 1 回だけ）記録を消す。 */
+  function noteFunc(func: string | undefined) {
+    if (!func) return;
+    if (knownFunc && func !== knownFunc) clearLiveRecord();
+    knownFunc = func;
+  }
+
+  async function trackHold<T>(name: string, fn: () => Promise<T>): Promise<T> {
+    holdBusy.set(name, (holdBusy.get(name) ?? 0) + 1);
+    try {
+      return await fn();
+    } finally {
+      const n = (holdBusy.get(name) ?? 1) - 1;
+      if (n > 0) holdBusy.set(name, n); else holdBusy.delete(name);
+    }
+  }
+
+  /** 入力パネルの固定表示をサーバの state.holds に合わせる（切り替え中・ボタンを押している間の名前は除く）。 */
+  function reconcileHolds(holds: StateMessage["holds"]) {
+    if (!holds) return;
+    const held = new Set(holds.map((h) => h.name));
+    const inputs = store.getState().inputs;
+    let changed = false;
+    const next = inputs.map((i) => {
+      if (holdBusy.has(i.name) || momentary.has(i.name)) return i;
+      const want = held.has(i.name);
+      if (i.hold === want) return i;
+      changed = true;
+      return { ...i, hold: want };
+    });
+    if (changed) {
+      set({ inputs: next });
+      persist();
+    }
+  }
+
+  /** サーバが外した固定・監視を手元の構成に反映する。 */
+  function applyDropped(list: DroppedItem[], announce: boolean) {
+    if (!list.length) return;
+    const holds = new Set(list.filter((d) => d.kind === "hold").map((d) => d.name));
+    const watches = new Set(list.filter((d) => d.kind === "watch").map((d) => d.name));
+    const s = store.getState();
+    const inputs = s.inputs.map((i) => {
+      let it = i;
+      if (holds.has(i.name) && it.hold) it = { ...it, hold: false };
+      if (watches.has(i.name) && it.monitor !== false) it = { ...it, monitor: false };
+      return it;
+    });
+    for (const n of holds) momentary.delete(n);
+    const watchErrors = { ...s.watchErrors };
+    const values = { ...s.values };
+    for (const n of watches) {
+      delete watchErrors[n];
+      delete values[n];
+      delete pendingValues[n];
+    }
+    set({
+      inputs,
+      watch: s.watch.filter((w) => !watches.has(w.name)),
+      watchErrors,
+      values,
+      serverWatch: s.serverWatch.filter((n) => !watches.has(n)),
+    });
+    persist();
+    syncSignals();
+    if (announce) {
+      const lines = list.map((d) => `${d.name}（${d.kind === "hold" ? "固定" : "監視"}）: ${d.message || "解決できません"}`);
+      (notify.warn ?? notify.error)(`今の対象関数では使えないため、次を外しました\n${lines.join("\n")}`);
+    }
+  }
+
+  /** state の `dropped` を受ける。SSE と応答で同じものを何度受けても 1 回だけ反映・通知する。 */
+  function onDropped(list: DroppedItem[] | undefined, fromResponse: boolean) {
+    if (!list) return;
+    const key = JSON.stringify(list);
+    if (!fromResponse) {
+      if (resolving > 0) return;
+      if (staleDroppedKey !== null) {
+        const stale = key === staleDroppedKey && key !== droppedKey;
+        staleDroppedKey = null;
+        if (stale) return;
+      }
+      if (key === droppedKey) return;
+    }
+    droppedKey = key;
+    applyDropped(list, true);
+  }
+
+  /** `/api/control`・`/api/load-csv` を送る間の dropped の扱い（送る前の dropped は古いものとして見送る）。 */
+  async function resolvingRequest<T>(fn: () => Promise<T>): Promise<T> {
+    if (resolving === 0) staleDroppedKey = droppedKey;
+    resolving++;
+    try {
+      return await fn();
+    } finally {
+      resolving--;
+    }
+  }
+
+  /** state を手元に取り込む（SSE・応答で共通）。 */
+  function applyState(msg: StateMessage, fromResponse: boolean) {
+    const { dropped, ...rest } = msg;
+    const prev = store.getState().sim;
+    set({ sim: { ...prev, ...rest } });
+    if (rest.periodMs && rest.periodMs !== prev.periodMs) waveform.getState().setTaskPeriod(rest.periodMs);
+    noteFunc(rest.func);
+    onDropped(dropped, fromResponse);
+    reconcileHolds(rest.holds);
+    return prev;
+  }
+
   function flushValues() {
     if (!pendingDirty) return;
     pendingDirty = false;
@@ -86,6 +222,7 @@ export function createLiveController(deps: LiveControllerDeps = {}) {
 
   const handlers: StreamHandlers = {
     hello: (msg) => {
+      noteFunc(msg.func);
       const sim = store.getState().sim;
       set({
         serverWatch: msg.names,
@@ -116,10 +253,7 @@ export function createLiveController(deps: LiveControllerDeps = {}) {
       if (msg.names.length) pendingDirty = true;
     },
     state: (msg) => {
-      const prev = store.getState().sim;
-      const next = { ...prev, ...msg };
-      set({ sim: next });
-      if (msg.periodMs && msg.periodMs !== prev.periodMs) waveform.getState().setTaskPeriod(msg.periodMs);
+      const prev = applyState(msg, false);
       if (prev.running && msg.running === false) scheduleCommit();
     },
     error: (m) => console.warn("[sim stream]", m),
@@ -134,6 +268,9 @@ export function createLiveController(deps: LiveControllerDeps = {}) {
     }
     const layout = loadLayout();
     record.setMaxSamples(layout.maxSamples);
+    knownFunc = info.func;
+    droppedKey = "[]";
+    staleDroppedKey = null;
     set({
       mode: "live",
       info,
@@ -152,6 +289,12 @@ export function createLiveController(deps: LiveControllerDeps = {}) {
       },
     });
     waveform.getState().setTaskPeriod(info.periodMs);
+    // 前に外された分を保存した構成にも反映する（通知は関数を変えたときだけ）
+    if (info.state.dropped?.length) {
+      droppedKey = JSON.stringify(info.state.dropped);
+      applyDropped(info.state.dropped, false);
+    }
+    reconcileHolds(info.state.holds ?? []);
     await syncWatch();
     closeStream = openStream(api.streamUrl(), {
       ...handlers,
@@ -173,7 +316,7 @@ export function createLiveController(deps: LiveControllerDeps = {}) {
 
   async function control(req: ControlRequest) {
     try {
-      await api.control(req);
+      const res = await resolvingRequest(() => api.control(req));
       const sim = store.getState().sim;
       // 応答の state イベントを待たずに表示を合わせる
       if (req.cmd === "run") set({ sim: { ...sim, running: true } });
@@ -183,13 +326,13 @@ export function createLiveController(deps: LiveControllerDeps = {}) {
         set({ sim: { ...store.getState().sim, periodMs: req.periodMs } });
         waveform.getState().setTaskPeriod(req.periodMs);
       }
-      if (req.func !== undefined) set({ sim: { ...store.getState().sim, func: req.func } });
-      if (req.cmd === "reset") {
-        record.clear();
-        // Viewer に載せていたライブ記録も消す（ファイルから開いた波形はそのまま）
-        const live = waveform.getState().fileName === LIVE_FILE_NAME;
-        waveform.setState({ cursors: [], hoverCursor: null, ...(live ? { chartData: null, zoomRange: null } : {}) });
+      // 対象関数が変わるとサーバはリセットする（記録を消し、外した固定・監視を dropped で返す）
+      if (res) applyState(res, true);
+      else if (req.func !== undefined) {
+        set({ sim: { ...store.getState().sim, func: req.func } });
+        noteFunc(req.func);
       }
+      if (req.cmd === "reset") clearLiveRecord();
       if (req.cmd === "pause") scheduleCommit();
     } catch (e) {
       notify.error(`操作に失敗しました: ${(e as Error).message}`);
@@ -218,9 +361,21 @@ export function createLiveController(deps: LiveControllerDeps = {}) {
   }
 
   // ---- 入力 ----
+  /** 監視から外されていた入力を監視に戻す。 */
+  function remonitor(name: string) {
+    const item = store.getState().inputs.find((i) => i.name === name);
+    if (!item || item.monitor !== false) return;
+    updateInput(name, { monitor: undefined });
+    void syncWatch();
+  }
+
   function addInput(name: string, widget: InputWidget = "number") {
     const s = store.getState();
-    if (!name || s.inputs.some((i) => i.name === name)) return;
+    if (!name) return;
+    if (s.inputs.some((i) => i.name === name)) {
+      remonitor(name);
+      return;
+    }
     const item: InputItem = { name, widget, min: 0, max: widget === "toggle" || widget === "button" ? 1 : 100, step: 1, hold: false };
     set({ inputs: [...s.inputs, item] });
     persist();
@@ -231,6 +386,7 @@ export function createLiveController(deps: LiveControllerDeps = {}) {
     const item = store.getState().inputs.find((i) => i.name === name);
     set({ inputs: store.getState().inputs.filter((i) => i.name !== name) });
     persist();
+    momentary.delete(name);
     if (item?.hold) void api.release(name).catch(() => undefined);
     void syncWatch();
   }
@@ -243,25 +399,45 @@ export function createLiveController(deps: LiveControllerDeps = {}) {
   async function write(name: string, value: number | string, hold?: boolean) {
     const item = store.getState().inputs.find((i) => i.name === name);
     const h = hold ?? item?.hold ?? false;
+    // 固定 OFF の入力を一時的に固定する（押している間だけ 1 のボタン）。固定 ON の表示にはしない
+    if (h && item && !item.hold) momentary.add(name);
     try {
-      await api.write(name, value, h);
+      await trackHold(name, () => api.write(name, value, h));
+      if (!h) momentary.delete(name);
       if (item && typeof value === "number") updateInput(name, { value });
+      remonitor(name);
     } catch (e) {
       notify.error(`${name} に書き込めませんでした: ${(e as Error).message}`);
     }
   }
 
+  /** 押している間だけ 1 のボタンを離した: 一時的な固定を解き、0 を書く（固定 ON の項目は 0 で固定し直す）。 */
+  async function releaseButton(name: string) {
+    await trackHold(name, async () => {
+      await api.release(name).catch(() => undefined);
+      momentary.delete(name);
+      const item = store.getState().inputs.find((i) => i.name === name);
+      await write(name, 0, item?.hold ?? false);
+    });
+  }
+
   async function setHold(name: string, hold: boolean, value?: number) {
+    momentary.delete(name);
     updateInput(name, { hold });
     try {
-      if (hold) {
-        const item = store.getState().inputs.find((i) => i.name === name);
-        const v = value ?? item?.value ?? store.getState().values[name] ?? 0;
-        await api.write(name, v, true);
-      } else {
-        await api.release(name);
-      }
+      await trackHold(name, async () => {
+        if (hold) {
+          const item = store.getState().inputs.find((i) => i.name === name);
+          const v = value ?? item?.value ?? store.getState().values[name] ?? 0;
+          await api.write(name, v, true);
+        } else {
+          await api.release(name);
+        }
+      });
+      if (hold) remonitor(name);
     } catch (e) {
+      // 固定できなかった（今の関数で解決できないなど）。表示はサーバの state.holds に合わせ直す
+      if (hold) updateInput(name, { hold: false });
       notify.error(`固定を切り替えられませんでした: ${(e as Error).message}`);
     }
   }
@@ -282,7 +458,7 @@ export function createLiveController(deps: LiveControllerDeps = {}) {
   // ---- CSV ----
   async function loadCsv(file: Blob) {
     try {
-      const res = await api.loadCsv(file);
+      const res = await resolvingRequest(() => api.loadCsv(file));
       const s = store.getState();
       const known = new Set(s.watch.map((w) => w.name));
       const added = (res.names ?? []).filter((n) => !known.has(n)).map((name) => ({ name, plot: true, radix: "dec" as const }));
@@ -309,7 +485,7 @@ export function createLiveController(deps: LiveControllerDeps = {}) {
 
   return {
     api, record, handlers, start, stop, control, commit, syncWatch,
-    addWatch, removeWatch, updateWatch, addInput, removeInput, updateInput, write, setHold,
+    addWatch, removeWatch, updateWatch, addInput, removeInput, updateInput, write, releaseButton, setHold,
     setWindowSize, setMaxSamples, loadCsv, exportCsv,
     /** テスト用: 保留中の最新値を即座に反映する */
     flushValues,
