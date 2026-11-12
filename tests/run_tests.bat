@@ -512,6 +512,66 @@ curl -s "%U%/api/export.csv" > "%WORK%\rt2_export.csv"
 set RC=%ERRORLEVEL%
 findstr /l /c:"OK 5, NG 0, NO Check 0" "%WORK%\rt2_rerun.log" >nul
 if errorlevel 1 (call :ng "round trip: playback followed by operations re-runs with all rows OK") else if "%RC%"=="0" (call :ok "round trip: playback followed by operations re-runs with all rows OK") else (call :ng "round trip: playback followed by operations re-runs: exit code 0, got %RC%")
+rem a step whose input and output cells are all empty is saved with "step N" in the comment column,
+rem so sim run does not skip it as an empty row and calls the function as many times as the GUI did
+curl -s -X POST --data-binary "@%T%\gui\watch_none.json" "%U%/api/watch" > nul
+curl -s -X POST --data-binary "@%T%\gui\reset_func_cycle.json" "%U%/api/control" > nul
+curl -s -X POST --data-binary "@%T%\gui\step1.json" "%U%/api/control" > nul
+curl -s -X POST --data-binary "@%T%\gui\watch_call_cnt.json" "%U%/api/watch" > nul
+curl -s -X POST --data-binary "@%T%\gui\step1.json" "%U%/api/control" > nul
+curl -s "%U%/api/export.csv" > "%WORK%\en_export.csv"
+findstr /x /l /c:"step 1," "%WORK%\en_export.csv" >nul
+if errorlevel 1 (call :ng "an empty step before watching is saved with step 1 in the comment column") else (call :ok "an empty step before watching is saved with step 1 in the comment column")
+"%SIM%" run "%WORK%\en_export.csv" -o "%WORK%\oen" --quiet > "%WORK%\en_rerun.log" 2>&1
+set RC=%ERRORLEVEL%
+findstr /l /c:"OK 1, NG 0, NO Check 1" "%WORK%\en_rerun.log" >nul
+if errorlevel 1 (call :ng "a record with an empty step re-runs with the same number of calls") else if "%RC%"=="0" (call :ok "a record with an empty step re-runs with the same number of calls") else (call :ng "a record with an empty step re-runs: exit code 0, got %RC%")
+rem a block with 0 inputs and 0 outputs (saved with nothing watched or written)
+curl -s -X POST --data-binary "@%T%\gui\watch_none.json" "%U%/api/watch" > nul
+curl -s -X POST --data-binary "@%T%\gui\reset_func_cycle.json" "%U%/api/control" > nul
+curl -s -X POST --data-binary "@%T%\gui\step3.json" "%U%/api/control" > nul
+curl -s "%U%/api/export.csv" > "%WORK%\e0_export.csv"
+findstr /x /l /c:"#COMMENT" "%WORK%\e0_export.csv" >nul
+if errorlevel 1 (call :ng "a record with nothing watched or written is a block of 0 inputs and 0 outputs") else (call :ok "a record with nothing watched or written is a block of 0 inputs and 0 outputs")
+findstr /x /l /c:"step 3," "%WORK%\e0_export.csv" >nul
+if errorlevel 1 (call :ng "every row of a 0 input 0 output record has step N and a comma") else (call :ok "every row of a 0 input 0 output record has step N and a comma")
+"%SIM%" run "%WORK%\e0_export.csv" -o "%WORK%\oe0" --quiet > "%WORK%\e0_rerun.log" 2>&1
+set RC=%ERRORLEVEL%
+findstr /l /c:"OK 0, NG 0, NO Check 3" "%WORK%\e0_rerun.log" >nul
+if errorlevel 1 (call :ng "a 0 input 0 output record re-runs with 3 calls") else if "%RC%"=="0" (call :ok "a 0 input 0 output record re-runs with 3 calls") else (call :ng "a 0 input 0 output record re-runs: exit code 0, got %RC%")
+rem inputs and watches added and removed during the record (earlier rows have the later columns empty);
+rem the last row watches eng_update@call_cnt to check the number of calls
+curl -s -X POST --data-binary "@%T%\gui\watch_none.json" "%U%/api/watch" > nul
+curl -s -X POST --data-binary "@%T%\gui\reset_func_cycle.json" "%U%/api/control" > nul
+curl -s -X POST --data-binary "@%T%\gui\step1.json" "%U%/api/control" > nul
+curl -s -X POST --data-binary "@%T%\gui\step1.json" "%U%/api/control" > nul
+curl -s -X POST --data-binary "@%T%\gui\write_ign.json" "%U%/api/write" > nul
+curl -s -X POST --data-binary "@%T%\gui\step1.json" "%U%/api/control" > nul
+curl -s -X POST --data-binary "@%T%\gui\release_ign.json" "%U%/api/write" > nul
+curl -s -X POST --data-binary "@%T%\gui\step1.json" "%U%/api/control" > nul
+curl -s -X POST --data-binary "@%T%\gui\watch_call_cnt.json" "%U%/api/watch" > nul
+curl -s -X POST --data-binary "@%T%\gui\step1.json" "%U%/api/control" > nul
+curl -s -X POST --data-binary "@%T%\gui\watch_none.json" "%U%/api/watch" > nul
+curl -s -X POST --data-binary "@%T%\gui\step1.json" "%U%/api/control" > nul
+curl -s -X POST --data-binary "@%T%\gui\watch_call_cnt.json" "%U%/api/watch" > nul
+curl -s -X POST --data-binary "@%T%\gui\step1.json" "%U%/api/control" > nul
+curl -s "%U%/api/export.csv" > "%WORK%\em_export.csv"
+findstr /x /l /c:"step 6,," "%WORK%\em_export.csv" >nul
+if errorlevel 1 (call :ng "an empty step after removing the watch is saved with step 6") else (call :ok "an empty step after removing the watch is saved with step 6")
+set "LAST="
+for /f "usebackq delims=" %%L in ("%WORK%\em_export.csv") do set "LAST=%%L"
+if "%LAST:~-3%"==",,7" (call :ok "the last row has eng_update@call_cnt = 7") else (call :ng "the last row has eng_update@call_cnt = 7: %LAST%")
+"%SIM%" run "%WORK%\em_export.csv" -o "%WORK%\oem" --quiet > "%WORK%\em_rerun.log" 2>&1
+set RC=%ERRORLEVEL%
+findstr /l /c:"OK 2, NG 0, NO Check 5" "%WORK%\em_rerun.log" >nul
+if errorlevel 1 (call :ng "a record with columns added and removed re-runs with the same number of calls") else if "%RC%"=="0" (call :ok "a record with columns added and removed re-runs with the same number of calls") else (call :ng "a record with columns added and removed re-runs: exit code 0, got %RC%")
+rem sim run skips only rows whose cells are all empty, comment column included; a row with only a comment is run
+"%SIM%" run "%T%\csv\comment_col_only.csv" -o "%WORK%\occ" --quiet > "%WORK%\cc_rerun.log" 2>&1
+set RC=%ERRORLEVEL%
+findstr /l /c:"OK 1, NG 0, NO Check 1" "%WORK%\cc_rerun.log" >nul
+if errorlevel 1 (call :ng "a row with only the comment column is run") else if "%RC%"=="0" (call :ok "a row with only the comment column is run") else (call :ng "a row with only the comment column is run: exit code 0, got %RC%")
+findstr /b /l /c:"note,1,NO Check," "%WORK%\occ\comment_col_only.csv" >nul
+if errorlevel 1 (call :ng "the comment-only row is written with its actual value") else (call :ok "the comment-only row is written with its actual value")
 rem numbers out of range are rejected with 400 instead of being clamped or rounded
 curl -s -X POST --data-binary "@%T%\gui\control_bad_speed.json" "%U%/api/control" > "%WORK%\nv1.out"
 findstr /l /c:"\"error\":" "%WORK%\nv1.out" >nul

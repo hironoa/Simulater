@@ -657,6 +657,55 @@ data: {"periodMs":2,"func":"TEST_cycle","names":["g_eng.state","TEST_cycle_cnt",
     RC=$?
     check "往復: CSV の再生に続けて操作した記録を sim run で再実行すると全行 OK（終了コード 0）" sh -c "[ $RC -eq 0 ] && grep -F -q '合計: 総数 5, OK 5, NG 0, NO Check 0' '$WORK/rt2_rerun.log'"
 
+    # 入出力のセルがすべて空になる周期も 1 回の呼び出しとして保存する（1 列目に step N の目印を入れる）。
+    # 空セルだけの行で保存すると sim run が空行として読み飛ばし、呼び出し回数が減って eng_update@call_cnt が NG になっていた
+    post watch_none.json en0.out /api/watch > /dev/null
+    post reset_func_cycle.json en1.out /api/control > /dev/null
+    post step1.json s1.out /api/control > /dev/null
+    post watch_call_cnt.json en2.out /api/watch > /dev/null
+    post step1.json s1.out /api/control > /dev/null
+    curl -s "$U/api/export.csv" | tr -d '\r' > "$WORK/en_export.csv"
+    printf 'mod,TEST_cycle,GUI記録,0,1\n#COMMENT,eng_update@call_cnt\nstep 1,\n,2\n' > "$WORK/en_expect.csv"
+    check "監視の前の空の周期は 1 列目に step 1 を入れて保存する" cmp -s "$WORK/en_export.csv" "$WORK/en_expect.csv"
+    "$SIM" run "$WORK/en_export.csv" -o "$WORK/oen" --quiet > "$WORK/en_rerun.log" 2>&1
+    RC=$?
+    check "空の周期を含む記録を sim run で再実行すると呼び出し回数が一致（終了コード 0、総数 2, OK 1, NO Check 1）" sh -c "[ $RC -eq 0 ] && grep -F -q '合計: 総数 2, OK 1, NG 0, NO Check 1' '$WORK/en_rerun.log'"
+    # 監視も入力もないまま保存した入力数 0・出力数 0 のブロック。波形の読み込みで列 1 つの行を落とさないよう区切りのカンマを付ける
+    post watch_none.json en3.out /api/watch > /dev/null
+    post reset_func_cycle.json en4.out /api/control > /dev/null
+    post step3.json s3.out /api/control > /dev/null
+    curl -s "$U/api/export.csv" | tr -d '\r' > "$WORK/e0_export.csv"
+    printf 'mod,TEST_cycle,GUI記録,0,0\n#COMMENT\nstep 1,\nstep 2,\nstep 3,\n' > "$WORK/e0_expect.csv"
+    check "入力数 0・出力数 0 の記録はすべての行に step N の目印" cmp -s "$WORK/e0_export.csv" "$WORK/e0_expect.csv"
+    "$SIM" run "$WORK/e0_export.csv" -o "$WORK/oe0" --quiet > "$WORK/e0_rerun.log" 2>&1
+    RC=$?
+    check "入力数 0・出力数 0 の記録を sim run で再実行すると 3 回呼ぶ（終了コード 0、総数 3, NO Check 3）" sh -c "[ $RC -eq 0 ] && grep -F -q '合計: 総数 3, OK 0, NG 0, NO Check 3' '$WORK/e0_rerun.log'"
+    # 記録の途中で入力と監視が増減する（前半の行は後から増えた列が空）。最後の行の eng_update@call_cnt で呼び出し回数を確かめる
+    post watch_none.json en5.out /api/watch > /dev/null
+    post reset_func_cycle.json en6.out /api/control > /dev/null
+    post step1.json s1.out /api/control > /dev/null
+    post step1.json s1.out /api/control > /dev/null
+    post write_ign.json en7.out /api/write > /dev/null
+    post step1.json s1.out /api/control > /dev/null
+    post release_ign.json en8.out /api/write > /dev/null
+    post step1.json s1.out /api/control > /dev/null
+    post watch_call_cnt.json en9.out /api/watch > /dev/null
+    post step1.json s1.out /api/control > /dev/null
+    post watch_none.json en10.out /api/watch > /dev/null
+    post step1.json s1.out /api/control > /dev/null
+    post watch_call_cnt.json en11.out /api/watch > /dev/null
+    post step1.json s1.out /api/control > /dev/null
+    curl -s "$U/api/export.csv" | tr -d '\r' > "$WORK/em_export.csv"
+    printf 'mod,TEST_cycle,GUI記録,1,1\n#COMMENT,P2_bit.no0,eng_update@call_cnt\nstep 1,,\nstep 2,,\n,1,\nstep 4,,\n,,5\nstep 6,,\n,,7\n' > "$WORK/em_expect.csv"
+    check "入力・監視が途中で増減した記録は空の周期だけに step N の目印" cmp -s "$WORK/em_export.csv" "$WORK/em_expect.csv"
+    "$SIM" run "$WORK/em_export.csv" -o "$WORK/oem" --quiet > "$WORK/em_rerun.log" 2>&1
+    RC=$?
+    check "入力・監視が途中で増減した記録を sim run で再実行すると呼び出し回数が一致（終了コード 0、総数 7, OK 2, NO Check 5）" sh -c "[ $RC -eq 0 ] && grep -F -q '合計: 総数 7, OK 2, NG 0, NO Check 5' '$WORK/em_rerun.log'"
+    # sim run は 1 列目（コメント欄）も含めて全セルが空の行だけを空行として読み飛ばす。1 列目だけに書いた行は実行する
+    "$SIM" run "$T/csv/comment_col_only.csv" -o "$WORK/occ" --quiet > "$WORK/cc_rerun.log" 2>&1
+    RC=$?
+    check "1 列目だけに書いた行は実行し、全セルが空の行は読み飛ばす（総数 2, OK 1, NO Check 1）" sh -c "[ $RC -eq 0 ] && grep -F -q '合計: 総数 2, OK 1, NG 0, NO Check 1' '$WORK/cc_rerun.log' && sed -n 3p '$WORK/occ/comment_col_only.csv' | grep -q '^,,\$' && sed -n 4p '$WORK/occ/comment_col_only.csv' | grep -q '^note,1,NO Check,'"
+
     # 数値の範囲: 丸め・切り詰めをせず 400。400 なら何も変えない
     curl -s "$U/api/info" > "$WORK/nv0.json"
     CODE=$(post control_bad_speed.json nv1.out /api/control)

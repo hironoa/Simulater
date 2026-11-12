@@ -1433,7 +1433,18 @@ static void api_export(sim_sock s)
     sim_buf_adds(&b, "\r\n");
     for (i = start; i < G.total; i++) {
         rec_row *r = &G.ring[i % G.cap];
+        int blank = 1;
         rec_cells(r, cells);
+        /* 入出力のセルがすべて空になる周期（監視・入力の登録前など）は、1 列目（コメント欄）に step N を入れる。
+         * 全セルが空の行は sim run が空行として読み飛ばし、呼び出し回数が記録と合わなくなるため。
+         * ほかの行の 1 列目は従来どおり空。列が 1 つもなければ、区切りのカンマを付けて 2 セルにする
+         * （GUI の波形の読み込みはセルが 1 つの行を読み捨てる） */
+        for (k = 0; blank && k < G.nin_cols; k++) if (in_used[k] && k < r->nin && cells[r->nout + k][0]) blank = 0;
+        for (k = 0; blank && k < G.nout_cols; k++) if (out_used[k] && k < r->nout && cells[k][0]) blank = 0;
+        if (blank) {
+            sim_buf_printf(&b, "step %llu", (unsigned long long)r->step);
+            if (nin + nout == 0) sim_buf_addc(&b, ',');
+        }
         for (k = 0; k < G.nin_cols; k++) {
             if (!in_used[k]) continue;
             sim_buf_addc(&b, ',');
