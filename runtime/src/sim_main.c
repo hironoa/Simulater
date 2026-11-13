@@ -93,6 +93,7 @@ static int cmd_run(int argc, char **argv)
     if (nfiles == 0) { fprintf(stderr, "エラー: テスト CSV を指定してください\n"); usage(); free(files); return 2; }
     o.inputs = files;
     o.ninputs = nfiles;
+    if (sim_csv_check_outputs(&o)) { free(files); return 2; }
     c = open_ctx();
     if (!c) { free(files); return 2; }
     t0 = sim_now_ns();

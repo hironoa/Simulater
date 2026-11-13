@@ -1304,6 +1304,12 @@ static void api_control(sim_sock s, req_t *r)
             return;
         }
     }
+    if (!nf && !sim_ctx_func(G.c) && (strcmp(cmd, "run") == 0 || strcmp(cmd, "step") == 0)) {
+        sim_mutex_unlock(G.mu);
+        send_error(s, 400, "対象関数が未設定です。func で指定してください");
+        sj_free(v);
+        return;
+    }
     if (!G.need_reset) G.error[0] = 0;
     G.dropped.len = 0;
     if (have_speed) G.speed = speed;
@@ -1498,6 +1504,11 @@ static void api_export(sim_sock s)
     size_t ncells_cap = 0;
     sim_buf_init(&b);
     sim_mutex_lock(G.mu);
+    if (!sim_ctx_func(G.c) && G.total == 0) {
+        sim_mutex_unlock(G.mu);
+        send_error(s, 400, "対象関数が未設定で記録がありません。func で指定してください");
+        return;
+    }
     start = G.total > G.cap ? G.total - G.cap : 0;
     in_used = sim_xcalloc((size_t)G.nin_cols + 1, sizeof *in_used);
     out_used = sim_xcalloc((size_t)G.nout_cols + 1, sizeof *out_used);
@@ -1701,6 +1712,7 @@ int sim_gui_run(sim_ctx *c, const sim_gui_opts *o)
             if (o->func) return 2;
         }
     }
+    if (!sim_ctx_func(c)) fprintf(stderr, "sim gui: 対象関数が未設定です。画面で選ぶか --func で指定してください\n");
     if (sim_net_init()) { fprintf(stderr, "sim gui: ネットワークの初期化に失敗しました\n"); return 2; }
     ls = sim_listen_local(o->port, err, sizeof err);
     if (ls == SIM_SOCK_INVALID) { fprintf(stderr, "sim gui: %s\n", err); return 2; }

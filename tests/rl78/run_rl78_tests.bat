@@ -93,6 +93,30 @@ if errorlevel 1 goto after_fault_gui
 set /a PORT=22000 + %RANDOM% %% 15000
 set "U=http://127.0.0.1:%PORT%"
 copy /y "%RS%" "%WORK%\sim_rgui_test.exe" >nul
+start "" /b "%WORK%\sim_rgui_test.exe" gui --abs "%G22%" --no-browser --port %PORT% --html-dir "%WORK%\nohtml" > "%WORK%\nofunc.log" 2>&1
+for /l %%I in (1,1,50) do (
+    curl -s "%U%/api/info" > "%WORK%\nofunc_before.json" 2>nul
+    if not errorlevel 1 goto nofunc_ready
+    ping -n 2 127.0.0.1 >nul
+)
+:nofunc_ready
+> "%WORK%\nofunc_step.json" echo {"cmd":"step","speed":2,"periodMs":10}
+> "%WORK%\nofunc_run.json" echo {"cmd":"run","speed":2,"periodMs":10}
+call :nofunc_reject step
+call :nofunc_reject run
+powershell -NoProfile -Command "$s=(Get-Content -Raw -LiteralPath '%WORK%\nofunc_after.json' | ConvertFrom-Json).state; if ($null -eq $s -or $s.step -ne 0) {exit 1}"
+if errorlevel 1 (call :ng "GUI unset function stays at step zero") else (call :ok "GUI unset function stays at step zero")
+call :has "%WORK%\nofunc.log" "func" "GUI unset function startup explains func"
+for /f "usebackq delims=" %%C in (`curl -s -o "%WORK%\nofunc_error.json" -w "%%{http_code}" "%U%/api/export.csv"`) do set "CODE=%%C"
+if "%CODE%"=="400" (call :ok "GUI unset function export HTTP 400") else (call :ng "GUI unset function export HTTP 400")
+call :has "%WORK%\nofunc_error.json" "func" "GUI unset function export explains func"
+> "%WORK%\nofunc_set.json" echo {"func":"R_Config_ADC_Set_ADChannel","cmd":"step"}
+for /f "usebackq delims=" %%C in (`curl -s -o "%WORK%\nofunc_result.json" -w "%%{http_code}" -X POST --data-binary "@%WORK%\nofunc_set.json" "%U%/api/control"`) do set "CODE=%%C"
+if "%CODE%"=="200" (call :ok "GUI func and step together HTTP 200") else (call :ng "GUI func and step together HTTP 200")
+curl -s "%U%/api/export.csv" > "%WORK%\nofunc.csv"
+findstr /l /c:"step 1" "%WORK%\nofunc.csv" >nul
+if errorlevel 1 (call :ng "GUI func and step records one call") else (call :ok "GUI func and step records one call")
+taskkill /f /im sim_rgui_test.exe >nul 2>nul
 start "" /b "%WORK%\sim_rgui_test.exe" gui --abs "%TP%" --cfg "%R%\cfg\limit.cfg" --func TEST_cycle --no-browser --port %PORT% --html-dir "%WORK%\nohtml" > "%WORK%\rgui.log" 2>&1
 for /l %%I in (1,1,50) do (
     curl -s "%U%/api/info" > "%WORK%\rinfo.json" 2>nul
@@ -196,4 +220,13 @@ ping -n 2 127.0.0.1 >nul
 curl -s "%U%/api/info" > "%WORK%\fault_info.json"
 powershell -NoProfile -Command "$s=(Get-Content -Raw -LiteralPath '%WORK%\fault_info.json' | ConvertFrom-Json).state; if ($null -eq $s -or $s.playback -ne $false -or $s.running -ne $false -or $s.step -ne 0 -or !$s.error) {exit 1}"
 if errorlevel 1 (call :ng "GUI %~1 failed playback stops without advancing") else (call :ok "GUI %~1 failed playback stops without advancing")
+exit /b 0
+
+:nofunc_reject
+for /f "usebackq delims=" %%C in (`curl -s -o "%WORK%\nofunc_error.json" -w "%%{http_code}" -X POST --data-binary "@%WORK%\nofunc_%1.json" "%U%/api/control"`) do set "CODE=%%C"
+if "%CODE%"=="400" (call :ok "GUI unset function %1 HTTP 400") else (call :ng "GUI unset function %1 HTTP 400")
+call :has "%WORK%\nofunc_error.json" "func" "GUI unset function explains func"
+curl -s "%U%/api/info" > "%WORK%\nofunc_after.json"
+fc /b "%WORK%\nofunc_before.json" "%WORK%\nofunc_after.json" >nul
+if errorlevel 1 (call :ng "GUI unset function %1 preserves state") else (call :ok "GUI unset function %1 preserves state")
 exit /b 0

@@ -157,6 +157,29 @@ rl78_run "sim.cfg の abs = で .abs を指定（--abs なし）" 0 "合計: 総
 echo "== 本物のバックエンドの GUI サーバ"
 if command -v curl > /dev/null 2>&1; then
     PORT=$((20000 + ($$ + 7) % 20000))
+    U="http://127.0.0.1:$PORT"
+    "$RS" gui --abs "$G22" --no-browser --port "$PORT" --html-dir "$WORK/nohtml" > "$WORK/nofunc.log" 2>&1 &
+    GUI_PID=$!
+    i=0
+    while [ $i -lt 50 ]; do curl -s "$U/api/info" > "$WORK/nofunc_before.json" 2>/dev/null && break; i=$((i + 1)); sleep 0.1; done
+    check "GUI 未設定: 起動時に対象関数の指定を案内" contains "$WORK/nofunc.log" '対象関数が未設定です'
+    for CMD in step run; do
+        CODE=$(curl -s -o "$WORK/nofunc_error.json" -w '%{http_code}' -X POST -d "{\"cmd\":\"$CMD\",\"speed\":2,\"periodMs\":10}" "$U/api/control")
+        check "GUI 未設定: $CMD は 400" test "$CODE" = 400
+        check "GUI 未設定: $CMD のエラーに func の案内" contains "$WORK/nofunc_error.json" 'func'
+        curl -s "$U/api/info" > "$WORK/nofunc_after.json"
+        check "GUI 未設定: $CMD 拒否で状態は変わらない" cmp -s "$WORK/nofunc_before.json" "$WORK/nofunc_after.json"
+    done
+    check "GUI 未設定: step は 0 のまま" contains "$WORK/nofunc_after.json" '"step":0'
+    CODE=$(curl -s -o "$WORK/nofunc_error.json" -w '%{http_code}' "$U/api/export.csv")
+    check "GUI 未設定: 記録のない CSV 保存は 400" test "$CODE" = 400
+    check "GUI 未設定: CSV 保存エラーに func の案内" contains "$WORK/nofunc_error.json" 'func'
+    CODE=$(curl -s -o "$WORK/nofunc_step.json" -w '%{http_code}' -X POST -d '{"func":"R_Config_ADC_Set_ADChannel","cmd":"step"}' "$U/api/control")
+    check "GUI 未設定: func と step の同時指定は成功" test "$CODE" = 200
+    check "GUI 未設定: 関数指定後は 1 周期実行" contains "$WORK/nofunc_step.json" '"stepsDone":1'
+    kill "$GUI_PID" 2>/dev/null
+    wait "$GUI_PID" 2>/dev/null
+    GUI_PID=""
     "$RS" gui --abs "$TP" --cfg "$R/cfg/limit.cfg" --func TEST_cycle --no-browser --port "$PORT" --period-ms 2 --html-dir "$WORK/nohtml" > "$WORK/rgui.log" 2>&1 &
     GUI_PID=$!
     U="http://127.0.0.1:$PORT"

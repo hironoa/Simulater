@@ -183,6 +183,25 @@ set RC=%ERRORLEVEL%
 findstr /l /c:"OK 4, NG 0, NO Check 0" "%WORK%\quote_rb2.log" >nul
 if errorlevel 1 (call :ng "a quoted result CSV with --expect-actual is all OK") else if "%RC%"=="0" (call :ok "a quoted result CSV with --expect-actual is all OK") else (call :ng "a quoted result CSV with --expect-actual: exit code 0, got %RC%")
 
+echo == output collisions are rejected before execution
+mkdir "%WORK%\collision\a" "%WORK%\collision\b"
+copy /y "%T%\csv\sjis_comment.csv" "%WORK%\collision\a\test.csv" >nul
+copy /y "%T%\csv\sjis_comment.csv" "%WORK%\collision\b\test.csv" >nul
+rem Use separate directories so case-insensitive file systems can create both names.
+mkdir "%WORK%\collision\c"
+copy /y "%T%\csv\sjis_comment.csv" "%WORK%\collision\c\Test.csv" >nul
+copy /y "%T%\csv\sjis_comment.csv" "%WORK%\collision\b\other.csv" >nul
+call :collision_case same "%WORK%\collision\b\test.csv"
+call :collision_case case "%WORK%\collision\c\Test.csv"
+call :collision_case duplicate "%WORK%\collision\a\test.csv"
+"%SIM%" run "%WORK%\collision\a\test.csv" "%WORK%\collision\b\other.csv" -o "%WORK%\collision\distinct" --fixed-time --quiet > "%WORK%\collision.log" 2>&1
+set RC=%ERRORLEVEL%
+if "%RC%"=="0" (call :ok "distinct output names exit 0") else (call :ng "distinct output names exit 0")
+fc /b "%WORK%\collision\distinct\test.csv" "%T%\expected\sjis_comment.csv" >nul
+if errorlevel 1 (call :ng "distinct first result matches") else (call :ok "distinct first result matches")
+fc /b "%WORK%\collision\distinct\other.csv" "%T%\expected\sjis_comment.csv" >nul
+if errorlevel 1 (call :ng "distinct second result matches") else (call :ok "distinct second result matches")
+
 echo == numeric options of sim gui (out of range or trailing garbage is an error)
 call :gui_opt "--port 70000 is not truncated" "70000" --port 70000
 call :gui_opt "--port 8765x is not read as 8765" "8765x" --port 8765x
@@ -909,4 +928,13 @@ exit /b 0
 set RC=%ERRORLEVEL%
 findstr /l /c:"%~2" "%WORK%\err.log" >nul
 if errorlevel 1 (call :ng "%~1: message contains %~2") else if "%RC%"=="2" (call :ok "%~1") else (call :ng "%~1: exit code 2, got %RC%")
+exit /b 0
+
+:collision_case
+"%SIM%" run "%WORK%\collision\a\test.csv" "%~2" -o "%WORK%\collision\out_%1" --quiet > "%WORK%\collision.log" 2>&1
+set RC=%ERRORLEVEL%
+if "%RC%"=="2" (call :ok "output collision %1 exit 2") else (call :ng "output collision %1 exit 2")
+if exist "%WORK%\collision\out_%1" (call :ng "output collision %1 creates nothing") else (call :ok "output collision %1 creates nothing")
+powershell -NoProfile -Command "$m=Get-Content -Raw -LiteralPath '%WORK%\collision.log'; if (!$m.Contains('%WORK%\collision\a\test.csv') -or !$m.Contains('%~2') -or !$m.Contains('%WORK%\collision\out_%1\test.csv')) {exit 1}"
+if errorlevel 1 (call :ng "output collision %1 explains both inputs and output") else (call :ok "output collision %1 explains both inputs and output")
 exit /b 0

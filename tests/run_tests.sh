@@ -189,7 +189,7 @@ same_case() {
     cp "$T/csv/unit_all.csv" "$WORK/same/unit_all.csv"
     (cd "$WORK/same" && "$SIM" run "$@" --quiet > "$WORK/same.log" 2>&1)
     _rc=$?
-    if [ "$_rc" -eq 2 ] && cmp -s "$WORK/same/unit_all.csv" "$T/csv/unit_all.csv" && contains "$WORK/same.log" "入力と同じです"; then ok "$_name"
+    if [ "$_rc" -eq 2 ] && cmp -s "$WORK/same/unit_all.csv" "$T/csv/unit_all.csv" && { contains "$WORK/same.log" "入力と同じです" || contains "$WORK/same.log" "出力先が衝突します"; }; then ok "$_name"
     else ng "$_name" "終了コード ${_rc}、出力: $(head -2 "$WORK/same.log")"; fi
 }
 same_case "入力を ./ 付きで指定（/x/./a.csv -o /x）" "$WORK/same/./unit_all.csv" -o "$WORK/same"
@@ -206,6 +206,33 @@ cp "$T/csv/unit_all.csv" "$WORK/other/unit_all.csv"
 "$SIM" run "$T/csv/unit_all.csv" -o "$WORK/other" --fixed-time --quiet > "$WORK/other.log" 2>&1
 RC=$?
 check "入力と同じ内容の別ファイルは上書きする（終了コード 0）" sh -c "[ $RC -eq 0 ] && cmp -s '$WORK/other/unit_all.csv' '$T/expected/unit_all.csv'"
+
+echo "== 複数入力の出力先衝突（実行前に拒否）"
+mkdir -p "$WORK/collision/a" "$WORK/collision/b" "$WORK/collision/c"
+cp "$T/csv/sjis_comment.csv" "$WORK/collision/a/test.csv"
+cp "$T/csv/sjis_comment.csv" "$WORK/collision/b/test.csv"
+cp "$T/csv/sjis_comment.csv" "$WORK/collision/c/Test.csv"
+cp "$T/csv/sjis_comment.csv" "$WORK/collision/b/other.csv"
+collision_case() {
+    collision_name=$1; _second=$2; _out="$WORK/collision/out_$3"
+    "$SIM" run "$WORK/collision/a/test.csv" "$_second" -o "$_out" --quiet > "$WORK/collision.log" 2>&1
+    _rc=$?
+    check "出力衝突: $collision_name は終了コード 2" test "$_rc" -eq 2
+    check "出力衝突: $collision_name は出力フォルダも作らない" test ! -e "$_out"
+    check "出力衝突: $collision_name は実行しない" sh -c '! grep -q "合計:" "$1"' sh "$WORK/collision.log"
+    check "出力衝突: $collision_name の入力 1 を表示" contains "$WORK/collision.log" "$WORK/collision/a/test.csv"
+    check "出力衝突: $collision_name の入力 2 を表示" contains "$WORK/collision.log" "$_second"
+    check "出力衝突: $collision_name の出力先を表示" contains "$WORK/collision.log" "$_out/test.csv"
+    check "出力衝突: $collision_name の対処を案内" contains "$WORK/collision.log" "別々に実行するか、出力フォルダを分けてください"
+}
+collision_case "同名" "$WORK/collision/b/test.csv" same
+collision_case "大文字小文字違い" "$WORK/collision/c/Test.csv" case
+collision_case "同一入力の重複" "$WORK/collision/a/test.csv" duplicate
+"$SIM" run "$WORK/collision/a/test.csv" "$WORK/collision/b/other.csv" -o "$WORK/collision/distinct" --fixed-time --quiet > "$WORK/collision.log" 2>&1
+RC=$?
+check "出力衝突: 別名なら終了コード 0" test "$RC" -eq 0
+check "出力衝突: 別名の入力 1 は従来どおり実行" cmp -s "$WORK/collision/distinct/test.csv" "$T/expected/sjis_comment.csv"
+check "出力衝突: 別名の入力 2 も従来どおり実行" cmp -s "$WORK/collision/distinct/other.csv" "$T/expected/sjis_comment.csv"
 
 echo "== 配列・ポインタの長い値（4096 要素を超える）"
 "$SIM" run "$T/csv/long_array.csv" -o "$WORK/olong" --quiet > "$WORK/long.log" 2>&1

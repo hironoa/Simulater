@@ -19,6 +19,9 @@ typedef struct {
     double seconds;         /* 対象関数の呼び出しにかかった合計時間 */
 } sim_csv_stats;
 
+/* 全入力の出力先の衝突を実行前に検査する。衝突なら -1。ファイルは作らない */
+int sim_csv_check_outputs(const sim_csv_opts *o);
+
 /* 1 ファイルを実行して結果を書く。読めない/書けないなら -1 */
 int sim_csv_run_file(sim_ctx *c, const char *path, const sim_csv_opts *o, sim_csv_stats *st);
 

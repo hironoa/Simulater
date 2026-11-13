@@ -530,6 +530,40 @@ static size_t run_block(sim_ctx *c, const char *path, line_t *ls, size_t n, size
     return j;
 }
 
+/* まだ存在しない出力同士はファイル ID では比べられない。
+ * 全入力で outdir は共通なので、同じ出力パスになるファイル名を ASCII の大小を無視して比べる。 */
+static int output_name_equal(const char *a, const char *b)
+{
+    while (*a && *b) {
+        unsigned char ac = (unsigned char)*a++, bc = (unsigned char)*b++;
+        if (ac >= 'A' && ac <= 'Z') ac = (unsigned char)(ac + ('a' - 'A'));
+        if (bc >= 'A' && bc <= 'Z') bc = (unsigned char)(bc + ('a' - 'A'));
+        if (ac != bc) return 0;
+    }
+    return *a == *b;
+}
+
+int sim_csv_check_outputs(const sim_csv_opts *o)
+{
+    char **paths = sim_xcalloc((size_t)o->ninputs + 1, sizeof *paths);
+    int i, j, collision = 0;
+    for (i = 0; i < o->ninputs; i++)
+        paths[i] = sim_path_join(o->outdir, sim_basename(o->inputs[i]));
+    for (i = 0; i < o->ninputs && !collision; i++) {
+        for (j = 0; j < i; j++) {
+            if (output_name_equal(sim_basename(paths[i]), sim_basename(paths[j]))) {
+                fprintf(stderr, "エラー: 入力 %s と %s の出力先が衝突します（出力先: %s）。別々に実行するか、出力フォルダを分けてください\n",
+                        o->inputs[j], o->inputs[i], paths[j]);
+                collision = 1;
+                break;
+            }
+        }
+    }
+    for (i = 0; i < o->ninputs; i++) free(paths[i]);
+    free(paths);
+    return collision ? -1 : 0;
+}
+
 int sim_csv_run_file(sim_ctx *c, const char *path, const sim_csv_opts *o, sim_csv_stats *st)
 {
     size_t len, n, i, skip, first_mod;
