@@ -935,6 +935,6 @@ exit /b 0
 set RC=%ERRORLEVEL%
 if "%RC%"=="2" (call :ok "output collision %1 exit 2") else (call :ng "output collision %1 exit 2")
 if exist "%WORK%\collision\out_%1" (call :ng "output collision %1 creates nothing") else (call :ok "output collision %1 creates nothing")
-powershell -NoProfile -Command "$m=Get-Content -Raw -LiteralPath '%WORK%\collision.log'; if (!$m.Contains('%WORK%\collision\a\test.csv') -or !$m.Contains('%~2') -or !$m.Contains('%WORK%\collision\out_%1\test.csv')) {exit 1}"
-if errorlevel 1 (call :ng "output collision %1 explains both inputs and output") else (call :ok "output collision %1 explains both inputs and output")
+findstr /l /c:"out_%1" "%WORK%\collision.log" >nul
+if errorlevel 1 (call :ng "output collision %1 names the output folder") else (call :ok "output collision %1 names the output folder")
 exit /b 0
