@@ -477,8 +477,11 @@ export function createLiveController(deps: LiveControllerDeps = {}) {
       // 数値入力の文字列は書いたまま残す（構成の保存・復元でも丸めない）
       if (item) updateInput(name, { value });
       remonitor(name);
+      return true;
     } catch (e) {
+      if (!store.getState().sim.holds.some((h) => h.name === name)) momentary.delete(name);
       notify.error(`${name} に書き込めませんでした: ${(e as Error).message}`);
+      return false;
     }
   }
 

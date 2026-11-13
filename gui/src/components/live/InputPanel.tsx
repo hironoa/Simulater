@@ -1,8 +1,9 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { X, Lock, Unlock } from "lucide-react";
 import { useLiveStore } from "../../live/liveStore";
 import { liveController } from "../../live/controller";
+import { createMomentaryButton } from "../../live/momentaryButton";
 import type { InputItem, InputWidget } from "../../live/persist";
 import { SymbolSearch } from "./SymbolSearch";
 import { formatValue, ROUNDED_MARK, ROUNDED_TITLE } from "../../live/format";
@@ -83,26 +84,33 @@ function InputCard({ item, current, pending, held, base }: InputCardProps) {
     }
   };
 
-  const pressedAt = useRef(0);
-  /** 押す前の値（離したらこれに戻す）。丸められた現在値しか無ければ null（戻さずに知らせる） */
-  const restoreTo = useRef<number | string | null>(0);
-  const press = async (down: boolean) => {
-    if (down === pressed) return;
-    setPressed(down);
-    if (down) {
-      pressedAt.current = performance.now();
-      restoreTo.current = buttonRestoreValue(base);
-      await live.write(item.name, 1, true);
-    } else {
-      // 一瞬のクリックでも対象が 1 を読めるよう、最低 100ms（かつ 3 周期）は 1 のままにする
+  const button = useMemo(() => createMomentaryButton({
+    restoreValue: () => buttonRestoreValue(live.inputBaseValue(item.name)),
+    write: () => {
+      const { needReset, func } = useLiveStore.getState().sim;
+      return needReset || !func ? Promise.resolve(false) : live.write(item.name, 1, true);
+    },
+    release: (restore) => live.releaseButton(item.name, restore),
+    minimumMs: () => {
       const { periodMs, speed } = useLiveStore.getState().sim;
-      const minMs = Math.max(100, speed > 0 ? (3 * periodMs) / speed : 0);
-      const wait = minMs - (performance.now() - pressedAt.current);
-      if (wait > 0) await new Promise((r) => setTimeout(r, Math.min(wait, 2000)));
-      // 押している間は固定で 1 を書き続け、離したら押す前の値に戻す（固定 ON の項目はその値で固定し直す）
-      await live.releaseButton(item.name, restoreTo.current);
-    }
-  };
+      return Math.max(100, speed > 0 ? (3 * periodMs) / speed : 0);
+    },
+    changed: setPressed,
+  }), [live, item.name]);
+  useEffect(() => {
+    const cancel = () => { void button.cancel(); };
+    const unsubscribe = useLiveStore.subscribe((s, previous) => {
+      if (s.sim.needReset || !s.sim.func || s.sim.func !== previous.sim.func) cancel();
+    });
+    window.addEventListener("blur", cancel);
+    window.addEventListener("pagehide", cancel);
+    return () => {
+      unsubscribe();
+      window.removeEventListener("blur", cancel);
+      window.removeEventListener("pagehide", cancel);
+      cancel();
+    };
+  }, [button, item.widget]);
 
   // トグルは反映待ち → 固定 → 現在値 を元に反転する（停止中に続けて押しても、書いた値を元に反転する）
   const on = (base.value ?? 0) !== 0;
@@ -178,10 +186,11 @@ function InputCard({ item, current, pending, held, base }: InputCardProps) {
         <button
           className={cn("text-xs py-1.5 rounded border select-none touch-none",
             pressed ? "bg-blue-600 text-white border-blue-700" : "bg-gray-100 dark:bg-slate-700 border-gray-300 dark:border-slate-600")}
-          onPointerDown={(e) => { (e.target as HTMLElement).setPointerCapture?.(e.pointerId); void press(true); }}
-          onPointerUp={() => void press(false)}
-          onPointerCancel={() => void press(false)}
-          onLostPointerCapture={() => void press(false)}>
+          onPointerDown={(e) => { if (e.button === 0) void button.press(); }}
+          onPointerUp={() => void button.up()}
+          onPointerLeave={() => void button.up()}
+          onPointerCancel={() => void button.cancel()}
+          onLostPointerCapture={() => void button.cancel()}>
           押している間だけ 1
         </button>
       )}

@@ -492,6 +492,19 @@ describe("ライブ制御（SSE の取り込み）", () => {
       live.stop();
     });
 
+    it.each(["リセットが必要です", "対象関数が未設定です"])("ボタンの固定が拒否されたら失敗を返し一時固定の内部状態を残さない: %s", async (message) => {
+      const { live, es } = await startPaused();
+      live.addInput("g_mode", "button");
+      writeResponse = { status: 400, body: { error: message } };
+      expect(await live.write("g_mode", 1, true)).toBe(false);
+      expect(useLiveStore.getState().sim.holds).toEqual([]);
+      expect(notify.error).toHaveBeenCalledTimes(1);
+      // 拒否した一時固定が残っていると、その後のサーバの固定状態と同期できない。
+      es.emit("state", { holds: [{ name: "g_mode", value: 4 }] });
+      expect(useLiveStore.getState().inputs.find((i) => i.name === "g_mode")?.hold).toBe(true);
+      live.stop();
+    });
+
     it("押している間だけ 1 のボタンは、離すと押す前の値（反映待ち）に戻す", async () => {
       const { live } = await startPaused();
       await live.write("g_mode", 1);
