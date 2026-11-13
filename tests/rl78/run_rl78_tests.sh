@@ -206,9 +206,13 @@ data: {"step":0,"names":["TEST_cycle_cnt","g_ms_tick","g_st.fb"],"values":[0,0,0
         fi
         curl -s "$U/api/export.csv" > "$WORK/fault.csv"
         check "GUI $fault: 保存 CSV にデータ行なし" sh -c '[ "$(wc -l < "$1")" -eq 2 ]' sh "$WORK/fault.csv"
-        curl -s -X POST --data '{"cmd":"step","steps":3}' "$U/api/control" > "$WORK/fault.json"
-        check "GUI $fault: step N も最初の失敗で停止" contains "$WORK/fault.json" '"stepsDone":0'
+        check "GUI $fault: 呼び出し失敗で needReset true" contains "$WORK/fault.json" '"needReset":true'
+        CODE=$(curl -s -o "$WORK/fault_rejected.json" -w '%{http_code}' -X POST --data '{"cmd":"step","steps":3}' "$U/api/control")
+        check "GUI $fault: リセット前の step は 400" test "$CODE" = 400
+        curl -s "$U/api/info" > "$WORK/fault_info.json"
+        check "GUI $fault: 拒否後も step 0、要リセット" sh -c "grep -F -q '\"step\":0,' '$WORK/fault_info.json' && grep -F -q '\"needReset\":true' '$WORK/fault_info.json'"
         curl -s -X POST --data '{"cmd":"reset","func":"TEST_cycle"}' "$U/api/control" > "$WORK/recovered.json"
+        check "GUI $fault: reset で needReset 解除" contains "$WORK/recovered.json" '"needReset":false'
         check "GUI $fault: reset でエラー解除" contains "$WORK/recovered.json" '"error":""'
         curl -s -X POST --data '{"names":["TEST_cycle_cnt"]}' "$U/api/watch" > /dev/null
         curl -s -X POST --data '{"cmd":"step","steps":3}' "$U/api/control" > "$WORK/recovered.json"

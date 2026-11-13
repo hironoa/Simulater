@@ -162,7 +162,7 @@ curl -s -X POST --data-binary "@%WORK%\fault_reset.json" "%U%/api/control" >nul
 set "CODE="
 for /f "usebackq delims=" %%C in (`curl -s -o "%WORK%\fault.json" -w "%%{http_code}" -X POST --data-binary "@%WORK%\fault_step.json" "%U%/api/control"`) do set "CODE=%%C"
 if "%CODE%"=="200" (call :ok "GUI %~1 step HTTP 200") else (call :ng "GUI %~1 step HTTP 200")
-powershell -NoProfile -Command "$s=Get-Content -Raw -LiteralPath '%WORK%\fault.json' | ConvertFrom-Json; if ($null -eq $s -or $s.stepsDone -ne 0 -or $s.step -ne 0 -or $s.running -ne $false -or $s.stepsLeft -ne 0 -or !$s.error) {exit 1}"
+powershell -NoProfile -Command "$s=Get-Content -Raw -LiteralPath '%WORK%\fault.json' | ConvertFrom-Json; if ($null -eq $s -or $s.stepsDone -ne 0 -or $s.step -ne 0 -or $s.running -ne $false -or $s.stepsLeft -ne 0 -or $s.needReset -ne $true -or !$s.error) {exit 1}"
 if errorlevel 1 (call :ng "GUI %~1 failed step stops without advancing") else (call :ok "GUI %~1 failed step stops without advancing")
 call :has "%WORK%\fault.json" "PC" "GUI %~1 error has PC"
 call :has "%WORK%\fault.json" "%~2" "GUI %~1 error has instruction details"
@@ -170,17 +170,20 @@ curl -s "%U%/api/export.csv" > "%WORK%\fault.csv"
 powershell -NoProfile -Command "if (@(Get-Content -LiteralPath '%WORK%\fault.csv').Count -ne 2) {exit 1}"
 if errorlevel 1 (call :ng "GUI %~1 export has no data rows") else (call :ok "GUI %~1 export has no data rows")
 > "%WORK%\fault_step.json" echo {"cmd":"step","steps":3}
-curl -s -X POST --data-binary "@%WORK%\fault_step.json" "%U%/api/control" > "%WORK%\fault.json"
-powershell -NoProfile -Command "$s=Get-Content -Raw -LiteralPath '%WORK%\fault.json' | ConvertFrom-Json; if ($null -eq $s -or $s.stepsDone -ne 0 -or $s.stepsLeft -ne 0 -or !$s.error) {exit 1}"
-if errorlevel 1 (call :ng "GUI %~1 step N stops at first failure") else (call :ok "GUI %~1 step N stops at first failure")
+set "CODE="
+for /f "usebackq delims=" %%C in (`curl -s -o "%WORK%\fault_rejected.json" -w "%%{http_code}" -X POST --data-binary "@%WORK%\fault_step.json" "%U%/api/control"`) do set "CODE=%%C"
+if "%CODE%"=="400" (call :ok "GUI %~1 step rejected until reset") else (call :ng "GUI %~1 step rejected until reset")
+curl -s "%U%/api/info" > "%WORK%\fault_info.json"
+powershell -NoProfile -Command "$s=(Get-Content -Raw '%WORK%\fault_info.json' | ConvertFrom-Json).state; if ($null -eq $s -or $s.step -ne 0 -or $s.needReset -ne $true) {exit 1}"
+if errorlevel 1 (call :ng "GUI %~1 rejected step leaves state unchanged") else (call :ok "GUI %~1 rejected step leaves state unchanged")
 > "%WORK%\fault_reset.json" echo {"cmd":"reset","func":"TEST_cycle"}
 curl -s -X POST --data-binary "@%WORK%\fault_reset.json" "%U%/api/control" > "%WORK%\recovered.json"
-powershell -NoProfile -Command "$s=Get-Content -Raw -LiteralPath '%WORK%\recovered.json' | ConvertFrom-Json; if ($null -eq $s -or $s.error -ne '') {exit 1}"
+powershell -NoProfile -Command "$s=Get-Content -Raw -LiteralPath '%WORK%\recovered.json' | ConvertFrom-Json; if ($null -eq $s -or $s.error -ne '' -or $s.needReset -ne $false) {exit 1}"
 if errorlevel 1 (call :ng "GUI %~1 reset clears error") else (call :ok "GUI %~1 reset clears error")
 > "%WORK%\fault_watch.json" echo {"names":["TEST_cycle_cnt"]}
 curl -s -X POST --data-binary "@%WORK%\fault_watch.json" "%U%/api/watch" >nul
 curl -s -X POST --data-binary "@%WORK%\fault_step.json" "%U%/api/control" > "%WORK%\recovered.json"
-powershell -NoProfile -Command "$s=Get-Content -Raw -LiteralPath '%WORK%\recovered.json' | ConvertFrom-Json; if ($null -eq $s -or $s.stepsDone -ne 3 -or $s.error -ne '') {exit 1}"
+powershell -NoProfile -Command "$s=Get-Content -Raw -LiteralPath '%WORK%\recovered.json' | ConvertFrom-Json; if ($null -eq $s -or $s.stepsDone -ne 3 -or $s.error -ne '' -or $s.needReset -ne $false) {exit 1}"
 if errorlevel 1 (call :ng "GUI %~1 reset allows three steps") else (call :ok "GUI %~1 reset allows three steps")
 curl -s "%U%/api/export.csv" > "%WORK%\recovered.csv"
 call :run "GUI %~1 recovered CSV replays three rows OK" 0 "OK 3, NG 0" --abs "%TP%" --cfg "%R%\cfg\limit.cfg" "%WORK%\recovered.csv"

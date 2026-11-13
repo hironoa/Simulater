@@ -789,16 +789,68 @@ data: {"periodMs":2,"func":"TEST_cycle","names":["g_eng.state","TEST_cycle_cnt",
     RC=$?
     check "失敗周期は呼び出しも記録も増えず 2 行 OK で再実行" sh -c "[ $RC -eq 0 ] && grep -F -q 'OK 2, NG 0, NO Check 0' '$WORK/null_run.log'"
     for fixture in write_null hold_null; do
+        post reset.json er.out /api/control > /dev/null
+        curl -s "$U/api/export.csv" > "$WORK/null_export.csv"
         post "$fixture.json" er.out /api/write > /dev/null
         post step5.json null_write.out /api/control > /dev/null
-        check "$fixture の入力失敗は step 0 で停止し理由を返す" sh -c "grep -F -q '\"stepsDone\":0' '$WORK/null_write.out' && grep -F -q '\"running\":false' '$WORK/null_write.out' && grep -F -q 'NULL' '$WORK/null_write.out' && grep -F -q '*gp_log' '$WORK/null_write.out'"
+        check "$fixture の入力失敗は進んだ数 0 で停止し理由を返す" sh -c "grep -F -q '\"stepsDone\":0' '$WORK/null_write.out' && grep -F -q '\"running\":false' '$WORK/null_write.out' && grep -F -q 'NULL' '$WORK/null_write.out' && grep -F -q '*gp_log' '$WORK/null_write.out'"
         curl -s "$U/api/export.csv" > "$WORK/null_after.csv"
         check "$fixture の失敗周期は記録を追加しない" cmp -s "$WORK/null_export.csv" "$WORK/null_after.csv"
+        post reset.json er.out /api/control > /dev/null
         post release_null.json er.out /api/write > /dev/null
     done
     post watch_call_cnt.json er.out /api/watch > /dev/null
     curl -s -N --max-time 0.3 "$U/api/stream" > "$WORK/null_values" 2>/dev/null
-    check "失敗した CSV・単発・固定の周期で関数カウンタが増えない" contains "$WORK/null_values" '"values":[2]'
+    check "リセット後の失敗した単発・固定の周期で関数カウンタが増えない" contains "$WORK/null_values" '"values":[0]'
+    # 部分書き込みの後は実行も予約も拒否し、正常な記録に混ぜない。
+    post reset_func_name_len.json er.out /api/control > /dev/null
+    post watch_name2.json er.out /api/watch > /dev/null
+    post write_name_str.json er.out /api/write > /dev/null
+    post write_null_one.json er.out /api/write > /dev/null
+    post step1.json nr_failed.json /api/control > /dev/null
+    check "部分書き込み失敗で needReset true、step 0" sh -c "grep -F -q '\"needReset\":true' '$WORK/nr_failed.json' && grep -F -q '\"step\":0,' '$WORK/nr_failed.json' && grep -F -q 'NULL' '$WORK/nr_failed.json'"
+    curl -s "$U/api/info" > "$WORK/nr_before.json"
+    curl -s "$U/api/export.csv" > "$WORK/nr_before.csv"
+    for fixture in write_name_a hold_null release_null; do
+        CODE=$(post "$fixture.json" nr_rejected.json /api/write)
+        check "要リセット中の $fixture は 400" test "$CODE" = 400
+        check "拒否応答に直前の失敗とリセット案内" sh -c "grep -F -q 'NULL' '$WORK/nr_rejected.json' && grep -F -q 'リセット' '$WORK/nr_rejected.json'"
+    done
+    for fixture in run step1 run_blocked; do
+        CODE=$(post "$fixture.json" nr_rejected.json /api/control)
+        check "要リセット中の $fixture は 400" test "$CODE" = 400
+    done
+    curl -s "$U/api/info" > "$WORK/nr_after.json"
+    curl -s "$U/api/export.csv" > "$WORK/nr_after.csv"
+    check "拒否で step・関数・設定・pending・error・needReset 不変" cmp -s "$WORK/nr_before.json" "$WORK/nr_after.json"
+    check "拒否で記録不変" cmp -s "$WORK/nr_before.csv" "$WORK/nr_after.csv"
+    post pause.json nr_pause.json /api/control > /dev/null
+    check "pause は needReset と失敗理由を消さない" sh -c "grep -F -q '\"needReset\":true' '$WORK/nr_pause.json' && grep -F -q 'NULL' '$WORK/nr_pause.json'"
+    post reset.json nr_reset.json /api/control > /dev/null
+    check "reset で needReset false と error 空、step 0" sh -c "grep -F -q '\"needReset\":false' '$WORK/nr_reset.json' && grep -F -q '\"error\":\"\"' '$WORK/nr_reset.json' && grep -F -q '\"step\":0,' '$WORK/nr_reset.json'"
+    post write_name_a.json er.out /api/write > /dev/null
+    post step1.json er.out /api/control > /dev/null
+    curl -s "$U/api/export.csv" > "$WORK/nr_reset.csv"
+    "$SIM" run "$WORK/nr_reset.csv" -o "$WORK/onr_reset" --quiet > "$WORK/nr_reset.log" 2>&1
+    RC=$?
+    check "reset 後の A は初期値から 1 行 OK で再実行" sh -c "[ $RC -eq 0 ] && grep -F -q 'OK 1, NG 0, NO Check 0' '$WORK/nr_reset.log'"
+    post write_name_str.json er.out /api/write > /dev/null
+    post write_null_one.json er.out /api/write > /dev/null
+    post step1.json nr_prefix.json /api/control > /dev/null
+    check "正常行の後の失敗も needReset true、step 1" sh -c "grep -F -q '\"needReset\":true' '$WORK/nr_prefix.json' && grep -F -q '\"step\":1,' '$WORK/nr_prefix.json'"
+    curl -s "$U/api/export.csv" > "$WORK/nr_prefix.csv"
+    "$SIM" run "$WORK/nr_prefix.csv" -o "$WORK/onr_prefix" --quiet > "$WORK/nr_prefix.log" 2>&1
+    RC=$?
+    check "部分書き込み失敗前の正常記録は 1 行 OK で再実行" sh -c "[ $RC -eq 0 ] && grep -F -q 'OK 1, NG 0, NO Check 0' '$WORK/nr_prefix.log'"
+    CODE=$(post play_name_a.csv nr_load.json /api/load-csv)
+    check "要リセット中も正常 CSV は読み込める" test "$CODE" = 200
+    sleep 0.2
+    curl -s "$U/api/info" > "$WORK/nr_load_info.json"
+    check "CSV 読み込み成功で needReset と error を解除し再生" sh -c "grep -F -q '\"needReset\":false' '$WORK/nr_load_info.json' && grep -F -q '\"error\":\"\"' '$WORK/nr_load_info.json' && grep -F -q '\"step\":1,' '$WORK/nr_load_info.json'"
+    post write_null_one.json er.out /api/write > /dev/null
+    post step1.json er.out /api/control > /dev/null
+    post func_cycle.json nr_func.json /api/control > /dev/null
+    check "関数変更だけでも needReset と error を解除" sh -c "grep -F -q '\"needReset\":false' '$WORK/nr_func.json' && grep -F -q '\"error\":\"\"' '$WORK/nr_func.json'"
     post period_normal.json er.out /api/control > /dev/null
     post play_null.csv er.out /api/load-csv > /dev/null
     i=0

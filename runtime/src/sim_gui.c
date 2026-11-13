@@ -39,6 +39,7 @@ typedef struct {
     int overrun;
     char func[256];
     char error[1200];
+    int need_reset;          /* 失敗周期の部分的な変更を次の記録に混ぜない */
     uint64_t state_ver;
     uint64_t values_ver;      /* 一時停止中の現在値（event: values）を送り直す合図 */
 
@@ -278,6 +279,7 @@ done:
         state_changed();   /* state の pending が空になる */
     }
     if (failed) {
+        G.need_reset = 1;
         G.running = 0;
         G.budget = 0;
         G.play_active = 0;
@@ -303,6 +305,7 @@ static void do_step_locked(void)
         char msg[1200];
         snprintf(msg, sizeof msg, "%s リセットしてからやり直してください。", err);
         set_error(msg);
+        G.need_reset = 1;
         G.running = 0;
         G.budget = 0;
         G.play_active = 0;
@@ -471,6 +474,7 @@ static void json_state(sim_buf *b)
     sim_buf_json_str(b, G.func);
     sim_buf_printf(b, ",\"playback\":%s,\"error\":", G.play_active ? "true" : "false");
     sim_buf_json_str(b, G.error);
+    sim_buf_printf(b, ",\"needReset\":%s", G.need_reset ? "true" : "false");
     sim_buf_adds(b, ",\"dropped\":[");
     sim_buf_add(b, G.dropped.p ? G.dropped.p : "", G.dropped.len);
     sim_buf_adds(b, "],\"pending\":");
@@ -985,6 +989,14 @@ static void api_write(sim_sock s, req_t *r)
     release = sj_get_bool(v, "release", 0);
     hold = sj_get_bool(v, "hold", 0);
     sim_mutex_lock(G.mu);
+    if (G.need_reset) {
+        char msg[1400];
+        snprintf(msg, sizeof msg, "%s リセットが必要です。", G.error);
+        sim_mutex_unlock(G.mu);
+        send_error(s, 400, msg);
+        sj_free(v);
+        return;
+    }
     if (release) {
         for (i = 0; i < G.nholds; i++) {
             if (strcmp(G.holds[i].name, name) == 0) {
@@ -1203,7 +1215,13 @@ static void reset_locked(void)
 {
     char err[1024];
     discard_pending_locked();
-    if (G.b->reset(G.b, err, sizeof err)) set_error(err);
+    if (G.b->reset(G.b, err, sizeof err)) {
+        G.need_reset = 1;
+        set_error(err);
+    } else {
+        G.need_reset = 0;
+        G.error[0] = 0;
+    }
     sim_ctx_clear_args(G.c);
     G.step = 0;
     G.overrun = 0;
@@ -1268,6 +1286,14 @@ static void api_control(sim_sock s, req_t *r)
         steps = (uint64_t)x->num;
     }
     sim_mutex_lock(G.mu);
+    if (G.need_reset && (strcmp(cmd, "run") == 0 || strcmp(cmd, "step") == 0)) {
+        char msg[1400];
+        snprintf(msg, sizeof msg, "%s リセットが必要です。", G.error);
+        sim_mutex_unlock(G.mu);
+        send_error(s, 400, msg);
+        sj_free(v);
+        return;
+    }
     fn = sj_get_str(v, "func", NULL);
     if (fn && strcmp(fn, G.func) != 0) {
         nf = check_func_locked(fn, err, sizeof err);
@@ -1278,7 +1304,7 @@ static void api_control(sim_sock s, req_t *r)
             return;
         }
     }
-    G.error[0] = 0;
+    if (!G.need_reset) G.error[0] = 0;
     G.dropped.len = 0;
     if (have_speed) G.speed = speed;
     if (have_period) G.period_ms = period;
