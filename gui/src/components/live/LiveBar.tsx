@@ -59,17 +59,17 @@ export function LiveBar() {
             <Pause size={14} /> 一時停止
           </button>
         ) : (
-          <button className={cn(btn, "text-emerald-700 dark:text-emerald-300")} onClick={() => live.control({ cmd: "run" })} title="実行">
+          <button className={cn(btn, "text-emerald-700 dark:text-emerald-300")} disabled={sim.needReset} onClick={() => live.control({ cmd: "run" })} title="実行">
             <Play size={14} /> 実行
           </button>
         )}
-        <button className={btn} disabled={sim.running} onClick={() => live.control({ cmd: "step", steps })} title="N 周期だけ進めて止める">
+        <button className={btn} disabled={sim.running || sim.needReset} onClick={() => live.control({ cmd: "step", steps })} title="N 周期だけ進めて止める">
           <StepForward size={14} /> ステップ
         </button>
         <input type="number" min={1} value={steps} aria-label="ステップ実行の周期数"
           onChange={(e) => setSteps(Math.max(1, Math.floor(Number(e.target.value) || 1)))}
           className={cn(field, "w-16")} title="ステップ実行する周期数" />
-        <button className={btn} onClick={() => { if (confirm("変数を起動時の状態に戻し、記録を消します。よろしいですか？")) void live.control({ cmd: "reset" }); }} title="リセット">
+        <button className={cn(btn, sim.needReset && "!bg-amber-200 !border-amber-500 !text-amber-950 font-bold ring-2 ring-amber-500")} onClick={() => { if (confirm("変数を起動時の状態に戻し、記録を消します。よろしいですか？")) void live.control({ cmd: "reset" }); }} title="リセット">
           <RotateCcw size={14} /> リセット
         </button>
       </div>
@@ -108,10 +108,12 @@ export function LiveBar() {
 
       {sim.error && (
         <span role="alert" className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-red-100 dark:bg-red-900/50 text-red-700 dark:text-red-300 font-bold max-w-[420px] truncate"
-          title={`シミュレータのエラー（書き込み・関数の呼び出しなど。実行・ステップ・リセットなどの次の操作で消えます）: ${sim.error}`}>
+          title={`シミュレータのエラー（書き込み・関数の呼び出しなど。リセット・対象関数の変更・テスト CSV の読み込みで初期状態に戻すと消えます）: ${sim.error}`}>
           <AlertTriangle size={13} className="shrink-0" /> <span className="truncate">{sim.error}</span>
         </span>
       )}
+
+      {sim.needReset && <span role="status" className="font-bold text-amber-800 dark:text-amber-300">リセットが必要です</span>}
 
       <div className="flex items-center gap-1 ml-auto">
         <label className="flex items-center gap-1" title="実行中に表示する直近の点数">表示

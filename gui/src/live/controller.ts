@@ -309,6 +309,7 @@ export function createLiveController(deps: LiveControllerDeps = {}) {
         overrun: !!info.state.overrun,
         pending: info.state.pending ?? [],
         error: info.state.error ?? "",
+        needReset: info.state.needReset ?? false,
         periodMs: info.periodMs,
         func: info.func,
       },

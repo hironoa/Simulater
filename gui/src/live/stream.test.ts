@@ -18,7 +18,7 @@ describe("dispatchStreamEvent", () => {
     dispatchStreamEvent("samples", '{"step0":10,"names":["a","b"],"rows":[[1,null],[2,"x"]]}', h);
     expect(h.samples).toHaveBeenCalledWith({ step0: 10, names: ["a", "b"], rows: [[1, null], [2, null]] });
     dispatchStreamEvent("state", '{"running":true,"step":3,"speed":0,"holds":[{"name":"x","value":1}],"overrun":false}', h);
-    expect(h.state).toHaveBeenCalledWith({ running: true, step: 3, speed: 0, holds: [{ name: "x", value: 1 }], overrun: false, dropped: [], pending: [] });
+    expect(h.state).toHaveBeenCalledWith({ needReset: false, running: true, step: 3, speed: 0, holds: [{ name: "x", value: 1 }], overrun: false, dropped: [], pending: [] });
   });
 
   it("state の dropped を読む（無ければ空、不正な項目は捨て、配列でなければ無視）", () => {
@@ -34,6 +34,7 @@ describe("dispatchStreamEvent", () => {
       ],
     }), h);
     expect(h.state).toHaveBeenLastCalledWith({
+      needReset: false,
       func: "mul16",
       dropped: [
         { name: "@rpm", kind: "hold", message: "引数がありません" },
@@ -42,7 +43,7 @@ describe("dispatchStreamEvent", () => {
       pending: [],
     });
     dispatchStreamEvent("state", '{"step":1,"dropped":"x"}', h);
-    expect(h.state).toHaveBeenLastCalledWith({ step: 1, pending: [] });
+    expect(h.state).toHaveBeenLastCalledWith({ needReset: false, step: 1, pending: [] });
   });
 
   it("values を検証して渡し、形式が違えば捨てる", () => {
@@ -723,5 +724,16 @@ describe("useWaveformStore.appendSamples", () => {
     const c = useWaveformStore.getState().cursors;
     expect(c).toEqual([{ time: 1900, index: 849 }]);
     expect(useWaveformStore.getState().chartData!.seriesMap.s[849]).toBe(950);
+  });
+});
+
+
+describe("needReset のストリーム", () => {
+  it("SSE は要リセットと解除を読み、旧サーバの未指定は false にする", () => {
+    const h = handlers();
+    for (const state of [{ needReset: true, error: "NULL" }, { needReset: false, error: "" }, {}]) {
+      dispatchStreamEvent("state", JSON.stringify(state), h);
+      expect(h.state).toHaveBeenLastCalledWith(expect.objectContaining({ needReset: "needReset" in state && state.needReset === true }));
+    }
   });
 });

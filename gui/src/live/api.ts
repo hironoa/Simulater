@@ -2,6 +2,8 @@
 
 export interface SimState {
   running: boolean;
+  /** 失敗後、ターゲットを初期状態に戻すまで実行・書き込みを拒否する */
+  needReset: boolean;
   step: number;
   speed: number;
   holds: { name: string; value: number | string }[];
@@ -64,7 +66,7 @@ export function parsePending(v: unknown): PendingWrite[] | undefined {
 /** state の形をした値を検証する。オブジェクトでなければ null。 */
 export function parseState(msg: unknown): StateMessage | null {
   if (!isObject(msg)) return null;
-  const out: StateMessage = {};
+  const out: StateMessage = { needReset: msg.needReset === true };
   if (typeof msg.running === "boolean") out.running = msg.running;
   if (typeof msg.step === "number") out.step = msg.step;
   if (typeof msg.speed === "number") out.speed = msg.speed;
@@ -90,7 +92,7 @@ export function parseControlResponse(res: unknown): StateMessage | null {
   if (!isObject(res)) return null;
   if (isObject(res.state)) return parseState(res.state);
   // state の項目が 1 つもなければ state ではない（`{"ok":true}` など）
-  const keys = ["running", "step", "speed", "holds", "overrun", "periodMs", "func", "dropped", "pending", "error"];
+  const keys = ["running", "step", "speed", "holds", "overrun", "periodMs", "func", "dropped", "pending", "error", "needReset"];
   return keys.some((k) => k in res) ? parseState(res) : null;
 }
 

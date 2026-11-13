@@ -116,7 +116,7 @@ describe("dropped と control の応答", () => {
     const state = { running: false, step: 0, func: "mul16", dropped: [{ name: "@rpm", kind: "watch", message: "m" }] };
     for (const body of [state, { ok: true, state }]) {
       const api = createApi("", fakeFetch(() => ({ body })) as unknown as typeof fetch);
-      expect(await api.control({ func: "mul16" })).toEqual({ ...state, pending: [] });
+      expect(await api.control({ func: "mul16" })).toEqual({ ...state, needReset: false, pending: [] });
     }
     expect(parseControlResponse({ ok: true })).toBeNull();
   });
@@ -124,7 +124,7 @@ describe("dropped と control の応答", () => {
   it("detectServer は info の state の dropped も読む", async () => {
     const f = fakeFetch(() => ({ body: { version: "v", periodMs: 5, func: "f", functions: [], state: { holds: [], dropped: [{ name: "@a", kind: "hold", message: "m" }, 3] } } }));
     const info = await detectServer(createApi("", f as unknown as typeof fetch), "http:");
-    expect(info?.state).toEqual({ holds: [], dropped: [{ name: "@a", kind: "hold", message: "m" }], pending: [] });
+    expect(info?.state).toEqual({ needReset: false, holds: [], dropped: [{ name: "@a", kind: "hold", message: "m" }], pending: [] });
   });
 });
 
@@ -141,8 +141,8 @@ describe("pending（反映待ちの単発書き込み）と error", () => {
 
   it("parseState は pending と error を読み、不正な pending は無視する", () => {
     expect(parseState({ running: false, pending: [{ name: "g_mode", value: "1" }], error: "" }))
-      .toEqual({ running: false, pending: [{ name: "g_mode", value: "1" }], error: "", dropped: [] });
-    expect(parseState({ pending: "x", error: 3 })).toEqual({ dropped: [] });
+      .toEqual({ needReset: false, running: false, pending: [{ name: "g_mode", value: "1" }], error: "", dropped: [] });
+    expect(parseState({ pending: "x", error: 3 })).toEqual({ needReset: false, dropped: [] });
     expect(parseState({ step: 1 })?.pending).toEqual([]);
   });
 
@@ -151,5 +151,25 @@ describe("pending（反映待ちの単発書き込み）と error", () => {
       state: { pending: [{ name: "P1", value: "0x10" }], error: "ポインタ g_p が NULL です" } } }));
     const info = await detectServer(createApi("", f as unknown as typeof fetch), "http:");
     expect(info?.state).toMatchObject({ pending: [{ name: "P1", value: "0x10" }], error: "ポインタ g_p が NULL です" });
+  });
+});
+
+
+describe("needReset", () => {
+  it("state と control は needReset を読み、未指定・不正な型は false にする", () => {
+    for (const value of [true, false, undefined, "true", 1, null]) {
+      const state = { needReset: value };
+      expect(parseState(state)?.needReset).toBe(value === true);
+      expect(parseControlResponse(state)?.needReset).toBe(value === true);
+      expect(parseControlResponse({ state })?.needReset).toBe(value === true);
+    }
+    expect(parseState({})?.needReset).toBe(false);
+  });
+
+  it("detectServer は info の needReset と失敗理由を保つ", async () => {
+    const f = fakeFetch(() => ({ body: { version: "v", periodMs: 5, func: "f", functions: [],
+      state: { needReset: true, error: "NULL" } } }));
+    const info = await detectServer(createApi("", f as unknown as typeof fetch), "http:");
+    expect(info?.state).toMatchObject({ needReset: true, error: "NULL" });
   });
 });

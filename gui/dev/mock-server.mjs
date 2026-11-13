@@ -203,7 +203,7 @@ function send(res, event, data) {
 const broadcast = (event, data) => { for (const c of clients) send(c, event, data); };
 const stateMsg = () => ({
   running, step, speed, holds: [...holds].map(([name, value]) => ({ name, value: holdJson(value) })), overrun,
-  periodMs, func, playback: !!csvPlay, error: "", dropped,
+  periodMs, func, playback: !!csvPlay, needReset: false, error: "", dropped,
   pending: [...pending].map(([name, value]) => ({ name, value })),
 });
 let lastStateJson = "";

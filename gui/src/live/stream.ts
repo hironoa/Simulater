@@ -60,6 +60,7 @@ export function dispatchStreamEvent(event: string, data: string, handlers: Strea
       return true;
     }
     case "state": {
+      // needReset を含め、HTTP 応答と共通の規則で読む（旧サーバは false）。
       handlers.state(parseState(msg) ?? {});
       return true;
     }

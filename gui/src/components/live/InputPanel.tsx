@@ -198,11 +198,11 @@ function heldValue(holds: { name: string; value: number | string }[], name: stri
 
 export function InputPanel() {
   const live = liveController();
-  const { inputs, values, pending, holds } = useLiveStore(useShallow((s) => ({
-    inputs: s.inputs, values: s.values, pending: s.sim.pending, holds: s.sim.holds,
+  const { inputs, values, pending, holds, needReset } = useLiveStore(useShallow((s) => ({
+    inputs: s.inputs, values: s.values, pending: s.sim.pending, holds: s.sim.holds, needReset: s.sim.needReset,
   })));
   return (
-    <div className="flex flex-col gap-1.5">
+    <fieldset disabled={needReset} className="flex flex-col gap-1.5 min-w-0" title={needReset ? "リセットが必要です" : undefined}>
       <SymbolSearch placeholder="入力にする変数を検索"
         actions={[{ label: "入力に追加", title: "入力パネルに追加", enabled: (s) => s.writable, onPick: (s) => live.addInput(s.name) }]} />
       {inputs.length === 0 && <div className="text-[11px] text-gray-400 px-1">変数を検索して入力に追加してください。</div>}
@@ -212,6 +212,6 @@ export function InputPanel() {
           held={heldValue(holds, item.name)}
           base={inputValue(item.name, { pending, holds }, values[item.name])} />
       ))}
-    </div>
+    </fieldset>
   );
 }
