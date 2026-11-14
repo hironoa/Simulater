@@ -190,6 +190,7 @@ if command -v curl > /dev/null 2>&1; then
     check "GUI: /api/symbols の members は子の完全名" contains "$WORK/rsym.json" '"name":"g_st","type":"struct S","size":6,"kind":"struct","writable":false,"members":["g_st.fa","g_st.fb","g_st.fc","g_st.pad","g_st.w","g_st.s"]'
     curl -s "$U/api/symbols?q=g_mat&limit=1" > "$WORK/rsym2.json"
     check "GUI: 配列の members は要素の完全名" contains "$WORK/rsym2.json" '"members":["g_mat[0]","g_mat[1]"]'
+    check "GUI: RL78 匿名 lo/hi の型・writable・watch/write" "$WORK/check_symbols" "$U" "$WORK" rl78
     printf '{"names":["TEST_cycle_cnt","g_ms_tick","g_st.fb"]}' > "$WORK/rw.json"
     curl -s -X POST --data-binary "@$WORK/rw.json" "$U/api/watch" > /dev/null
     curl -s -N --max-time 2 "$U/api/stream" > "$WORK/rsse.txt" 2>/dev/null &

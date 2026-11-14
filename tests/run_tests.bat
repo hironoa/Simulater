@@ -207,6 +207,10 @@ call :gui_opt "--port 70000 is not truncated" "70000" --port 70000
 call :gui_opt "--port 8765x is not read as 8765" "8765x" --port 8765x
 call :gui_opt "--period-ms 1e400 (inf) is rejected" "1e400" --period-ms 1e400
 
+rem C11 contract helper: curl + runtime JSON parser, no shell JSON matching.
+clang -std=c11 -O2 -Wall -Wextra -I"%ROOT%\runtime\src" "%T%\tools\check_symbols.c" "%ROOT%\runtime\src\sim_json.c" "%ROOT%\runtime\src\sim_util.c" -o "%WORK%\check_symbols.exe" > "%WORK%\check_symbols_build.log" 2>&1
+if errorlevel 1 (call :ng "build symbols contract helper" & type "%WORK%\check_symbols_build.log") else (call :ok "build symbols contract helper")
+
 echo == GUI server API
 where curl >nul 2>nul
 if errorlevel 1 (
@@ -232,6 +236,8 @@ if errorlevel 1 (call :ng "/api/info") else (call :ok "/api/info")
 curl -s "%U%/api/symbols?q=flag.fan&limit=10" > "%WORK%\sym.json"
 findstr /l /c:"\"name\":\"g_eng.flag.fan_req\"" "%WORK%\sym.json" >nul
 if errorlevel 1 (call :ng "/api/symbols") else (call :ok "/api/symbols")
+"%WORK%\check_symbols.exe" "%U%" "%WORK%" mock
+if errorlevel 1 (call :ng "symbols anonymous lo hi and all members contract") else (call :ok "symbols anonymous lo hi and all members contract")
 curl -s -X POST --data-binary "@%T%\gui\watch.json" "%U%/api/watch" > "%WORK%\watch.out"
 findstr /l /c:"\"name\":\"nope_var\"" "%WORK%\watch.out" >nul
 if errorlevel 1 (call :ng "/api/watch errors") else (call :ok "/api/watch errors")

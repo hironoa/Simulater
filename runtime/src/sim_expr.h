@@ -49,6 +49,8 @@ int sim_ctx_sym_const(sim_ctx *c, size_t i);
 
 /* 式を解析して解決する。失敗なら NULL と err */
 sim_ref *sim_ref_parse(sim_ctx *c, const char *text, char *err, size_t errlen);
+/* 集約型も含む型照会専用。返された参照を値の読み書きに使わない。 */
+sim_ref *sim_ref_parse_symbol(sim_ctx *c, const char *text, char *err, size_t errlen);
 /* 対象関数が f だったものとして式を解決する（引数 @x を f の引数として解く）。文脈の対象関数と引数は変えない */
 sim_ref *sim_ref_parse_for(sim_ctx *c, const sim_func *f, const char *text, char *err, size_t errlen);
 void sim_ref_free(sim_ref *r);

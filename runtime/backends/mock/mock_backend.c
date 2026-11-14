@@ -77,6 +77,27 @@ static const sim_member m_hist[] = {{"rpm", 0, -1, 0, &t_u16}, {"temp", 2, -1, 0
 static const sim_type t_hist = {SIM_T_STRUCT, "hist_t", 4, NULL, 0, m_hist, 2};
 static const sim_type t_histx3 = {SIM_T_ARRAY, "hist_t[3]", 12, &t_hist, 3, NULL, 0};
 
+/* GUI 検索の境界: 匿名内の配列・ビット、構造体配列、深さと要素数の上限。 */
+static const sim_type t_calx2 = {SIM_T_ARRAY, "cal_t[2]", 8, &t_cal, 2, NULL, 0};
+static const sim_type t_cal_ptr = {SIM_T_PTR, "cal_t *", 2, &t_cal, 0, NULL, 0};
+static const sim_member m_search_union[] = {{"bytes", 0, -1, 0, &t_u8x3}, {"", 0, -1, 0, &t_flag}};
+static const sim_type t_search_union = {SIM_T_UNION, NULL, 3, NULL, 0, m_search_union, 2};
+static const sim_member m_search[] = {{"", 0, -1, 0, &t_search_union}};
+static const sim_type t_search = {SIM_T_STRUCT, "search_t", 3, NULL, 0, m_search, 1};
+static const sim_type t_big = {SIM_T_ARRAY, "uint8[258]", 258, &t_u8, 258, NULL, 0};
+#define DEEP(n, target) static const sim_type t_deep##n = {SIM_T_ARRAY, "deep" #n, 1, target, 1, NULL, 0}
+DEEP(1, &t_u8);
+DEEP(2, &t_deep1);
+DEEP(3, &t_deep2);
+DEEP(4, &t_deep3);
+DEEP(5, &t_deep4);
+DEEP(6, &t_deep5);
+DEEP(7, &t_deep6);
+DEEP(8, &t_deep7);
+DEEP(9, &t_deep8);
+DEEP(10, &t_deep9);
+#undef DEEP
+
 /* ---------------------------------------------------------------- 変数 */
 
 enum {
@@ -109,6 +130,12 @@ static const sim_var g_vars[] = {
     {"g_lut", "src/engine.c", NULL, A_LUT, &t_u16x4, 1, 1},
     {"g_mode", "src/engine.c", NULL, A_MODE, &t_u8, 1, 0},
     {"g_cal", "src/sensor.c", NULL, A_CAL, &t_cal, 1, 0},
+    {"g_cal_const", "src/sensor.c", NULL, A_CAL, &t_cal, 1, 1},
+    {"g_cal_array", "test.c", NULL, 0xD200, &t_calx2, 1, 0},
+    {"gp_cal", "test.c", NULL, 0xD300, &t_cal_ptr, 1, 0},
+    {"g_search", "test.c", NULL, 0xD310, &t_search, 1, 0},
+    {"g_big", "test.c", NULL, 0xD000, &t_big, 1, 0},
+    {"g_deep", "test.c", NULL, 0xD320, &t_deep10, 1, 0},
     {"g_hist", "src/engine.c", NULL, A_HIST, &t_histx3, 1, 0},
     {"g_matrix", "src/engine.c", NULL, A_MATRIX, &t_u8x2x3, 1, 0},
     {"s_avg", "src/sensor.c", "sensor_filter", A_SEN_AVG, &t_s16, 0, 0},
@@ -464,6 +491,7 @@ sim_backend *sim_backend_open(const sim_open_opts *o, char *err, size_t errlen)
     for (i = 0; i < 4; i++) wr16(m, A_LUT + 2u * (uint32_t)i, lut[i]);
     memcpy(m->mem + A_NAME, "ENG-A", 5);
     wr16(m, A_GP_ENG, A_ENG);
+    wr16(m, 0xD300, A_CAL);
     wr8(m, A_PSW_IE, 1);
     wr16(m, A_CAL, 0x1234);
     wr16(m, A_CAL + 2, (uint16_t)-5);

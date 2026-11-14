@@ -13,23 +13,24 @@ export interface SymbolAction {
 
 const isAggregate = (s: SymbolEntry) => s.kind === "struct" || s.kind === "array" || (s.members?.length ?? 0) > 0;
 
-/** members の子を引く。サーバの検索で完全一致が見つからなければ、子を葉として扱う。 */
-async function resolveMembers(parent: SymbolEntry): Promise<SymbolEntry[]> {
-  const api = liveController().api;
+export type ResolvedSymbol = SymbolEntry & { resolutionError?: boolean };
+
+/** 完全一致が得られない子は、失敗を表示してすべての選択操作を無効にする。 */
+export async function resolveMembers(parent: SymbolEntry, api = liveController().api): Promise<ResolvedSymbol[]> {
   return Promise.all((parent.members ?? []).map(async (m) => {
     const name = memberPath(parent.name, m);
     try {
       const hits = await api.symbols(name, 20);
       const exact = hits.find((h) => h.name === name);
       if (exact) return exact;
-    } catch { /* 下の既定値で続ける */ }
-    return { name, type: "", size: 0, kind: "int", writable: parent.writable } as SymbolEntry;
+    } catch { /* 解決失敗を行に表示する */ }
+    return { name, type: "", size: 0, kind: "int", writable: false, resolutionError: true };
   }));
 }
 
-function SymbolRow({ entry, depth, actions }: { entry: SymbolEntry; depth: number; actions: SymbolAction[]; key?: React.Key }) {
+export function SymbolRow({ entry, depth, actions }: { entry: ResolvedSymbol; depth: number; actions: SymbolAction[]; key?: React.Key }) {
   const [open, setOpen] = useState(false);
-  const [children, setChildren] = useState<SymbolEntry[] | null>(null);
+  const [children, setChildren] = useState<ResolvedSymbol[] | null>(null);
   const aggregate = isAggregate(entry);
   const toggle = async () => {
     if (!aggregate) return;
@@ -43,13 +44,13 @@ function SymbolRow({ entry, depth, actions }: { entry: SymbolEntry; depth: numbe
           title={open ? "閉じる" : "メンバを展開"}>
           {open ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
         </button>
-        <span className="font-mono text-xs truncate flex-1 cursor-default" title={`${entry.name}  ${entry.type}  (${entry.kind}, ${entry.size} バイト)${entry.writable ? "" : "  書き込み不可"}`}
+        <span className="font-mono text-xs truncate flex-1 cursor-default" title={entry.resolutionError ? `${entry.name}: 解決できません` : `${entry.name}  ${entry.type}  (${entry.kind}, ${entry.size} バイト)${entry.writable ? "" : "  書き込み不可"}`}
           onDoubleClick={toggle}>
           {entry.name}
         </span>
-        <span className="text-[10px] text-gray-400 truncate max-w-[70px]">{entry.type || entry.kind}</span>
-        {!aggregate && actions.map((a) => {
-          const ok = a.enabled ? a.enabled(entry) : true;
+        <span className={cn("text-[10px]", entry.resolutionError ? "text-red-500" : "text-gray-400 truncate max-w-[70px]")}>{entry.resolutionError ? "解決できません" : entry.type || entry.kind}</span>
+        {(!aggregate || entry.kind === "ptr") && actions.map((a) => {
+          const ok = !entry.resolutionError && (a.enabled ? a.enabled(entry) : true);
           return (
             <button key={a.label} disabled={!ok} title={a.title}
               className="text-[10px] px-1.5 py-0.5 rounded bg-blue-500 text-white hover:bg-blue-600 disabled:bg-gray-300 dark:disabled:bg-slate-600 disabled:cursor-not-allowed"

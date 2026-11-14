@@ -279,6 +279,15 @@ gui_opt "--period-ms 1e400（inf）は受け付けない" "--period-ms 1e400 は
 gui_opt "--speed -1 は受け付けない" "--speed -1 は 0（最速）か 0.1〜100" --speed -1
 gui_opt "--record-max 4294967296 を切り詰めない" "--record-max 4294967296 は" --record-max 4294967296
 
+# C11 helper shares the runtime JSON parser; no Python/Node dependency.
+if "${CC:-clang}" -std=c11 -D_DEFAULT_SOURCE -O2 -Wall -Wextra -I"$ROOT/runtime/src" \
+    "$T/tools/check_symbols.c" "$ROOT/runtime/src/sim_json.c" "$ROOT/runtime/src/sim_util.c" \
+    -lm -o "$WORK/check_symbols" > "$WORK/check_symbols_build.log" 2>&1; then
+    ok "check_symbols.c をビルド"
+else
+    ng "check_symbols.c をビルド" "$(cat "$WORK/check_symbols_build.log")"
+fi
+
 echo "== GUI サーバの API"
 if ! command -v curl > /dev/null 2>&1; then
     ng "curl がありません"
@@ -293,6 +302,7 @@ else
         curl -s "$U/api/info" > "$WORK/info.json" 2>/dev/null && break
         i=$((i + 1)); sleep 0.1
     done
+    if ! kill -0 "$GUI_PID" 2>/dev/null; then cat "$WORK/gui.log"; fi
     post() { curl -s -o "$WORK/$2" -w '%{http_code}' -X POST -H 'Content-Type: application/json' --data-binary "@$T/gui/$1" "$U$3"; }
 
     check "/api/info が応答" contains "$WORK/info.json" '"version":"0.1.0"'
@@ -305,6 +315,8 @@ else
     check "/api/symbols の構造体と members" contains "$WORK/sym2.json" '[{"name":"g_eng","type":"eng_status_t","size":8,"kind":"struct","writable":false,"members":["g_eng.rpm","g_eng.water_temp","g_eng.state","g_eng.gear","g_eng.flag"]}]'
     curl -s "$U/api/symbols?q=%40&limit=5" > "$WORK/sym3.json"
     check "/api/symbols に関数内 static（func@name）" contains "$WORK/sym3.json" '"name":"eng_update@call_cnt"'
+
+    check "symbols: 匿名 lo/hi・境界条件と全 members の再検索・型・watch/write" "$WORK/check_symbols" "$U" "$WORK" mock
 
     CODE=$(post watch.json watch.out /api/watch)
     check "/api/watch が 200" test "$CODE" = 200

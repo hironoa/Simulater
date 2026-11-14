@@ -464,7 +464,7 @@ static int strip_size_suffix(char *buf)
 /* 現在の位置が引数/戻り値そのものなら、メンバや添字は付けられない */
 static int at_slot(const sim_ref *r) { return r->base != RB_MEM && r->nsteps == 0; }
 
-sim_ref *sim_ref_parse(sim_ctx *c, const char *text, char *err, size_t errlen)
+static sim_ref *ref_parse(sim_ctx *c, const char *text, char *err, size_t errlen, int describe)
 {
     sim_ref *r = sim_xcalloc(1, sizeof *r);
     char buf[1024], path[512], id1[256], id2[256];
@@ -714,15 +714,15 @@ sim_ref *sim_ref_parse(sim_ctx *c, const char *text, char *err, size_t errlen)
             r->multi = 1;
             r->elem = r->type->target;
             r->count = r->type->count;
-        } else if (r->type && (r->type->kind == SIM_T_STRUCT || r->type->kind == SIM_T_UNION)) {
+        } else if (!describe && r->type && (r->type->kind == SIM_T_STRUCT || r->type->kind == SIM_T_UNION)) {
             FAIL("'%s': 構造体/共用体です。'%s.メンバ' のようにメンバを指定してください", buf, buf);
-        } else if (r->type && r->type->kind == SIM_T_UNKNOWN) {
+        } else if (!describe && r->type && r->type->kind == SIM_T_UNKNOWN) {
             FAIL("'%s': 型が分かりません（デバッグ情報がありません）。'%s:2' のようにバイト数を付けてください", buf, buf);
-        } else if (!r->type || r->type->kind == SIM_T_VOID || r->type->kind == SIM_T_FUNC) {
+        } else if (!describe && (!r->type || r->type->kind == SIM_T_VOID || r->type->kind == SIM_T_FUNC)) {
             FAIL("'%s': 値として読めない型です", buf);
         }
     }
-    if (r->multi) {
+    if (r->multi && !describe) {
         if (!r->elem) FAIL("'%s': 要素の型が分かりません", buf);
         if (r->elem->kind == SIM_T_ARRAY) {
             /* 多次元配列: 最も内側の要素まで平らにする */
@@ -736,6 +736,19 @@ sim_ref *sim_ref_parse(sim_ctx *c, const char *text, char *err, size_t errlen)
     }
 #undef FAIL
     return r;
+}
+
+/* GUI の型照会は集約型も受け付ける。値の読み書きには従来の検証を使う。 */
+sim_ref *sim_ref_parse_symbol(sim_ctx *c, const char *text, char *err, size_t errlen)
+{
+    sim_ref *r = ref_parse(c, text, err, errlen, 1);
+    if (r) { r->multi = 0; } /* sim_ref_type は配列そのものの型を返す */
+    return r;
+}
+
+sim_ref *sim_ref_parse(sim_ctx *c, const char *text, char *err, size_t errlen)
+{
+    return ref_parse(c, text, err, errlen, 0);
 }
 
 /* ================================================================ バイト列と値 */

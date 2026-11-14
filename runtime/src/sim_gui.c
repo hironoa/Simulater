@@ -726,88 +726,99 @@ static int scalar_t(const sim_type *t)
                  t->kind == SIM_T_FLOAT || t->kind == SIM_T_PTR);
 }
 
-static void child_names(const sim_type *t, const char *name, sim_buf *b, int *first)
-{
-    int i;
-    if (!t) return;
-    if (t->kind == SIM_T_STRUCT || t->kind == SIM_T_UNION) {
-        for (i = 0; i < t->nmembers; i++) {
-            const sim_member *m = &t->members[i];
-            if (!m->name || !m->name[0]) { child_names(m->type, name, b, first); continue; }
-            if (!*first) sim_buf_addc(b, ',');
-            *first = 0;
-            {
-                char tmp[1024];
-                snprintf(tmp, sizeof tmp, "%s.%s", name, m->name);
-                sim_buf_json_str(b, tmp);
-            }
-        }
-    } else if (t->kind == SIM_T_ARRAY) {
-        uint32_t k, n = t->count > 256 ? 256 : t->count;
-        for (k = 0; k < n; k++) {
-            char tmp[1024];
-            if (!*first) sim_buf_addc(b, ',');
-            *first = 0;
-            snprintf(tmp, sizeof tmp, "%s[%u]", name, k);
-            sim_buf_json_str(b, tmp);
-        }
-    }
-}
+/* members と部分一致検索が同じ子の列挙を使う。匿名階層は名前に含めない。 */
+typedef void (*child_fn)(void *, const char *, const sim_type *);
 
-static void search_rec(search_t *st, const char *name, const sim_type *t, int is_const, int depth)
+static void children(const sim_type *t, const char *name, const char *sep, child_fn fn, void *arg)
 {
-    char tn[256];
     int i;
-    if (st->count >= st->limit || st->visited > 500000 || depth > 8) return;
-    st->visited++;
-    if (sim_strcasestr_found(name, st->q)) {
-        int first = 1;
-        if (st->count) sim_buf_addc(st->out, ',');
-        st->count++;
-        sim_type_display(t, tn, sizeof tn);
-        sim_buf_adds(st->out, "{\"name\":");
-        sim_buf_json_str(st->out, name);
-        sim_buf_adds(st->out, ",\"type\":");
-        sim_buf_json_str(st->out, tn);
-        sim_buf_printf(st->out, ",\"size\":%u,\"kind\":\"%s\",\"writable\":%s,\"members\":[", t ? t->size : 0,
-                       sim_type_kind_name(t), (!is_const && scalar_t(t)) ? "true" : "false");
-        child_names(t, name, st->out, &first);
-        sim_buf_adds(st->out, "]}");
-    }
     if (!t) return;
     if (t->kind == SIM_T_STRUCT || t->kind == SIM_T_UNION) {
         for (i = 0; i < t->nmembers; i++) {
             const sim_member *m = &t->members[i];
             char tmp[1024];
             if (!m->name || !m->name[0]) {
-                /* 匿名メンバは親の名前のまま中を見る */
-                const sim_type *at = m->type;
-                int k;
-                if (at && (at->kind == SIM_T_STRUCT || at->kind == SIM_T_UNION))
-                    for (k = 0; k < at->nmembers; k++) {
-                        const sim_member *m2 = &at->members[k];
-                        if (!m2->name || !m2->name[0]) continue;
-                        snprintf(tmp, sizeof tmp, "%s.%s", name, m2->name);
-                        search_rec(st, tmp, m2->type, is_const, depth + 1);
-                    }
+                children(m->type, name, sep, fn, arg);
                 continue;
             }
-            snprintf(tmp, sizeof tmp, "%s.%s", name, m->name);
-            search_rec(st, tmp, m->type, is_const, depth + 1);
+            if (snprintf(tmp, sizeof tmp, "%s%s%s", name, sep, m->name) < (int)sizeof tmp)
+                fn(arg, tmp, m->type);
         }
     } else if (t->kind == SIM_T_ARRAY) {
         uint32_t k, n = t->count > 256 ? 256 : t->count;
         for (k = 0; k < n; k++) {
             char tmp[1024];
-            snprintf(tmp, sizeof tmp, "%s[%u]", name, k);
-            search_rec(st, tmp, t->target, is_const, depth + 1);
+            if (snprintf(tmp, sizeof tmp, "%s[%u]", name, k) < (int)sizeof tmp)
+                fn(arg, tmp, t->target);
         }
     }
 }
 
+typedef struct { sim_buf *out; int first; } names_t;
+
+static void child_name(void *arg, const char *name, const sim_type *t)
+{
+    names_t *ns = arg;
+    char err[1024];
+    sim_ref *r = sim_ref_parse_symbol(G.c, name, err, sizeof err);
+    (void)t;
+    /* 式の長さや対応していない値渡し等で解決不能な名前を載せない。 */
+    if (!r) return;
+    sim_ref_free(r);
+    if (!ns->first) sim_buf_addc(ns->out, ',');
+    ns->first = 0;
+    sim_buf_json_str(ns->out, name);
+}
+
+static int symbol_entry(search_t *st, const char *name)
+{
+    char tn[256], err[1024];
+    sim_ref *r = sim_ref_parse_symbol(G.c, name, err, sizeof err);
+    const sim_type *t;
+    names_t ns = {st->out, 1};
+    if (!r || sim_ref_prefix(r)) { sim_ref_free(r); return 0; }
+    t = sim_ref_type(r);
+    if (st->count) sim_buf_addc(st->out, ',');
+    st->count++;
+    sim_type_display(t, tn, sizeof tn);
+    sim_buf_adds(st->out, "{\"name\":");
+    sim_buf_json_str(st->out, name);
+    sim_buf_adds(st->out, ",\"type\":");
+    sim_buf_json_str(st->out, tn);
+    sim_buf_printf(st->out, ",\"size\":%u,\"kind\":\"%s\",\"writable\":%s,\"members\":[", t ? t->size : 0,
+                   sim_type_kind_name(t), sim_ref_writable(r) && scalar_t(t) ? "true" : "false");
+    if (t && t->kind == SIM_T_PTR && t->target &&
+        (t->target->kind == SIM_T_STRUCT || t->target->kind == SIM_T_UNION))
+        children(t->target, name, "->", child_name, &ns);
+    else
+        children(t, name, ".", child_name, &ns);
+    sim_buf_adds(st->out, "]}");
+    sim_ref_free(r);
+    return 1;
+}
+
+typedef struct { search_t *st; int depth; } walk_t;
+static void search_rec(search_t *st, const char *name, const sim_type *t, int depth);
+
+static void search_child(void *arg, const char *name, const sim_type *t)
+{
+    walk_t *w = arg;
+    search_rec(w->st, name, t, w->depth + 1);
+}
+
+static void search_rec(search_t *st, const char *name, const sim_type *t, int depth)
+{
+    walk_t w = {st, depth};
+    if (st->count >= st->limit || st->visited > 500000 || depth > 8) return;
+    st->visited++;
+    /* 完全一致は先に追加済み。部分一致の列挙では重複させない。 */
+    if ((!st->q[0] || strcmp(name, st->q) != 0) && sim_strcasestr_found(name, st->q)) symbol_entry(st, name);
+    children(t, name, ".", search_child, &w);
+}
+
 static void api_symbols(sim_sock s, req_t *r)
 {
-    char q[512] = "", lim[32] = "";
+    char q[1024] = "", lim[32] = "";
     search_t st;
     sim_buf b;
     size_t i, n;
@@ -830,23 +841,25 @@ static void api_symbols(sim_sock s, req_t *r)
     st.out = &b;
     sim_buf_addc(&b, '[');
     sim_mutex_lock(G.mu);
+    /* 完全な式は走査の深さ・要素数・訪問数の制限より先に解決する。 */
+    if (q[0]) symbol_entry(&st, q);
     f = sim_ctx_func(G.c);
     if (f) {
         int k;
         for (k = 0; k < f->nparams; k++) {
             char tmp[512];
             snprintf(tmp, sizeof tmp, "@%s", f->param_names[k] ? f->param_names[k] : "?");
-            search_rec(&st, tmp, f->param_types[k], 0, 0);
+            search_rec(&st, tmp, f->param_types[k], 0);
         }
         if (f->ret && f->ret->kind != SIM_T_VOID) {
             char tmp[512];
             snprintf(tmp, sizeof tmp, "%s@@", f->name);
-            search_rec(&st, tmp, f->ret, 1, 0);
+            search_rec(&st, tmp, f->ret, 0);
         }
     }
     n = sim_ctx_sym_count(G.c);
     for (i = 0; i < n && st.count < st.limit; i++)
-        search_rec(&st, sim_ctx_sym_name(G.c, i), sim_ctx_sym_type(G.c, i), sim_ctx_sym_const(G.c, i), 0);
+        search_rec(&st, sim_ctx_sym_name(G.c, i), sim_ctx_sym_type(G.c, i), 0);
     sim_mutex_unlock(G.mu);
     sim_buf_addc(&b, ']');
     send_json(s, 200, &b);
