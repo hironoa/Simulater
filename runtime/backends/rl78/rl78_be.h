@@ -125,6 +125,10 @@ void rl78_symtab_from_elf(rl78_symtab *t, const rl78_elf *e, rl78_warns *w);
  * name/func は t->ar に置く。func は関数内 static でなければ NULL */
 void rl78_split_symname(rl78_symtab *t, const char *sym, const char **name, const char **func, int *is_static);
 
+void rl78_sym_load(rl78_elf *e, rl78_symtab *t, rl78_warns *w, const char *path);
+int rl78_lmf_load(rl78_elf *e, rl78_symtab *t, rl78_warns *w,
+                  const char *path, char *err, size_t errlen);
+
 /* ---------------------------------------------------------------- .map */
 
 typedef struct {

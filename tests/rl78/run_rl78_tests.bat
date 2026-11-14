@@ -87,6 +87,64 @@ copy /y "%TP%" "%WORK%\autocfg\prog.abs" >nul
 copy /y "%R%\cfg\stub.cfg" "%WORK%\autocfg\sim.cfg" >nul
 call :run "sim.cfg next to the .abs is read" 0 "OK 3, NG 0" --abs "%WORK%\autocfg\prog.abs" "%R%\csv\synth_stub.csv"
 
+echo == LMF CA78K0R
+"%CC%" -std=c11 -O2 -Wall -Wextra -o "%WORK%\mklmf.exe" "%T%\tools\mklmf.c" > "%WORK%\mklmf.log" 2>&1
+set RC=%ERRORLEVEL%
+if "%RC%"=="0" (call :ok "build mklmf") else (call :ng "build mklmf")
+"%WORK%\mklmf.exe" normal "%WORK%\test.lmf"
+set RC=%ERRORLEVEL%
+if "%RC%"=="0" (call :ok "mklmf normal") else (call :ng "mklmf normal")
+"%RS%" info --abs "%WORK%\test.lmf" -v > "%WORK%\lmf.log" 2>&1
+set RC=%ERRORLEVEL%
+if "%RC%"=="0" (call :ok "LMF info") else (call :ng "LMF info")
+call :has "%WORK%\lmf.log" "ca78k0r" "LMF ABI auto"
+call :has "%WORK%\lmf.log" "0x0008" "LMF unknown type warning"
+call :has "%WORK%\lmf.log" "0x55" "LMF unknown storage warning"
+"%RS%" list --abs "%WORK%\test.lmf" > "%WORK%\lmf.list" 2>&1
+set RC=%ERRORLEVEL%
+if "%RC%"=="0" (call :ok "LMF list") else (call :ng "LMF list")
+call :has "%WORK%\lmf.list" "arr" "LMF array symbol"
+call :run "LMF ABI startup driver unknown sizes 16 rows" 0 "OK 16" --abs "%WORK%\test.lmf" "%R%\csv\lmf_call.csv"
+call :run "LMF first long rejected" 1 "AX" --abs "%WORK%\test.lmf" "%R%\csv\lmf_first32.csv"
+> "%WORK%\abi.cfg" echo abi = ccrl
+"%RS%" info --abs "%WORK%\test.lmf" --cfg "%WORK%\abi.cfg" > "%WORK%\lmf.log" 2>&1
+set RC=%ERRORLEVEL%
+if "%RC%"=="0" (call :ok "LMF ABI override loads") else (call :ng "LMF ABI override loads")
+call :has "%WORK%\lmf.log" "ccrl" "LMF ABI override"
+> "%WORK%\abi.cfg" echo abi = bogus
+"%RS%" info --abs "%WORK%\test.lmf" --cfg "%WORK%\abi.cfg" > "%WORK%\lmf.log" 2>&1
+set RC=%ERRORLEVEL%
+if "%RC%"=="2" (call :ok "LMF bad ABI rejected") else (call :ng "LMF bad ABI rejected")
+copy /y "%WORK%\test.lmf" "%WORK%\lmf.abs" >nul
+"%RS%" info --abs "%WORK%\lmf.abs" > "%WORK%\lmf.log" 2>&1
+set RC=%ERRORLEVEL%
+if "%RC%"=="0" (call :ok "LMF identified by bytes") else (call :ng "LMF identified by bytes")
+for %%M in (truncated section symbols aux string unterminated stringcut address lines magic) do call :lmf_bad %%M
+call :has "%WORK%\lmf.log" "78 56 34 12" "Unknown format magic bytes"
+> "%WORK%\test.sym" echo #05
+>> "%WORK%\test.sym" echo ;FF PUBLIC
+>> "%WORK%\test.sym" echo 02FE001_init
+>> "%WORK%\test.sym" echo =
+"%RS%" info --abs "%WORK%\test.lmf" -v > "%WORK%\lmf.log" 2>&1
+set RC=%ERRORLEVEL%
+if "%RC%"=="0" (call :ok "SYM mismatch still loads") else (call :ng "SYM mismatch still loads")
+call :has "%WORK%\lmf.log" "1 mismatched" "SYM mismatch warning"
+del "%WORK%\test.sym"
+"%WORK%\mklmf.exe" nodbg "%WORK%\nodbg.lmf"
+set RC=%ERRORLEVEL%
+if "%RC%"=="0" (call :ok "mklmf no debug") else (call :ng "mklmf no debug")
+> "%WORK%\nodbg.sym" echo #05
+>> "%WORK%\nodbg.sym" echo ;FF PUBLIC
+>> "%WORK%\nodbg.sym" echo 010010E_main
+>> "%WORK%\nodbg.sym" echo 0100141_cycle
+>> "%WORK%\nodbg.sym" echo 02FE000_init
+>> "%WORK%\nodbg.sym" echo 02FE002_ticks
+>> "%WORK%\nodbg.sym" echo =
+> "%WORK%\sym.csv" echo mod,cycle,SYM fallback,1,2
+>> "%WORK%\sym.csv" echo #COMMENT,ticks:2,init:2,ticks:2
+>> "%WORK%\sym.csv" echo ,4,0x1234,5
+call :run "LMF no debug SYM addresses" 0 "OK 1" --abs "%WORK%\nodbg.lmf" "%WORK%\sym.csv"
+
 echo == real backend GUI call failures
 where curl >nul 2>nul
 if errorlevel 1 goto after_fault_gui
@@ -229,4 +287,13 @@ call :has "%WORK%\nofunc_error.json" "func" "GUI unset function explains func"
 curl -s "%U%/api/info" > "%WORK%\nofunc_after.json"
 fc /b "%WORK%\nofunc_before.json" "%WORK%\nofunc_after.json" >nul
 if errorlevel 1 (call :ng "GUI unset function %1 preserves state") else (call :ok "GUI unset function %1 preserves state")
+exit /b 0
+
+:lmf_bad
+"%WORK%\mklmf.exe" %1 "%WORK%\bad.lmf"
+set RC=%ERRORLEVEL%
+if "%RC%"=="0" (call :ok "mklmf %1") else (call :ng "mklmf %1")
+"%RS%" info --abs "%WORK%\bad.lmf" > "%WORK%\lmf.log" 2>&1
+set RC=%ERRORLEVEL%
+if "%RC%"=="2" (call :ok "LMF malformed %1 rejected") else (call :ng "LMF malformed %1 rejected")
 exit /b 0

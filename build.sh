@@ -33,7 +33,7 @@ if [ "$MODE" = "mock" ]; then
 else
     B="$ROOT/runtime/backends/rl78"
     CFLAGS="$CFLAGS -I$ROOT/rl78/include -I$B"
-    SRCS="$COMMON $B/rl78_backend.c $B/rl78_elf.c $B/rl78_dwarf.c $B/rl78_map.c \
+    SRCS="$COMMON $B/rl78_backend.c $B/rl78_abi.c $B/rl78_lmf.c $B/rl78_sym.c $B/rl78_elf.c $B/rl78_dwarf.c $B/rl78_map.c \
 $ROOT/rl78/src/rl78_exec.c $ROOT/rl78/src/rl78_sys.c $ROOT/rl78/src/rl78_disasm.c"
 fi
 

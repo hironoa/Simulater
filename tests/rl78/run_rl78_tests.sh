@@ -154,6 +154,45 @@ rl78_run ".abs と同じフォルダの sim.cfg を自動で読む" 0 "合計: �
 printf 'abs = prog.abs\n' > "$WORK/autocfg/only_abs.cfg"
 rl78_run "sim.cfg の abs = で .abs を指定（--abs なし）" 0 "合計: 総数 1, OK 1, NG 0" -- --cfg "$WORK/autocfg/only_abs.cfg" "$R/csv/synth_nostub.csv"
 
+echo "== LMF: CA78K0R"
+check "mklmf build" "$CC" -std=c11 -O2 -Wall -Wextra -o "$WORK/mklmf" "$T/tools/mklmf.c"
+check "mklmf normal" "$WORK/mklmf" normal "$WORK/test.lmf"
+"$RS" info --abs "$WORK/test.lmf" -v > "$WORK/lmf.log" 2>&1
+check "LMF info" test $? -eq 0
+check "LMF ABI auto" contains "$WORK/lmf.log" "ABI: ca78k0r"
+check "LMF unknown type warning" contains "$WORK/lmf.log" "0x0008"
+check "LMF unknown storage warning" contains "$WORK/lmf.log" "0x55"
+"$RS" list --abs "$WORK/test.lmf" > "$WORK/lmf.list" 2>&1
+check "LMF list" test $? -eq 0
+check "LMF array symbol" contains "$WORK/lmf.list" "arr"
+rl78_run "LMF ABI/startup/driver/unknown size (16 rows)" 0 "総数 16, OK 16, NG 0" -- --abs "$WORK/test.lmf" "$R/csv/lmf_call.csv"
+rl78_run "LMF first long rejected" 1 "AX/BC" -- --abs "$WORK/test.lmf" "$R/csv/lmf_first32.csv"
+printf 'abi = ccrl\n' > "$WORK/abi.cfg"
+"$RS" info --abs "$WORK/test.lmf" --cfg "$WORK/abi.cfg" > "$WORK/lmf.log" 2>&1
+check "ABI override" contains "$WORK/lmf.log" "ABI: ccrl"
+printf 'abi = bogus\n' > "$WORK/abi.cfg"
+"$RS" info --abs "$WORK/test.lmf" --cfg "$WORK/abi.cfg" > "$WORK/lmf.log" 2>&1
+check "Bad ABI rejected" test $? -eq 2
+cp "$WORK/test.lmf" "$WORK/lmf.abs"
+"$RS" info --abs "$WORK/lmf.abs" > "$WORK/lmf.log" 2>&1
+check "LMF identified by bytes" contains "$WORK/lmf.log" "ABI: ca78k0r"
+for mode in truncated section symbols aux string unterminated stringcut address lines magic; do
+    check "mklmf $mode" "$WORK/mklmf" "$mode" "$WORK/bad.lmf"
+    "$RS" info --abs "$WORK/bad.lmf" > "$WORK/lmf.log" 2>&1
+    check "LMF malformed $mode rejected" test $? -eq 2
+done
+check "Unknown format magic bytes" contains "$WORK/lmf.log" "78 56 34 12"
+
+printf '#05\n;FF PUBLIC\n02FE001_init\n=\n' > "$WORK/test.sym"
+"$RS" info --abs "$WORK/test.lmf" -v > "$WORK/lmf.log" 2>&1
+check "SYM mismatch warning" contains "$WORK/lmf.log" "食い違います"
+rm "$WORK/test.sym"
+check "mklmf no debug" "$WORK/mklmf" nodbg "$WORK/nodbg.lmf"
+# lmfprog.s の main / cycle の固定アドレス（再生成時も確認する）。
+printf '#05\n;FF PUBLIC\n010010E_main\n0100141_cycle\n02FE000_init\n02FE002_ticks\n=\n' > "$WORK/nodbg.sym"
+printf 'mod,cycle,SYM fallback,1,2\n#COMMENT,ticks:2,init:2,ticks:2\n,4,0x1234,5\n' > "$WORK/sym.csv"
+rl78_run "LMF without debug uses SYM addresses" 0 "総数 1, OK 1, NG 0" -- --abs "$WORK/nodbg.lmf" "$WORK/sym.csv"
+
 echo "== 本物のバックエンドの GUI サーバ"
 if command -v curl > /dev/null 2>&1; then
     PORT=$((20000 + ($$ + 7) % 20000))

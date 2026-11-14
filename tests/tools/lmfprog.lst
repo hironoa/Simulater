@@ -1,0 +1,96 @@
+
+/var/folders/q0/zwcbvnzs6lsdfyq_6khy350h0000gn/T//lmfprog.NYAiD3/t.elf:     file format elf32-rl78
+
+
+Disassembly of section .text:
+
+00000000 <_start-0x100>:
+   0:	00                            	nop
+   1:	01                            	addw	ax, ax
+	...
+
+00000100 <_start>:
+ 100:	cb f8 e0 fd                   	movw	sp, #0xfde0
+ 104:	30 34 12                      	movw	ax, #0x1234
+ 107:	bf 00 e0                      	movw	!fe000 <.plt+0xfdeaa>, ax
+ 10a:	fc 0e 01 00                   	call	!!10e <_main>
+
+0000010e <_main>:
+ 10e:	ef fe                         	br	$10e <_main>
+
+00000110 <_echo8>:
+ 110:	12                            	movw	bc, ax
+ 111:	d7                            	ret
+
+00000112 <_echo16>:
+ 112:	12                            	movw	bc, ax
+ 113:	d7                            	ret
+
+00000114 <_second8>:
+ 114:	c7                            	push	hl
+ 115:	fb f8 ff                      	movw	hl, sp
+ 118:	8c 06                         	mov	a, [hl+6]
+ 11a:	72                            	mov	c, a
+ 11b:	c6                            	pop	hl
+ 11c:	d7                            	ret
+
+0000011d <_second16>:
+ 11d:	c7                            	push	hl
+ 11e:	fb f8 ff                      	movw	hl, sp
+ 121:	ac 06                         	movw	ax, [hl+6]
+ 123:	12                            	movw	bc, ax
+ 124:	c6                            	pop	hl
+ 125:	d7                            	ret
+
+00000126 <_second32>:
+ 126:	c7                            	push	hl
+ 127:	fb f8 ff                      	movw	hl, sp
+ 12a:	ac 06                         	movw	ax, [hl+6]
+ 12c:	12                            	movw	bc, ax
+ 12d:	ac 08                         	movw	ax, [hl+8]
+ 12f:	14                            	movw	de, ax
+ 130:	c6                            	pop	hl
+ 131:	d7                            	ret
+
+00000132 <_ret32>:
+ 132:	32 34 12                      	movw	bc, #0x1234
+ 135:	34 78 56                      	movw	de, #0x5678
+ 138:	d7                            	ret
+
+00000139 <_readptr>:
+ 139:	c7                            	push	hl
+ 13a:	16                            	movw	hl, ax
+ 13b:	8b                            	mov	a, [hl]
+ 13c:	72                            	mov	c, a
+ 13d:	c6                            	pop	hl
+ 13e:	d7                            	ret
+
+0000013f <_echoptr>:
+ 13f:	12                            	movw	bc, ax
+ 140:	d7                            	ret
+
+00000141 <_cycle>:
+ 141:	af 02 e0                      	movw	ax, !fe002 <.plt+0xfdeac>
+ 144:	a1                            	incw	ax
+ 145:	bf 02 e0                      	movw	!fe002 <.plt+0xfdeac>, ax
+ 148:	d7                            	ret
+
+00000149 <_first32>:
+ 149:	d7                            	ret
+
+0000014a <_third32>:
+ 14a:	c7                            	push	hl
+ 14b:	fb f8 ff                      	movw	hl, sp
+ 14e:	ac 08                         	movw	ax, [hl+8]
+ 150:	12                            	movw	bc, ax
+ 151:	ac 0a                         	movw	ax, [hl+10]
+ 153:	14                            	movw	de, ax
+ 154:	c6                            	pop	hl
+ 155:	d7                            	ret
+
+Disassembly of section .plt:
+
+00000156 <.plt>:
+ 156:	00                            	nop
+ 157:	00                            	nop
+	...

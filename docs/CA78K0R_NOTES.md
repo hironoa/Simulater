@@ -221,3 +221,53 @@ winAMS は lmf を直接読まず、内蔵の「OMF 変換」で ガイオ独自
 3. 呼び出し規約は CC-RL と大きく違う: 第 1 引数のみ AX（（4 バイトは AX+BC））、残りはスタック（右から左）、caller が解放、戻りは BC（4 バイトは DE:BC）、HL と `_@KREG` は callee-save、AX/BC/DE は破壊される。戻り番地は 4 バイト。小モデルは `call !addr16`、中/大は `call !!addr20`。
 4. 型: int=2、long/float/double=4（double も 4）、char は signed、構造体は 2 バイト整列で入れ子も 2 バイト境界。enum は 1B になりうる。
 5. winAMS は `RL78/78K0R RENESAS OMF Converter` で lmf → xlo（SAUF）に変換して使う。SAUF の仕様は不明。
+
+## 第1段階実装での機械語確認（2026-11-14）
+
+`tests/tools/check_lmf.c` が CPU コアの `rl78_disasm_buf` で実物を逆アセンブルした。
+サンプル自体とその機械語はリポジトリへ取り込んでいない。
+
+- **1B の第2引数は2B枠【観察】**: RL78_FunctionDemoCode の `lcd_init`:
+  `0x00582 CLRW AX; 0x00583 PUSH AX; 0x00584 MOV X,#38H; 0x00586 CALL !!00503H; 0x0058A POP AX`。
+  呼び先 `lcd_write(uint8_t data,uint8_t op)` は `0x00503 PUSH HL; 0x00504 PUSH AX; 0x00505 PUSH AX;
+  0x00506 MOVW HL,!0FFF8H`（SP を HL へ）、`0x00514 MOV A,[HL+0AH]` で op を読む。
+  入口からの退避6Bと戻り番地4Bにより、入口SP+4が第2引数の下位バイト。caller の POP AX も2B枠を裏付ける。
+  追加例: Sample_CSI の main `0x00233 ONEW AX; 0x00234 PUSH AX; 0x00235 MOV X,#06H;
+  0x00237 CALL !!003C0H; 0x0023B POP AX; 0x0023C MOV A,C` は
+  `R_CSI10_CmdSend(WREN,1)` の1B引数と C の1B戻り値を確認できる。
+- **4B 第1引数の AX/BC 順は未確認**: 5件のデバッグ情報の全関数を調べたが、該当するC関数も呼び出し対もない。
+  `long` ローカルと演算ランタイムは存在するが、ランタイム固有の規約からC ABIを推測しない。
+  現実装は「AX/BC の順序が未確認のため対応外」として拒否する。3B引数も対応外。
+- near/far CALL ともシミュレータ側の入口PCは20bitのままで、戻り番地を4B積む既存の処理を共有する。
+  LMFの関数ポインタ型・far型の符号化は未確認なので復元しない。nearデータポインタだけ0xF0000を補う。
+
+### 実物5件の確認結果
+
+`LMF_SAMPLES=/path/to/lmf_samples tests/rl78/check_lmf_samples.sh`。
+Cローダの定義バイトは `.hex` と全件一致。`.sym` の名前とアドレスの集合も一致
+（公開/ローカルを含む。KeyandLED のbit 1件は位置の符号化が未確認のため除外）。
+
+| サンプル | 定義バイト | 比較シンボル | 無設定時の発振待ちPC | スタブ後 main | 呼び出しCSV |
+|---|---:|---:|---|---|---:|
+| LED | 461 | 40 | 0x001EB | 0x00187 | 1/1 |
+| AD | 1201 | 76 | 0x00317 | 0x002CE | 1/1 |
+| CSI | 1086 | 87 | 0x002C5 | 0x0021C | 1/1 |
+| KeyandLED | 1346 | 75（bit除外） | 0x002B6 | 0x001F6 | 4/4 |
+| FunctionDemoCode | 2789 | 106 | 0x00485 | 0x00966 | 1/1 |
+
+全件 `R_CGC_Create` の OSTC 待ち。確認用設定は次のとおり。
+```
+startup_max_insns = 1000000
+stub = R_CGC_Create:R_CGC_Get_ResetSource
+```
+これで周辺クロック設定だけを読み取りのみの既存void関数に置換し、残りのスタートアップ（データコピー・ゼロ初期化）は実行する。
+`init_end = R_CGC_Create` でも待ちの前に止められるが、RAM初期化前なので今回の呼び出し検証には使っていない。
+
+期待値の根拠（Cソースを読んで手計算）:
+LED の `r_main.c/R_MAIN_UserInit` は EI のみなので入力した i=123を保持。
+AD の `r_cg_adc.c/delay(3)`、FunctionDemoCode の `r_cg_AD.c/AD_delay(3)` は引数を減らすループだけで、
+それぞれ mun[0]=123 / time_lenth=123を保持。
+CSI の `r_cg_serial_user.c/r_csi10_callback_sendend` は end_txif=1。
+KeyandLED の `r_cg_digtalLED.c/Getcode(0,1,9,22)` の各呼び出しは63,6,103,0を返す。
+実物で未対応警告となったのは `bit_control`: 型0x034C / 記憶クラス0x27のみ
+（`.sym` のbit属性0x03も照合対象外として警告）。CPUコアの不足・バグはこの確認では見つからなかった。

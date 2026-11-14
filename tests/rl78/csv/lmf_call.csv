@@ -1,0 +1,38 @@
+mod,echo8,byte AX to BC,1,1
+#COMMENT,@a,echo8@@
+,0,0
+,255,255
+mod,echo16,signed AX to BC,1,1
+#COMMENT,@a,echo16@@
+,-1234,-1234
+,32767,32767
+mod,second8,byte stack slot,2,1
+#COMMENT,@a,@b,second8@@
+,13,231,231
+mod,second16,word stack slot,2,1
+#COMMENT,@a,@b,second16@@
+,1234,54321,54321
+mod,second32,long stack low word first,2,1
+#COMMENT,@a,@b,second32@@
+,77,0x12345678,0x12345678
+,42,-123456789,-123456789
+mod,ret32,DE BC return,0,1
+#COMMENT,ret32@@
+,0x56781234
+mod,readptr,near pointer AX,2,1
+#COMMENT,arr[0],@a,readptr@@
+,171,0xE004,171
+mod,cycle,driver and startup,0,2
+#COMMENT,init,ticks
+,0x1234,1
+,0x1234,2
+,0x1234,3
+mod,cycle,unknown type explicit size,2,2
+#COMMENT,unknown:2,mystery:2,unknown:2,mystery:2
+,123,456,123,456
+mod,third32,mixed stack offsets,3,1
+#COMMENT,@a,@b,@c,third32@@
+,17,239,0x12345678,0x12345678
+mod,cycle,static variables,2,2
+#COMMENT,lmf_test.c/private,cycle@local,lmf_test.c/private,cycle@local
+,789,321,789,321

@@ -1,6 +1,6 @@
 # Simulater
 
-RL78 向け組み込みソフトを、CS+ / CC-RL でビルドしたロードモジュール（`.abs`）のまま PC 上で実行するシミュレータ。
+RL78 向け組み込みソフトを、CC-RL の `.abs` または CA78K0R の `.lmf`のまま PC 上で実行するシミュレータ。
 
 - WinAMS 用のテスト CSV を読み込み、同じ書式の結果 CSV を出力する（バッチ実行）
 - ブラウザの画面で入力信号を変えながら、結果を波形でリアルタイムに見る（GUI 実行）
@@ -10,7 +10,7 @@ RL78 向け組み込みソフトを、CS+ / CC-RL でビルドしたロードモ
 
 ## 用意するもの
 
-- **WinAMS に読み込ませている `.abs`**（テストドライバとスタブを含めて CS+ でビルドしたもの。デバッグ情報つき）
+- **WinAMS に読み込ませている CC-RL の `.abs` または CA78K0R の `.lmf`**（テストドライバとスタブを含めて CS+ でビルドしたもの。デバッグ情報つき）
 - WinAMS 用のテスト CSV
 - `sim.exe`。次のどちらかで入手する
   - GitHub Actions の成果物 `sim-windows-x64`（`sim.exe`、`sim_gui.html`、`sim.cfg` の見本）
@@ -25,6 +25,8 @@ sim info --abs DefaultBuild\project.abs -v     # 読み込めるか、main ま�
 sim list --abs DefaultBuild\project.abs g_     # 変数と関数の一覧（名前の一部で絞り込み）
 sim run  --abs DefaultBuild\project.abs test.csv -o result
 ```
+
+`--abs` は `.lmf` も受け付ける（上の `project.abs` を `project.lmf` に置き換える）。種類はファイル先頭で判定し、ABIを自動選択する。`sim info` で選択結果を確認できる。
 
 `sim run` は結果 CSV を `result` フォルダに入力と同じ名前で作り、最後に件数（OK / NG / NO Check）と
 実行した命令数・所要時間・命令/秒を表示する。NG が 1 つでもあれば終了コード 1、実行できないエラーは 2。
@@ -88,11 +90,12 @@ sim gui --abs DefaultBuild\project.abs --func <周期関数> --period-ms 5
 
 ## 設定ファイル sim.cfg
 
-`.abs` と同じフォルダに置くと自動で読む。見本は [example/sim.cfg](example/sim.cfg)。読めない値（数値でない、範囲外など）は、
+`.abs` / `.lmf` と同じフォルダに置くと自動で読む。見本は [example/sim.cfg](example/sim.cfg)。読めない値（数値でない、範囲外など）は、
 既定値に置き換えずにエラー（終了コード 2）で止まる。主な項目:
 
 | キー | 内容 |
 |---|---|
+| `abi = auto \| ccrl \| ca78k0r` | 呼び出し規約。auto は ELF→CC-RL、LMF→CA78K0R |
 | `stub = 元の関数:スタブ関数` | 元の関数が呼ばれたらスタブへ飛ばす（WinAMS の「置換」）。複数書ける |
 | `stub_auto = on` | `AMSTB_<関数名>` がある関数をすべて置換する |
 | `core = auto \| S1 \| S2 \| S3` | CPU コア種別。品種が分からなければ `auto`（既定） |
@@ -103,6 +106,9 @@ sim gui --abs DefaultBuild\project.abs --func <周期関数> --period-ms 5
 | `max_insns` | 1 回の呼び出しの命令数の上限（暴走の検出） |
 
 ## 制限
+
+- CA78K0R は第1段階。実測した整数型・1次元配列・nearデータポインタに限定する。構造体・enum・bit・far・関数ポインタ・浮動小数などの未確認型は型不明として登録し、`名前:バイト数` で使う。
+  4Bの第1引数はAX/BC順が未確認なのでエラー。同名 `.sym` は照合用、およびデバッグ情報が全くないLMFのアドレス補助として読む。HEX単独入力は未対応。詳細は設計書のCA78K0R節。
 
 - 周辺機能（タイマ、シリアル、A/D など）は模擬しない。SFR は読み書きできるメモリとして扱う。
   割り込みは、テストドライバがハンドラ関数を直接呼ぶ前提
@@ -116,7 +122,7 @@ sim gui --abs DefaultBuild\project.abs --func <周期関数> --period-ms 5
 
 ```
 rl78/      RL78 CPU コア（単体でテストできる）
-runtime/   CSV の実行、変数名の解決、GUI サーバ、.abs（ELF / DWARF）の読み込み
+runtime/   CSV の実行、変数名の解決、GUI サーバ、.abs（ELF / DWARF）と .lmf の読み込み
 gui/       GUI のソース（ビルド済みの gui/dist/sim_gui.html を同梱）
 tests/     自動テスト
 docs/      設計書

@@ -17,6 +17,7 @@
 #define _CRT_SECURE_NO_WARNINGS
 #include "rl78_be.h"
 #include "rl78.h"
+#include "rl78_abi.h"
 #include "sim_cfg.h"
 #include "sim_util.h"
 
@@ -39,6 +40,7 @@ typedef struct {
     rl78_symtab st;
     rl78_map map;
     int have_map;
+    int is_lmf, ca78k0r;
     rl78_warns w;
     sim_cfg cfg;
     char *abs_path, *map_path;
@@ -233,6 +235,14 @@ static int layout(be_t *z, char *err, size_t errlen)
         return -1;
     }
     /* スタック */
+    if (z->is_lmf) {
+        v1 = sym_value(z, "_@STBEG", &found1);
+        v2 = sym_value(z, "_@STEND", &found2);
+        if (found1 && found2 && v1 > v2 && v1 <= z->ram_hi && v2 >= z->ram_lo) {
+            z->stack_lo = v2; z->stack_hi = v1; z->have_stack = 1;
+        }
+        return 0;
+    }
     v1 = sym_value(z, "__STACK_ADDR_START", &found1);
     v2 = sym_value(z, "__STACK_ADDR_END", &found2);
     if (found1 && found2 && v1 > v2) { z->stack_lo = v2; z->stack_hi = v1; z->have_stack = 1; }
@@ -411,70 +421,6 @@ static int run_to(be_t *z, uint32_t stop_at, uint64_t limit, const char *what, c
 
 /* ================================================================ 呼び出し */
 
-enum { R_A, R_X, R_B, R_C, R_D, R_E };
-
-typedef struct {
-    int used[6];
-} regs_t;
-
-static int take1(regs_t *g, int r) { if (g->used[r]) return 0; g->used[r] = 1; return 1; }
-
-static void set8(be_t *z, int r, uint32_t v)
-{
-    static const rl78_reg m[6] = {RL78_REG_A, RL78_REG_X, RL78_REG_B, RL78_REG_C, RL78_REG_D, RL78_REG_E};
-    rl78_set_reg(z->cpu, m[r], v & 0xFFu);
-}
-
-static int pair_free(regs_t *g, int hi, int lo) { return !g->used[hi] && !g->used[lo]; }
-
-/* 引数をレジスタに置く。置けなければ 0（スタック渡し） */
-static int put_reg_arg(be_t *z, regs_t *g, uint32_t size, int is_far, uint64_t v)
-{
-    if (size == 1) {
-        static const int pr[6] = {R_A, R_X, R_C, R_B, R_E, R_D};
-        int i;
-        for (i = 0; i < 6; i++) if (take1(g, pr[i])) { set8(z, pr[i], (uint32_t)v); return 1; }
-        return 0;
-    }
-    if (size == 2) {
-        if (pair_free(g, R_A, R_X)) { g->used[R_A] = g->used[R_X] = 1; rl78_set_reg(z->cpu, RL78_REG_AX, (uint32_t)v & 0xFFFFu); return 1; }
-        if (pair_free(g, R_B, R_C)) { g->used[R_B] = g->used[R_C] = 1; rl78_set_reg(z->cpu, RL78_REG_BC, (uint32_t)v & 0xFFFFu); return 1; }
-        if (pair_free(g, R_D, R_E)) { g->used[R_D] = g->used[R_E] = 1; rl78_set_reg(z->cpu, RL78_REG_DE, (uint32_t)v & 0xFFFFu); return 1; }
-        return 0;
-    }
-    if (size == 4 && is_far) {
-        /* A-DE, X-DE, C-DE, B-DE, X-BC */
-        static const int page[5] = {R_A, R_X, R_C, R_B, R_X};
-        int i;
-        for (i = 0; i < 5; i++) {
-            int lo_hi = i < 4 ? R_D : R_B, lo_lo = i < 4 ? R_E : R_C;
-            if (!g->used[page[i]] && pair_free(g, lo_hi, lo_lo)) {
-                g->used[page[i]] = g->used[lo_hi] = g->used[lo_lo] = 1;
-                set8(z, page[i], (uint32_t)(v >> 16) & 0x0Fu);
-                rl78_set_reg(z->cpu, i < 4 ? RL78_REG_DE : RL78_REG_BC, (uint32_t)v & 0xFFFFu);
-                return 1;
-            }
-        }
-        return 0;
-    }
-    if (size == 4) {
-        if (pair_free(g, R_B, R_C) && pair_free(g, R_A, R_X)) {
-            g->used[R_A] = g->used[R_X] = g->used[R_B] = g->used[R_C] = 1;
-            rl78_set_reg(z->cpu, RL78_REG_AX, (uint32_t)v & 0xFFFFu);
-            rl78_set_reg(z->cpu, RL78_REG_BC, (uint32_t)(v >> 16) & 0xFFFFu);
-            return 1;
-        }
-        if (pair_free(g, R_D, R_E) && pair_free(g, R_B, R_C)) {
-            g->used[R_B] = g->used[R_C] = g->used[R_D] = g->used[R_E] = 1;
-            rl78_set_reg(z->cpu, RL78_REG_BC, (uint32_t)v & 0xFFFFu);
-            rl78_set_reg(z->cpu, RL78_REG_DE, (uint32_t)(v >> 16) & 0xFFFFu);
-            return 1;
-        }
-        return 0;
-    }
-    return 0;
-}
-
 static int is_far_ptr(const sim_type *t) { return t && t->kind == SIM_T_PTR && t->size >= 3; }
 
 static void poke(be_t *z, uint32_t a, const uint8_t *p, size_t n) { rl78_load(z->cpu, a, p, n); }
@@ -493,6 +439,7 @@ static int b_call(sim_backend *b, const sim_func *f, const int64_t *args, int na
     char what[300];
     const stub_t *st;
     if (nargs > SIM_MAX_ARGS_RL78) { snprintf(err, errlen, "引数が多すぎます"); return -1; }
+    if (z->ca78k0r && rl78_ca78k0r_check(f, err, errlen)) return -1;
     memset(&g, 0, sizeof g);
     z->ncalls++;
     /* レジスタを決まった値から始める（呼び出し後のレジスタは CC-RL では保証されない） */
@@ -501,21 +448,24 @@ static int b_call(sim_backend *b, const sim_func *f, const int64_t *args, int na
     rl78_set_reg(z->cpu, RL78_REG_DE, 0);
     rl78_set_reg(z->cpu, RL78_REG_HL, 0);
     sp = z->call_sp & ~1u;
-    if (f->ret && rsize > 4) {
+    if (!z->ca78k0r && f->ret && rsize > 4) {
         /* 5 バイト以上の戻り値: 呼び出し側の領域へのポインタを第 1 引数にする */
         sp = (sp - ((rsize + 1u) & ~1u)) & ~1u;
         retbuf = sp;
         has_hidden = 1;
         memset(blk, 0, sizeof blk);
         poke(z, retbuf, blk, rsize > 8 ? 8 : rsize);
-        put_reg_arg(z, &g, 2, 0, retbuf & 0xFFFFu);
+        rl78_ccrl_arg(z->cpu, &g, 2, 0, retbuf & 0xFFFFu);
     }
     for (i = 0; i < nargs; i++) {
         const sim_type *t = f->param_types[i];
         uint32_t sz = t ? t->size : 2;
         if (sz == 0) sz = 2;
         sizes[i] = sz;
-        onstack[i] = !put_reg_arg(z, &g, sz > 4 ? 99 : sz, is_far_ptr(t), (uint64_t)args[i]);
+        if (z->ca78k0r) {
+            onstack[i] = i != 0;
+            if (i == 0) rl78_set_reg(z->cpu, RL78_REG_AX, (uint32_t)args[i] & (sz == 1 ? 0xFFu : 0xFFFFu));
+        } else onstack[i] = !rl78_ccrl_arg(z->cpu, &g, sz > 4 ? 99 : sz, is_far_ptr(t), (uint64_t)args[i]);
         if (onstack[i]) stack_bytes += (sz + 1u) & ~1u;
     }
     base = (sp - stack_bytes) & ~1u;
@@ -546,7 +496,9 @@ static int b_call(sim_backend *b, const sim_func *f, const int64_t *args, int na
     }
     *ret_raw = 0;
     if (!f->ret || f->ret->kind == SIM_T_VOID) return 0;
-    if (has_hidden) {
+    if (z->ca78k0r) {
+        *ret_raw = rl78_ca78k0r_ret(z->cpu, f->ret);
+    } else if (has_hidden) {
         uint8_t r[8];
         uint64_t v = 0;
         int k;
@@ -680,14 +632,17 @@ static void b_print_info(sim_backend *b, FILE *out)
     be_t *z = b->impl;
     int i, v;
     fprintf(out, "ファイル: %s\n", z->abs_path);
-    fprintf(out, "ELF: 32 ビット リトルエンディアン、e_machine %u%s、種類 %u（%s）、エントリ 0x%05X、e_flags 0x%X\n",
+    fprintf(out, "ファイル種類: %s、ABI: %s\n", z->is_lmf ? "LMF" : "ELF", z->ca78k0r ? "ca78k0r" : "ccrl");
+    if (!z->is_lmf) fprintf(out, "ELF: 32 ビット リトルエンディアン、e_machine %u%s、種類 %u（%s）、エントリ 0x%05X、e_flags 0x%X\n",
             z->elf.machine, z->elf.machine == 197 ? "（RL78）" : "（RL78 ではない）", z->elf.etype,
             z->elf.etype == 2 ? "EXEC" : "?", z->elf.entry, z->elf.flags);
     fprintf(out, "設定ファイル: %s\n", z->cfg.path ? z->cfg.path : "なし");
-    fprintf(out, "DWARF: CU %d 個（", z->st.ncu);
-    for (v = 2, i = 0; v <= 5; v++) if (z->st.cu_versions[v]) fprintf(out, "%sバージョン %d: %d", i++ ? "、" : "", v, z->st.cu_versions[v]);
-    fprintf(out, "%s）、飛ばした CU %d 個%s%s%s\n", i ? "" : "なし", z->st.nskipped_cu, z->st.producer ? "、" : "",
-            z->st.producer ? z->st.producer : "", z->st.dwarf_ok ? "" : "。デバッグ情報がないので .symtab / .map のアドレスだけ使います");
+    if (!z->is_lmf) {
+        fprintf(out, "DWARF: CU %d 個（", z->st.ncu);
+        for (v = 2, i = 0; v <= 5; v++) if (z->st.cu_versions[v]) fprintf(out, "%sバージョン %d: %d", i++ ? "、" : "", v, z->st.cu_versions[v]);
+        fprintf(out, "%s）、飛ばした CU %d 個%s%s%s\n", i ? "" : "なし", z->st.nskipped_cu, z->st.producer ? "、" : "",
+                z->st.producer ? z->st.producer : "", z->st.dwarf_ok ? "" : "。デバッグ情報がないので .symtab / .map のアドレスだけ使います");
+    }
     fprintf(out, "コア: %s、HALT: %s、STOP: %s\n", z->core_desc,
             z->cc.halt_policy == RL78_SLEEP_IGNORE ? "読み飛ばす" : "止める", z->cc.stop_policy == RL78_SLEEP_IGNORE ? "読み飛ばす" : "止める");
     if (z->cc.mirror_end) fprintf(out, "ミラー: 0x%05X〜0x%05X <- 0x%05X〜（PMC.MAA=1 で +0x10000）\n", z->cc.mirror_start, z->cc.mirror_end - 1, z->cc.mirror_src);
@@ -801,7 +756,7 @@ static int setup_core(be_t *z, char *err, size_t errlen)
     } else {
         /* .const の置き場所からミラーの先頭を推す（その手前はデータフラッシュ） */
         uint32_t lo = 0xF2000u;
-        const rl78_sect *c = rl78_elf_section(&z->elf, ".const");
+        const rl78_sect *c = rl78_elf_section(&z->elf, z->is_lmf ? "@@CNST" : ".const");
         if (c && c->size && c->addr >= 0x1000u && c->addr < 0x10000u) lo = 0xF0000u + (c->addr & ~0xFFFu);
         if (lo < 0xF1000u) lo = 0xF1000u;
         z->cc.mirror_start = lo;
@@ -973,7 +928,7 @@ static void check_map(be_t *z)
 }
 
 static const char *const KNOWN_KEYS[] = {
-    "abs", "map", "core", "mdu", "mirror", "rom_size", "ram", "heap", "sentinel", "call_sp", "init_end", "func",
+    "abs", "abi", "map", "core", "mdu", "mirror", "rom_size", "ram", "heap", "sentinel", "call_sp", "init_end", "func",
     "stub", "stub_auto", "cpu_hz", "max_insns", "startup_max_insns", "halt", "stop", "ram_fill", "bitfield_order", NULL
 };
 
@@ -1011,8 +966,30 @@ sim_backend *sim_backend_open(const sim_open_opts *o, char *err, size_t errlen)
         be_free(z);
         return NULL;
     }
-    if (rl78_elf_load(&z->elf, z->abs_path, err, errlen)) { be_free(z); return NULL; }
-    if (z->elf.machine != 197)
+    {
+        unsigned char magic[4] = {0};
+        FILE *fp = fopen(z->abs_path, "rb");
+        size_t n;
+        if (!fp) { snprintf(err, errlen, "%s を読めません", z->abs_path); be_free(z); return NULL; }
+        n = fread(magic, 1, 4, fp); fclose(fp);
+        z->is_lmf = n >= 2 && magic[0] == 0x48 && magic[1] == 0x11;
+        if (z->is_lmf) {
+            if (rl78_lmf_load(&z->elf, &z->st, &z->w, z->abs_path, err, errlen)) { be_free(z); return NULL; }
+        } else if (n == 4 && !memcmp(magic, "\x7f" "ELF", 4)) {
+            if (rl78_elf_load(&z->elf, z->abs_path, err, errlen)) { be_free(z); return NULL; }
+        } else {
+            snprintf(err, errlen, "未対応のファイル形式（先頭 %zu バイト: %02X %02X %02X %02X。ELF / LMF が必要）", n, magic[0], magic[1], magic[2], magic[3]);
+            be_free(z); return NULL;
+        }
+        z->ca78k0r = z->is_lmf;
+        s = sim_cfg_get(&z->cfg, "abi");
+        if (s && strcmp(s, "auto")) {
+            if (!strcmp(s, "ccrl")) z->ca78k0r = 0;
+            else if (!strcmp(s, "ca78k0r")) z->ca78k0r = 1;
+            else { snprintf(err, errlen, "sim.cfg: abi = %s は auto / ccrl / ca78k0r にしてください", s); be_free(z); return NULL; }
+        }
+    }
+    if (!z->is_lmf && z->elf.machine != 197)
         rl78_warn(&z->w, "ELF の e_machine が %u です（RL78 は 197）。RL78 として読みます", z->elf.machine);
     /* シンボル */
     memset(&dopt, 0, sizeof dopt);
@@ -1031,9 +1008,11 @@ sim_backend *sim_backend_open(const sim_open_opts *o, char *err, size_t errlen)
             dopt.addr_class_size[cls] = (int)sz;
         }
     }
-    rl78_symtab_init(&z->st);
-    rl78_dwarf_read(&z->st, &z->elf, &dopt, &z->w);
-    rl78_symtab_from_elf(&z->st, &z->elf, &z->w);
+    if (!z->is_lmf) {
+        rl78_symtab_init(&z->st);
+        rl78_dwarf_read(&z->st, &z->elf, &dopt, &z->w);
+        rl78_symtab_from_elf(&z->st, &z->elf, &z->w);
+    }
     /* リンクマップ */
     if ((s = sim_cfg_get(&z->cfg, "map"))) z->map_path = sim_cfg_path(&z->cfg, s);
     else {
@@ -1044,15 +1023,23 @@ sim_backend *sim_backend_open(const sim_open_opts *o, char *err, size_t errlen)
         memcpy(z->map_path, z->abs_path, stem);
         strcpy(z->map_path + stem, ".map");
     }
-    if (rl78_map_load(&z->map, z->map_path) == 0) {
+    if (!z->is_lmf && rl78_map_load(&z->map, z->map_path) == 0) {
         z->have_map = 1;
         check_map(z);
         rl78_symtab_from_map(&z->st, &z->map, &z->w);
     } else if (sim_cfg_get(&z->cfg, "map")) {
         rl78_warn(&z->w, "リンクマップ %s を読めません", z->map_path);
     }
-    if (!z->st.dwarf_ok) rl78_warn(&z->w, "デバッグ情報（DWARF）がないか読めませんでした。変数は 'name:バイト数' で指定してください");
+    if (!z->is_lmf && !z->st.dwarf_ok) rl78_warn(&z->w, "デバッグ情報（DWARF）がないか読めませんでした。変数は 'name:バイト数' で指定してください");
 
+    if (z->is_lmf) {
+        const char *dot = strrchr(sim_basename(z->abs_path), '.');
+        size_t stem = dot ? (size_t)(dot-z->abs_path) : strlen(z->abs_path);
+        char *path = sim_xmalloc(stem+5);
+        memcpy(path,z->abs_path,stem); strcpy(path+stem,".sym");
+        rl78_sym_load(&z->elf,&z->st,&z->w,path);
+        free(path);
+    }
     if (layout(z, err, errlen)) { be_free(z); return NULL; }
     if (setup_core(z, err, errlen)) { be_free(z); return NULL; }
     if (choose_sentinel(z, err, errlen) || choose_heap(z, err, errlen)) { be_free(z); return NULL; }
