@@ -30,6 +30,108 @@ check() {
     if "$@"; then ok "$_name"; else ng "$_name"; fi
 }
 contains() { grep -F -q -- "$2" "$1"; }
+lacks() { ! grep -F -q -- "$2" "$1"; }
+
+# ---------------------------------------------------------------- defines のコンパイルスイッチ（モックと本物で共通）
+# tests/defines/cond のヘッダは番地を 4 桁（0xF960 など）で書いてある。モックは defines_near_base = 0 で 0x0F960、
+# 本物は既定の 0xF0000 を足して 0xFF960 になる。
+COND="$T/defines/cond"
+# cond_cfg 行...: $WORK/cond.cfg を作る（COND_HI が 0F9 ならモック用）
+cond_cfg() {
+    {
+        printf 'defines = %s\n' "$COND"
+        [ "$COND_HI" = 0F9 ] && printf 'defines_near_base = 0\n'
+        for _l in "$@"; do printf '%s\n' "$_l"; done
+    } > "$WORK/cond.cfg"
+}
+# cond_list sim の引数...: sim list の結果を $WORK/cond_list.log に、sim info を $WORK/cond_info.log に取る
+cond_list() {
+    "$COND_SIM" list $COND_ARGS --cfg "$WORK/cond.cfg" "$@" COND_ > "$WORK/cond_list.log" 2>&1
+    "$COND_SIM" info $COND_ARGS --cfg "$WORK/cond.cfg" "$@" > "$WORK/cond_info.log" 2>&1
+}
+# cond_at 番地の下 2 桁 名前 型: 取り込まれた番地と型
+cond_at() { grep -q -E "^var  0x${COND_HI}$1 $2 +$3 " "$WORK/cond_list.log"; }
+# cond_suite 名前 sim 番地の上位（0F9 / FF9） テスト CSV [sim の共通引数]
+cond_suite() {
+    _t=$1; COND_SIM=$2; COND_HI=$3; _csv=$4; COND_ARGS=${5:-}
+    # スイッチを与えない: #else の枝。未定義の識別子の一覧に出る
+    cond_cfg
+    cond_list
+    check "$_t: no switch takes the #else branches" sh -c 'grep -q -E "^var  0x${1}64 COND_REG +u8 " "$2" && grep -q -E "^var  0x${1}67 COND_SIM +u8 " "$2" && grep -q -E "^var  0x${1}69 COND_AB +u8 " "$2" && grep -q -E "^var  0x${1}6D COND_NEST +u8 " "$2"' sh "$COND_HI" "$WORK/cond_list.log"
+    check "$_t: switch defined in an included header (#elif COND_BOARD == 3)" cond_at 6F COND_INC u8
+    check "$_t: short-circuit keeps division by an undefined name determinate" cond_at 77 COND_SHORT u8
+    check "$_t: indeterminate #if reads every branch, first definition wins" cond_at 72 COND_UNKNOWN u8
+    check "$_t: same-named header nearest to the includer (near)" cond_at 78 COND_NEAR_OK u8
+    check "$_t: same-named header nearest to the includer (far)" cond_at 7A COND_FAR_OK u8
+    check "$_t: include cycle stops and both files are read" sh -c 'grep -q "COND_CYCLE " "$1" && grep -q "COND_CYCLE_B " "$1"' sh "$WORK/cond_list.log"
+    check "$_t: macro in a .c after its includes" cond_at 84 COND_LOCAL u8
+    check "$_t: info shows cond=on and the time breakdown" sh -c 'grep -q "^defines cond=on roots=4 " "$1" && grep -q -E "^defines time: scan=[0-9.]+ s read=[0-9.]+ s cond=[0-9.]+ s resolve=[0-9.]+ s" "$1"' sh "$WORK/cond_info.log"
+    check "$_t: info counts evaluated and indeterminate #if, missing and cut includes" sh -c 'grep -q -E "include-missing=2 include-cut=[1-9][0-9]* if-evaluated=[1-9][0-9]* if-indeterminate=1$" "$1"' sh "$WORK/cond_info.log"
+    check "$_t: undefined identifiers listed with reference counts" sh -c 'grep -q -x "  PRODUCT (4)" "$1" && grep -q -x "  SIM (2)" "$1" && grep -q -x "  COND_UNSET_SWITCH (1)" "$1" && grep -q -x "  COND_A (1)" "$1"' sh "$WORK/cond_info.log"
+    check "$_t: include guards are not listed as undefined" sh -c '! grep -q -E "COND_PRODUCT_H|COND_SWITCH_H|COND_TYPES_H" "$1"' sh "$WORK/cond_info.log"
+    cond_list -v
+    check "$_t: verbose lists the indeterminate #if with file and line" sh -c 'grep -q "判定不能: .*cond_product.h:58: #if COND_FUNC(1) > 0" "$1"' sh "$WORK/cond_info.log"
+    check "$_t: verbose lists names defined elsewhere but not visible" contains "$WORK/cond_info.log" "  COND_HAS_SIM (1)"
+    check "$_t: verbose lists differing duplicates with file and line" sh -c 'grep -q "異なる重複 COND_UNKNOWN: .*cond_product.h:59 / .*cond_product.h:61" "$1"' sh "$WORK/cond_info.log"
+    # PRODUCT = 1
+    cond_cfg 'cdef = PRODUCT=1'
+    cond_list
+    check "$_t: cdef PRODUCT=1 selects the #if branch and the 8-bit typedef" sh -c 'grep -q -E "^var  0x${1}60 COND_REG +u8 " "$2" && grep -q -E "^var  0x${1}6A COND_NEST +u8 " "$2"' sh "$COND_HI" "$WORK/cond_list.log"
+    check "$_t: PRODUCT no longer listed as undefined" sh -c '! grep -q "^  PRODUCT (" "$1"' sh "$WORK/cond_info.log"
+    "$COND_SIM" run $COND_ARGS --cfg "$WORK/cond.cfg" "$_csv" -o "$WORK/cond_out" > "$WORK/cond_run.log" 2>&1
+    check "$_t: PRODUCT=1 has neither the 16-bit register nor the member (exit 2)" test $? -eq 2
+    # PRODUCT = 2、SIM、COND_A（sim.cfg）と COND_DIV（コマンドライン）
+    cond_cfg 'cdef = PRODUCT=2' 'cdef = SIM' 'cdef = COND_A'
+    cond_list --cdef COND_DIV=2
+    check "$_t: cdef PRODUCT=2 selects the #elif branch and the 16-bit typedef" cond_at 62 COND_REG u16
+    check "$_t: #ifdef SIM" cond_at 66 COND_SIM u8
+    check "$_t: defined(A) && !defined(B)" cond_at 68 COND_AB u8
+    check "$_t: nested #if / #ifdef" cond_at 6B COND_NEST u8
+    check "$_t: switch from an included header sees SIM (COND_HAS_SIM)" cond_at 6E COND_INC u8
+    check "$_t: --cdef value used in arithmetic (8 / COND_DIV)" cond_at 76 COND_SHORT u8
+    check "$_t: effective cdef list in info" sh -c 'grep -q "有効な定義マクロ（cdef）: PRODUCT=2, SIM=1, COND_A=1" "$1" && grep -q "有効な定義マクロ（--cdef）: COND_DIV=2" "$1"' sh "$WORK/cond_info.log"
+    "$COND_SIM" run $COND_ARGS --cfg "$WORK/cond.cfg" "$_csv" -o "$WORK/cond_out" > "$WORK/cond_run.log" 2>&1
+    check "$_t: PRODUCT=2 reads and writes the 16-bit register and the struct member" sh -c '[ "$1" -eq 0 ] && grep -F -q "総数 1, OK 1, NG 0" "$2"' sh "$?" "$WORK/cond_run.log"
+    "$COND_SIM" list $COND_ARGS --cfg "$WORK/cond.cfg" --where COND_REG > "$WORK/cond_where.log" 2>&1
+    check "$_t: list --where shows file and line of the active definition" contains "$WORK/cond_where.log" "cond_product.h:15]"
+    check "$_t: list without --where shows the file only" sh -c 'grep -q "cond_product.h\]" "$1" && ! grep -q "cond_product.h:" "$1"' sh "$WORK/cond_list.log"
+    cond_list --cdef PRODUCT=1
+    check "$_t: --cdef overrides cdef in sim.cfg" cond_at 60 COND_REG u8
+    # cundef と B の定義
+    cond_cfg 'cdef = SIM' 'cundef = SIM' 'cdef = COND_A' 'cdef = COND_B'
+    cond_list
+    check "$_t: cundef removes a cdef" cond_at 67 COND_SIM u8
+    check "$_t: defined(A) && !defined(B) with B defined" cond_at 69 COND_AB u8
+    check "$_t: cundef shown in info" contains "$WORK/cond_info.log" "  cundef: SIM"
+    # defines_cond = off: 従来どおりすべての枝を読む（最初の定義を使い、違う内容を重複として数える）
+    cond_cfg 'cdef = PRODUCT=2' 'defines_cond = off'
+    cond_list
+    check "$_t: defines_cond = off reads every branch (first definition, first typedef)" cond_at 60 COND_REG u16
+    check "$_t: defines_cond = off evaluates nothing and counts duplicates" sh -c 'grep -q "^defines cond=off roots=10 includes=0 .*if-evaluated=0 if-indeterminate=0$" "$1" && grep -q -E "duplicates=1[0-9] " "$1"' sh "$WORK/cond_info.log"
+    # CS+ のプロジェクトファイル
+    cond_cfg "mtpj = $COND/cond_test.mtpj"
+    cond_list
+    check "$_t: mtpj macro definitions of the current build mode" sh -c 'grep -q -E "^var  0x${1}60 COND_REG +u8 " "$2" && grep -q -E "^var  0x${1}66 COND_SIM +u8 " "$2"' sh "$COND_HI" "$WORK/cond_list.log"
+    check "$_t: mtpj macro undefinition removes COND_A" cond_at 69 COND_AB u8
+    check "$_t: mtpj value with XML escapes ((1<<4))" cond_at 82 COND_ESC u8
+    check "$_t: info lists what was read from the mtpj" sh -c 'grep -q -F "mtpj macro definitions (5): PRODUCT=1, SIM, COND_A, COND_SHIFT=(1<<4), MTPJ_ONLY=0x10" "$1" && grep -q -F "mtpj macro undefinitions (1): COND_A" "$1" && grep -q "ビルド・モード DefaultBuild（2 個中 1 番目。全モード: DefaultBuild, ProductB）" "$1"' sh "$WORK/cond_info.log"
+    check "$_t: info says the mtpj format is inferred and names the element" sh -c 'grep -q "<MacroDefinitions-0> から読みました。.*推定" "$1"' sh "$WORK/cond_info.log"
+    check "$_t: assembler macro definitions are not used" lacks "$WORK/cond_info.log" "ASM_ONLY"
+    cond_cfg "mtpj = $COND/cond_test.mtpj" 'mtpj_mode = ProductB' 'cdef = SIM'
+    cond_list
+    check "$_t: mtpj_mode selects another build mode" sh -c 'grep -q -E "^var  0x${1}62 COND_REG +u16 " "$2" && grep -q -E "^var  0x${1}68 COND_AB +u8 " "$2" && grep -q -E "^var  0x${1}6B COND_NEST +u8 " "$2"' sh "$COND_HI" "$WORK/cond_list.log"
+    check "$_t: unreadable mtpj line is reported" contains "$WORK/cond_info.log" "名前として読めない行を無視しました: 9BAD LINE"
+    cond_cfg
+    cond_list --mtpj "$COND/cond_test.mtpj"
+    check "$_t: --mtpj on the command line" cond_at 60 COND_REG u8
+    cond_list --mtpj "$T/ca78k0r_probe/ca78k0r_probe.mtpj"
+    check "$_t: real CS+ project file without macro definitions" sh -c 'grep -q -F "mtpj macro definitions (0): なし" "$1" && grep -q "ビルド・モード DefaultBuild（1 個中 1 番目" "$1"' sh "$WORK/cond_info.log"
+    for _bad in 'mtpj_mode = NoSuchMode' 'cdef = 1BAD' 'cdef = A B' 'cundef = A=1' 'defines_cond = maybe' 'mtpj = no_such.mtpj'; do
+        if [ "$_bad" = 'mtpj_mode = NoSuchMode' ]; then cond_cfg "mtpj = $COND/cond_test.mtpj" "$_bad"; else cond_cfg "$_bad"; fi
+        "$COND_SIM" info $COND_ARGS --cfg "$WORK/cond.cfg" > "$WORK/cond_info.log" 2>&1
+        check "$_t: rejects $_bad (exit 2)" test $? -eq 2
+    done
+}
 
 echo "== ビルド"
 if [ -z "${SIM:-}" ]; then
@@ -62,6 +164,24 @@ if [ "$RC" -ne 0 ]; then cat "$WORK/header_mock.log"; fi
 "$SIM" list --cfg "$T/defines/mock.cfg" > "$WORK/header_list.log" 2>&1
 check "header names in list mock" contains "$WORK/header_list.log" "df_unit"
 check "unsupported macro postfix is not silently truncated" sh -c '! grep -F -q unsupported_index "$1"' sh "$WORK/header_list.log"
+echo "== defines: #if の式の評価器（単体テスト）"
+check "build check_ppexpr" "${CC:-clang}" -std=c11 -O2 -Wall -Wextra -I"$ROOT/runtime/src" "$T/tools/check_ppexpr.c" "$ROOT/runtime/src/sim_ppexpr.c" -o "$WORK/check_ppexpr"
+"$WORK/check_ppexpr" > "$WORK/ppexpr.log" 2>&1
+RC=$?
+check "preprocessor expression evaluator boundary cases" test "$RC" -eq 0
+check "preprocessor expression evaluator ran its cases (0 failed)" grep -q -E "^ppexpr: [1-9][0-9]* cases, 0 failed" "$WORK/ppexpr.log"
+if [ "$RC" -ne 0 ]; then cat "$WORK/ppexpr.log"; fi
+echo "== defines: コンパイルスイッチ（モック）"
+cond_suite "cond mock" "$SIM" 0F9 "$T/defines/cond_mock.csv"
+cond_cfg
+cond_list
+check "cond mock: no implicit macros without a load module" cond_at 7F COND_K0R u8
+check "build gen_defines_bench" "${CC:-clang}" -std=c11 -O2 -Wall -Wextra "$T/tools/gen_defines_bench.c" -o "$WORK/gen_defines_bench"
+"$WORK/gen_defines_bench" "$WORK/bench" 200 40 > "$WORK/bench_gen.log" 2>&1
+printf 'defines = %s\ncdef = PRODUCT=2\n' "$WORK/bench" > "$WORK/bench.cfg"
+"$SIM" info --cfg "$WORK/bench.cfg" > "$WORK/bench_info.log" 2>&1
+check "generated 200-file tree: all 4800 macros resolved, includes reused" sh -c 'grep -q "^defines files=200 variables=3240 bits=1560 .*unresolved=0 duplicates=0 " "$1" && grep -q -E "include-reused=[1-9]" "$1"' sh "$WORK/bench_info.log"
+grep "^defines time:" "$WORK/bench_info.log"
 echo "== テスト CSV の実行と結果 CSV"
 run_cmp unit_all.csv 0
 run_cmp ng_case.csv 1

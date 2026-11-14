@@ -1,0 +1,58 @@
+<CubeSuiteProject>
+  <!-- テスト用の合成データ。tests/ca78k0r_probe/ca78k0r_probe.mtpj（CS+ 5.02、CA78K0R V1.60）の構造を写し、
+       コンパイル・オプションの定義マクロ（MacroDefinitions-N）と定義解除マクロ（MacroUndefinitions-N）に値を入れた。
+       値の書式（改行区切りの 名前=値）は実例からの推定で、CS+ が保存した実物ではない。 -->
+  <ProductVersion>5.02.00.00</ProductVersion>
+  <Class Guid="68f4a651-b9cd-473b-a595-b00447132ffa">
+    <Instance Guid="f31c9f11-6a66-492b-83f7-62c718d00ea5">
+      <Name>スタートアップ</Name>
+      <Type>Category</Type>
+    </Instance>
+  </Class>
+  <Class Guid="11ff4962-ca73-4419-bb4a-67e9b8de9571">
+    <Instance Guid="11ff4962-ca73-4419-bb4a-67e9b8de9571">
+      <DataFormatVersion>1.1</DataFormatVersion>
+      <BuildModeCount>2</BuildModeCount>
+      <BuildMode0>RABlAGYAYQB1AGwAdABCAHUAaQBsAGQA</BuildMode0>
+      <BatchBuildFlag0>False</BatchBuildFlag0>
+      <BuildMode1>UAByAG8AZAB1AGMAdABCAA==</BuildMode1>
+      <BatchBuildFlag1>False</BatchBuildFlag1>
+      <CurrentBuildMode>DefaultBuild</CurrentBuildMode>
+    </Instance>
+    <Instance Guid="e6d45d58-de50-4ae7-8d7f-320171fa9617">
+      <MacroDefinitionForAssembler-DefaultValue />
+      <MacroDefinitionForCompiler-DefaultValue />
+      <BuildMode-0>DefaultBuild</BuildMode-0>
+      <BuildMode-1>ProductB</BuildMode-1>
+    </Instance>
+    <Instance Guid="7465f21d-b667-41e3-a989-056755c20ba3">
+      <MacroCompatibleWith78K0-DefaultValue>False</MacroCompatibleWith78K0-DefaultValue>
+      <MacroDefinitions-DefaultValue />
+      <MacroDefinitions-0>ASM_ONLY=1
+</MacroDefinitions-0>
+      <MacroDefinitions-1>ASM_ONLY=2
+</MacroDefinitions-1>
+    </Instance>
+    <Instance Guid="86700a2f-4f2c-4aec-8af7-7d69ad94a4a1">
+      <MemoryModelType-DefaultValue>Medium</MemoryModelType-DefaultValue>
+      <MacroDefinitions-DefaultValue />
+      <MacroUndefinitions-DefaultValue />
+      <StandardLibraryFileNames-DefaultValue>cl78m
+cl78mf
+</StandardLibraryFileNames-DefaultValue>
+      <MacroDefinitions-0>PRODUCT=1
+SIM
+COND_A
+COND_SHIFT=(1&lt;&lt;4)
+MTPJ_ONLY=0x10
+</MacroDefinitions-0>
+      <MacroUndefinitions-0>COND_A
+</MacroUndefinitions-0>
+      <MacroDefinitions-1>PRODUCT=2
+COND_A=1
+9BAD LINE
+</MacroDefinitions-1>
+      <MacroUndefinitions-1 />
+    </Instance>
+  </Class>
+</CubeSuiteProject>

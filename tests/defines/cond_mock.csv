@@ -1,0 +1,3 @@
+mod,intr_tm00,typedef in the active branch,2,2
+#COMMENT,COND_REG,COND_PAIR.hi,COND_REG,COND_PAIR.hi
+,0x1234,7,0x1234,7

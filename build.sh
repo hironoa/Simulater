@@ -26,7 +26,7 @@ esac
 
 S="$ROOT/runtime/src"
 CFLAGS="-std=c11 -O2 -g -Wall -Wextra -D_DEFAULT_SOURCE -I$ROOT/runtime/include -I$S"
-COMMON="$S/sim_main.c $S/sim_util.c $S/sim_json.c $S/sim_platform.c $S/sim_expr.c $S/sim_csv.c $S/sim_gui.c $S/sim_cfg.c $S/sim_defines.c"
+COMMON="$S/sim_main.c $S/sim_util.c $S/sim_json.c $S/sim_platform.c $S/sim_expr.c $S/sim_csv.c $S/sim_gui.c $S/sim_cfg.c $S/sim_defines.c $S/sim_ppexpr.c $S/sim_mtpj.c"
 
 if [ "$MODE" = "mock" ]; then
     SRCS="$COMMON $ROOT/runtime/backends/mock/mock_backend.c"

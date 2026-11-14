@@ -175,6 +175,12 @@ call :run "probe char unsigned" 0 "OK 1" --abs "%PROBE%" --cfg "%R%\cfg\probe_ch
 call :run "probe 32 bit skip" 0 "OK 1" --abs "%PROBE%" --cfg "%R%\cfg\probe_skip.cfg" "%R%\csv\probe_skip.csv"
 call :run "generated struct bitfields far pointer" 0 "OK 1" --abs "%WORK%\test.lmf" "%R%\csv\lmf_aggregate.csv"
 for %%M in (tagref tagaux tagmismatch tagend tagcycle tagwidth) do call :lmf_badtag %%M
+rem an argument whose type cannot be resolved must not be called with the integer convention; variables keep the raw integer fallback
+"%WORK%\mklmf.exe" badarg "%WORK%\badarg.lmf"
+set RC=%ERRORLEVEL%
+if "%RC%"=="0" (call :ok "mklmf badarg") else (call :ng "mklmf badarg")
+call :run "unresolved LMF argument type rejected" 2 "OK 0, NG 0" --abs "%WORK%\badarg.lmf" "%R%\csv\lmf_badarg.csv"
+call :run "unresolved LMF variable falls back to raw integer" 0 "OK 1, NG 0" --abs "%WORK%\badarg.lmf" "%R%\csv\lmf_badvar.csv"
 
 echo == real backend GUI call failures
 where curl >nul 2>nul
@@ -311,6 +317,31 @@ set RC=%ERRORLEVEL%
 if "%RC%"=="0" (call :ok "header info real") else (call :ng "header info real")
 call :has "%WORK%\header.log" "defines files" "recursive header scan real"
 call :run "var and varfile real" 0 "OK 1, NG 0" --abs "%WORK%\test.lmf" --cfg "%T%\defines\var_real.cfg" "%T%\defines\var_real.csv"
+
+echo == defines: compile switches (real)
+call :rcond_cfg
+call :rcond_list "%WORK%\test.lmf"
+call :has "%WORK%\cond_list.log" "0xFF964 COND_REG" "cond real: no switch takes the else branch"
+call :has "%WORK%\cond_list.log" "0xFF97E COND_K0R" "cond real: LMF defines the CA78K0R implicit macros"
+call :has "%WORK%\cond_info.log" "cdef implicit" "cond real: info shows the macro counts"
+>> "%WORK%\cond.cfg" echo cdef = PRODUCT=2
+>> "%WORK%\cond.cfg" echo cundef = __K0R__
+call :rcond_list "%WORK%\test.lmf"
+call :has "%WORK%\cond_list.log" "0xFF962 COND_REG" "cond real: cdef PRODUCT 2"
+call :has "%WORK%\cond_list.log" "0xFF97F COND_K0R" "cond real: cundef removes an implicit macro"
+call :run "cond real: 16-bit typedef and struct member" 0 "OK 1, NG 0" --abs "%WORK%\test.lmf" --cfg "%WORK%\cond.cfg" "%T%\defines\cond_real.csv"
+call :rcond_cfg
+>> "%WORK%\cond.cfg" echo mtpj = %T%\defines\cond\cond_test.mtpj
+call :rcond_list "%WORK%\test.lmf"
+call :has "%WORK%\cond_list.log" "0xFF960 COND_REG" "cond real: mtpj macro definitions"
+call :has "%WORK%\cond_info.log" "MTPJ_ONLY" "cond real: info lists the mtpj macros"
+call :rcond_cfg
+call :rcond_list "%TP%"
+call :has "%WORK%\cond_list.log" "0xFF97F COND_K0R" "cond real: ELF does not define the CA78K0R macros"
+call :rcond_cfg
+>> "%WORK%\cond.cfg" echo mtpj = %T%\ca78k0r_probe\ca78k0r_probe.mtpj
+call :rcond_list "%PROBE%"
+call :has "%WORK%\cond_info.log" "mtpj macro definitions" "cond real: probe project file has no macro definitions"
 
 exit /b 0
 
@@ -454,4 +485,14 @@ if "%RC%"=="2" (call :ok "ROM checksum %~1 %~4 rejects corruption") else (call :
 call :has "%WORK%\reset_%~1.%~4.log" "FFH" "ROM checksum FFH diagnostic"
 call :has "%WORK%\reset_%~1.%~4.log" "original bytes" "ROM checksum original bytes"
 call :has "%WORK%\reset_%~1.%~4.log" "breakpoint" "ROM checksum breakpoint context"
+exit /b 0
+
+:rcond_cfg
+> "%WORK%\cond.cfg" echo defines = %T%\defines\cond
+exit /b 0
+
+rem :rcond_list load-module
+:rcond_list
+"%RS%" list --abs "%~1" --cfg "%WORK%\cond.cfg" COND_ > "%WORK%\cond_list.log" 2>&1
+"%RS%" info --abs "%~1" --cfg "%WORK%\cond.cfg" > "%WORK%\cond_info.log" 2>&1
 exit /b 0

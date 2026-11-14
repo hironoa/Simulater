@@ -101,6 +101,9 @@ typedef struct {
     const char *cfg_path;    /* 設定ファイル。NULL なら .abs と同じフォルダの sim.cfg（あれば） */
     const char **defines;
     int ndefines;
+    const char **cdefs;      /* --cdef 名前[=値]（defines の条件付きコンパイル用の定義マクロ） */
+    int ncdefs;
+    const char *mtpj_path;   /* --mtpj: CS+ のプロジェクトファイル。NULL なら設定ファイルの mtpj= */
     const char *csv_init;    /* CLI override: auto / once / every */
     int lmf_names;
     int trace_startup;       /* スタートアップを単命令で診断 */

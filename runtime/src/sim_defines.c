@@ -1,6 +1,8 @@
 #define _CRT_SECURE_NO_WARNINGS
 #include "sim_defines.h"
 #include "sim_cfg.h"
+#include "sim_mtpj.h"
+#include "sim_ppexpr.h"
 #include "sim_platform.h"
 #include <ctype.h>
 #include <stdio.h>
@@ -8,18 +10,88 @@
 #include <string.h>
 
 typedef struct { char *name, *body, *file; unsigned line; int state; const sim_type *type; } definition;
+/* 条件付きコンパイルの指令（#…）。ファイルを読んだときに 1 回だけ切り出す */
+enum { D_IF = 1, D_IFDEF, D_IFNDEF, D_ELIF, D_ELSE, D_ENDIF, D_DEFINE, D_UNDEF, D_INCLUDE };
+typedef struct {
+    unsigned char kind, funclike;
+    unsigned char evaluated, indeterminate; /* 評価したことがある／判定不能だったことがある */
+    unsigned char logged;                   /* 未定義の識別子を数え済み */
+    uint32_t line;      /* 論理行の番号 */
+    uint32_t sym;       /* #define / #undef / #ifdef / #ifndef の名前 */
+    uint32_t guard;     /* 条件の直後の #define の名前（インクルードガード）。なければ 0 */
+    uint32_t next;      /* 条件の系列の次の枝（#elif / #else / #endif）。なければ指令の数 */
+    int32_t target;     /* #include: 解決したファイルの番号。-1 = 走査した中にない、-2 = 未解決 */
+    const char *arg;    /* #if / #elif の式、#define の本体、#include のファイル名 */
+} directive;
+typedef struct {
+    char *path;         /* defs.files の要素を借りる */
+    char *lower;        /* '/' 区切り・小文字のパス（#include の照合用） */
+    char *text;         /* コメントを除いた内容。行ごとに NUL で終端 */
+    size_t len;
+    uint32_t *line_off; /* 論理行の先頭の位置 */
+    unsigned *line_no;  /* 論理行の、元のファイルでの行番号 */
+    size_t nlines;
+    directive *dirs;
+    size_t ndirs;
+    uint64_t *seen;     /* 収集済みの「枝の選び方」 */
+    size_t nseen;
+    struct memo *memos; /* 読んだ結果の記録（同じ状態で #include されたら読み直さない） */
+    unsigned nmemos;
+    unsigned char included, visited, has_types;
+} source;
+/* マクロの名前。状態は起点ごと（gen が今の世代なら kind / body、違えば定義マクロの base_*） */
+typedef struct {
+    char *name;
+    const char *base_body, *body;
+    uint32_t hash, gen;
+    uint32_t wtick;     /* いまの起点で最後に #define / #undef した時刻（gen が今の世代のとき） */
+    uint32_t mark;
+    unsigned char base_kind, kind, origin, defined_somewhere;
+    unsigned undef_refs, hidden_refs;
+} psym;
+typedef struct { int32_t take; int all; } cond_frame;
+typedef struct { char *name; const sim_type *type; } ext_type;
+/* マクロの状態の読み書きの記録。あるファイルを読んだ結果は「読む前の状態のうち実際に参照したもの（reads）」
+   だけで決まるので、同じ reads の状態で再び #include されたら、書き込み（writes）を再生するだけで済ませる */
+typedef struct { uint32_t sym, wtick; const char *body; unsigned char kind; } pp_read;
+typedef struct { uint32_t sym; unsigned char kind; const char *body; } pp_write;
+typedef struct memo {
+    pp_read *reads; size_t nreads;
+    pp_write *writes; size_t nwrites;
+    unsigned includes, height;      /* 中で展開した #include の数と、入れ子の深さ */
+} memo;
 typedef struct {
     sim_ctx *ctx;
     sim_cfg cfg;
     char **files;
     size_t nfiles;
     definition *macros, *types;
-    size_t nmacros, ntypes;
+    size_t nmacros, ntypes, macros_alloc, types_alloc;
     size_t *macro_index, *type_index, macro_cap, type_cap;
-    int recursive, guess, char_unsigned, verbose, error;
+    int recursive, guess, char_unsigned, verbose, error, cond;
     uint64_t near_base;
     unsigned variables, bits, arrays, guessed, unresolved, duplicates, pointers, explicit_vars;
     char *err; size_t cap;
+    /* 条件付きコンパイル */
+    source *src; size_t nsrc;
+    uint32_t *by_base;              /* ファイル名順の番号（#include の検索用） */
+    psym *syms; size_t nsyms, syms_alloc;
+    uint32_t *sym_index; size_t sym_cap;
+    uint32_t gen;
+    uint32_t *ranges; size_t nranges, cap_ranges;       /* 読まない行の範囲（開始, 終了）の列 */
+    cond_frame *frames; size_t nframes, cap_frames;
+    sim_pp_env env;
+    directive *site; int log, logged_any;
+    char **owned; size_t nowned;
+    ext_type *ext; size_t ext_cap, ext_count;   /* ヘッダにない型名の解決結果 */
+    uint32_t tick, serial;
+    pp_read *rlog; size_t nrlog, cap_rlog;
+    pp_write *wlog; size_t nwlog, cap_wlog;
+    size_t memo_cells;
+    unsigned root_includes, memo_hits;
+    unsigned roots, includes, include_missing, include_cut, if_evaluated, if_indeterminate, undefined, collections;
+    size_t bytes, ndirectives;
+    uint64_t t_scan, t_read, t_cond;
 } defs;
 typedef struct { const char *p, *start; char tok[128]; } lexer;
 
@@ -124,7 +196,7 @@ static int path_cmp(const void *a,const void *b) { return strcmp(*(char *const *
 
 /* Byte-oriented comment removal. A Shift_JIS lead byte consumes its trail
    byte before interpreting slash, star or backslash, including in comments. */
-static char *clean_source(const char *s,size_t n,unsigned **lines)
+static char *clean_source(const char *s,size_t n,unsigned **lines,size_t *outlen)
 {
     char *out=sim_xmalloc(n+1);
     size_t i=0,k=0,ln=0,cap=64;
@@ -154,7 +226,9 @@ static char *clean_source(const char *s,size_t n,unsigned **lines)
         if (c=='"' || c=='\'') { if (!quote) quote=c; else if (quote==c) quote=0; }
         out[k++]=s[i++];
     }
-    out[k]=0; return out;
+    /* NUL は空白にする（行と字句の切り出しが途中で止まらないように） */
+    for (i=0;i<k;i++) if (!out[i]) out[i]=' ';
+    out[k]=0; *outlen=k; return out;
 }
 static char *normalized(const char *s)
 {
@@ -209,63 +283,639 @@ static void add_definition(defs *d, int type, const char *name, const char *body
         }
         free(old); free(norm); return;
     }
-    *list=sim_xrealloc(*list,(*count+1)*sizeof **list);
+    /* 1 件ずつ伸ばさない（realloc が毎回コピーする処理系では、定義が数万件あると遅くなる） */
+    { size_t *alloc=type?&d->types_alloc:&d->macros_alloc;
+      if (*count==*alloc) { *alloc=*alloc?*alloc*2:256; *list=sim_xrealloc(*list,*alloc*sizeof **list); } }
     { definition *v=&(*list)[(*count)++]; memset(v,0,sizeof *v); v->name=sim_xstrdup(name); v->body=sim_xstrdup(body); v->file=sim_xstrdup(file); v->line=line; }
     index_definition(d,type);
 }
-static void read_source(defs *d,const char *file)
+/* ================================================================ 条件付きコンパイル
+ *
+ * 走査した各ファイルを起点として上から順に読み、#if / #ifdef / #ifndef / #elif / #else / #endif を評価して
+ * 有効な枝にある #define・typedef・struct だけを集める。#include は走査したファイルの中から探して
+ * その場で読む。マクロの状態は起点ごとに、定義マクロ（cdef / mtpj / 暗黙）から始める。
+ *
+ * 速度のための工夫:
+ *   - ファイルは 1 回だけ読み、コメントを除いて行と指令（#…）に分けておく。条件の系列は「次の枝」を
+ *     指しておき、読まない枝は 1 回で飛び越す。
+ *   - マクロの名前は番号にし、状態は番号で引く配列に持つ。起点を替えるときは世代を進めるだけ。
+ *   - 同じファイルを同じ枝の選び方で読んだ 2 回目以降は、定義の収集を省く（条件の評価と
+ *     マクロの状態の更新だけを行う）。
+ *   - どこからもインクルードされていないファイルを先に起点にし、どの起点からも読まれなかった
+ *     ファイルだけを追加の起点にする。
+ */
+
+static uint32_t intern(defs *d, const char *name, size_t len)
 {
-    size_t n, ln=0;
-    char *raw=sim_read_file(file,&n), *s, *p;
-    unsigned *lines;
-    lexer l;
-    if (!raw) { snprintf(d->err,d->cap,"defines: %s を読めません",file); d->error=1; return; }
-    s=clean_source(raw,n,&lines); free(raw);
-    for (p=s;*p;) {
-        char *end=strchr(p,'\n'), *q=p;
-        char saved=end?*end:0;
-        if (end) *end=0;
-        while (isspace((unsigned char)*q)) q++;
-        if (*q=='#') {
-            lexer m=lex(q+1);
-            if (!strcmp(m.tok,"define")) {
-                char name[128]; next(&m); snprintf(name,sizeof name,"%s",m.tok);
-                if (sim_is_ident_start((unsigned char)name[0]) && *m.p!='(') add_definition(d,0,name,m.p,file,lines[ln]);
-            }
-            memset(p,' ',(size_t)((end?end:p+strlen(p))-p));
+    uint32_t h = 2166136261u;
+    size_t i, slot;
+    for (i = 0; i < len; i++) { h ^= (unsigned char)name[i]; h *= 16777619u; }
+    if (d->sym_cap) {
+        slot = h & (d->sym_cap - 1);
+        while (d->sym_index[slot]) {
+            const char *s = d->syms[d->sym_index[slot]].name;
+            if (!strncmp(s, name, len) && !s[len]) return d->sym_index[slot];
+            slot = (slot + 1) & (d->sym_cap - 1);
         }
-        if (!end) break;
-        *end=saved; p=end+1; ln++;
     }
-    l=lex(s);
+    if (!d->nsyms) { d->syms = sim_xcalloc(64, sizeof *d->syms); d->syms_alloc = 64; d->nsyms = 1; }   /* 0 は「なし」 */
+    if (d->nsyms == d->syms_alloc) {
+        d->syms = sim_xrealloc(d->syms, d->syms_alloc * 2 * sizeof *d->syms);
+        memset(d->syms + d->syms_alloc, 0, d->syms_alloc * sizeof *d->syms);
+        d->syms_alloc *= 2;
+    }
+    d->syms[d->nsyms].name = sim_xstrndup(name, len);
+    d->syms[d->nsyms].hash = h;
+    d->nsyms++;
+    if (d->nsyms * 2 >= d->sym_cap) {
+        d->sym_cap = d->sym_cap ? d->sym_cap * 2 : 256;
+        free(d->sym_index); d->sym_index = sim_xcalloc(d->sym_cap, sizeof *d->sym_index);
+        for (i = 1; i < d->nsyms; i++) {
+            slot = d->syms[i].hash & (d->sym_cap - 1);
+            while (d->sym_index[slot]) slot = (slot + 1) & (d->sym_cap - 1);
+            d->sym_index[slot] = (uint32_t)i;
+        }
+    } else {
+        slot = h & (d->sym_cap - 1);
+        while (d->sym_index[slot]) slot = (slot + 1) & (d->sym_cap - 1);
+        d->sym_index[slot] = (uint32_t)(d->nsyms - 1);
+    }
+    return (uint32_t)(d->nsyms - 1);
+}
+
+/* いまの起点での状態（SIM_PP_*）と本体 */
+static int sym_state(const defs *d, uint32_t id, const char **body)
+{
+    const psym *p = &d->syms[id];
+    if (p->gen == d->gen) { if (body) *body = p->body; return p->kind; }
+    if (body) *body = p->base_body;
+    return p->base_kind;
+}
+
+/* 条件の中で未定義だった識別子を数える。同じ箇所（指令）からは最初の 1 回の評価だけ数える */
+static void note_lookup(defs *d, uint32_t id, int kind)
+{
+    if (kind != SIM_PP_UNDEF || !d->log || (d->site && d->site->guard == id)) return;
+    if (d->syms[id].defined_somewhere) d->syms[id].hidden_refs++; else d->syms[id].undef_refs++;
+    d->logged_any = 1;
+}
+
+/* 条件の評価で状態を参照したことを記録する（memo の reads になる） */
+static void record_read(defs *d, uint32_t id, int kind, const char *body)
+{
+    pp_read *r;
+    if (d->nrlog == d->cap_rlog) { d->cap_rlog = d->cap_rlog ? d->cap_rlog * 2 : 1024; d->rlog = sim_xrealloc(d->rlog, d->cap_rlog * sizeof *d->rlog); }
+    r = &d->rlog[d->nrlog++];
+    r->sym = id; r->kind = (unsigned char)kind; r->body = body;
+    r->wtick = d->syms[id].gen == d->gen ? d->syms[id].wtick : 0;
+}
+static void write_sym(defs *d, uint32_t id, int kind, const char *body)
+{
+    psym *p = &d->syms[id];
+    pp_write *w;
+    p->gen = d->gen; p->kind = (unsigned char)kind; p->body = body; p->wtick = ++d->tick;
+    if (d->nwlog == d->cap_wlog) { d->cap_wlog = d->cap_wlog ? d->cap_wlog * 2 : 1024; d->wlog = sim_xrealloc(d->wlog, d->cap_wlog * sizeof *d->wlog); }
+    w = &d->wlog[d->nwlog++];
+    w->sym = id; w->kind = (unsigned char)kind; w->body = body;
+}
+
+static int lookup_cb(void *ctx, const char *name, size_t len, const char **body, int in_defined)
+{
+    defs *d = ctx;
+    uint32_t id = intern(d, name, len);
+    const char *b = NULL;
+    int kind = sym_state(d, id, &b);
+    (void)in_defined;
+    *body = b;
+    record_read(d, id, kind, b);
+    note_lookup(d, id, kind);
+    return kind;
+}
+
+static const char *skip_blank(const char *s) { while (*s == ' ' || *s == '\t' || *s == '\r' || *s == '\f' || *s == '\v') s++; return s; }
+
+/* ファイルを読み、行と指令に分ける */
+static void load_source(defs *d, source *s)
+{
+    size_t n, li, nopen = 0, cap_open = 0, cap_dirs = 0, k;
+    char *raw = sim_read_file(s->path, &n);
+    uint32_t *open = NULL;
+    if (!raw) { snprintf(d->err, d->cap, "defines: %s を読めません", s->path); d->error = 1; return; }
+    s->text = clean_source(raw, n, &s->line_no, &s->len);
+    free(raw);
+    d->bytes += n;
+    s->has_types = strstr(s->text, "typedef") || strstr(s->text, "struct") || strstr(s->text, "union");
+    for (k = 0, s->nlines = 1; k < s->len; k++) if (s->text[k] == '\n') s->nlines++;
+    s->line_off = sim_xmalloc(s->nlines * sizeof *s->line_off);
+    s->line_off[0] = 0;
+    for (k = 0, li = 1; k < s->len; k++) if (s->text[k] == '\n') { s->text[k] = 0; s->line_off[li++] = (uint32_t)(k + 1); }
+    for (li = 0; li < s->nlines; li++) {
+        const char *q = skip_blank(s->text + s->line_off[li]);
+        directive x;
+        lexer m;
+        if (*q != '#') continue;
+        m = lex(q + 1);
+        memset(&x, 0, sizeof x);
+        x.line = (uint32_t)li; x.next = UINT32_MAX; x.target = -2; x.arg = "";
+        if (!strcmp(m.tok, "define") || !strcmp(m.tok, "undef")) {
+            x.kind = m.tok[0] == 'd' ? D_DEFINE : D_UNDEF;
+            next(&m);
+            if (!sim_is_ident_start((unsigned char)m.tok[0])) continue;
+            x.sym = intern(d, m.tok, strlen(m.tok));
+            x.arg = m.p; x.funclike = *m.p == '(';
+            if (x.kind == D_DEFINE) d->syms[x.sym].defined_somewhere = 1;
+        } else if (!strcmp(m.tok, "ifdef") || !strcmp(m.tok, "ifndef")) {
+            x.kind = m.tok[2] == 'd' ? D_IFDEF : D_IFNDEF;
+            next(&m);
+            if (sim_is_ident_start((unsigned char)m.tok[0])) x.sym = intern(d, m.tok, strlen(m.tok));
+        } else if (!strcmp(m.tok, "if") || !strcmp(m.tok, "elif")) {
+            x.kind = m.tok[0] == 'i' ? D_IF : D_ELIF; x.arg = m.p;
+        } else if (!strcmp(m.tok, "else")) x.kind = D_ELSE;
+        else if (!strcmp(m.tok, "endif")) x.kind = D_ENDIF;
+        else if (!strcmp(m.tok, "include")) {
+            char *b = (char *)skip_blank(m.p), *e, close = *b == '"' ? '"' : '>';
+            if (*b != '"' && *b != '<') continue;      /* マクロで書いたインクルードは読まない */
+            e = strchr(++b, close);
+            if (!e || e == b) continue;
+            *e = 0;
+            x.kind = D_INCLUDE; x.arg = b;
+        } else continue;                                /* #pragma、#error、#line など */
+        /* 条件の系列をつなぐ。対応のない #elif / #else / #endif は無視する */
+        if (x.kind == D_ELIF || x.kind == D_ELSE || x.kind == D_ENDIF) {
+            if (!nopen) continue;
+            s->dirs[open[nopen - 1]].next = (uint32_t)s->ndirs;
+            if (x.kind == D_ENDIF) nopen--; else open[nopen - 1] = (uint32_t)s->ndirs;
+        } else if (x.kind == D_IF || x.kind == D_IFDEF || x.kind == D_IFNDEF) {
+            if (nopen == cap_open) { cap_open = cap_open ? cap_open * 2 : 16; open = sim_xrealloc(open, cap_open * sizeof *open); }
+            open[nopen++] = (uint32_t)s->ndirs;
+        }
+        if (s->ndirs == cap_dirs) { cap_dirs = cap_dirs ? cap_dirs * 2 : 16; s->dirs = sim_xrealloc(s->dirs, cap_dirs * sizeof *s->dirs); }
+        s->dirs[s->ndirs++] = x;
+    }
+    free(open);
+    for (k = 0; k < s->ndirs; k++) {
+        directive *x = &s->dirs[k];
+        if (x->next == UINT32_MAX) x->next = (uint32_t)s->ndirs;    /* #endif のない系列はファイルの終わりまで */
+        /* インクルードガード: 条件の直後の #define が、その条件で調べている名前 */
+        if (k + 1 < s->ndirs && s->dirs[k + 1].kind == D_DEFINE) {
+            const char *name = d->syms[s->dirs[k + 1].sym].name;
+            if (x->kind == D_IFNDEF && x->sym == s->dirs[k + 1].sym) x->guard = x->sym;
+            else if (x->kind == D_IF && strstr(x->arg, "defined") && strstr(x->arg, name)) x->guard = s->dirs[k + 1].sym;
+        }
+    }
+    d->ndirectives += s->ndirs;
+}
+
+/* '/' 区切り・小文字にしたパス */
+static char *lower_path(const char *p)
+{
+    char *s = sim_xstrdup(p), *q;
+    for (q = s; *q; q++) *q = *q == '\\' ? '/' : (char)tolower((unsigned char)*q);
+    return s;
+}
+static const char *base_of(const char *lower) { const char *b = strrchr(lower, '/'); return b ? b + 1 : lower; }
+static defs *g_sort;    /* qsort の比較用 */
+static int base_cmp(const void *a, const void *b)
+{
+    const source *x = &g_sort->src[*(const uint32_t *)a], *y = &g_sort->src[*(const uint32_t *)b];
+    int c = strcmp(base_of(x->lower), base_of(y->lower));
+    return c ? c : strcmp(x->lower, y->lower);
+}
+
+/* #include の名前を、走査したファイルの中から探す（パスの末尾一致、大文字小文字を区別しない）。
+   同名が複数あれば、インクルード元と共通するフォルダの階層が深いものを選ぶ。なければ -1 */
+static int32_t resolve_include(defs *d, const source *from, const char *name)
+{
+    char buf[512];
+    const char *base;
+    size_t n = 0, lo = 0, hi = d->nsrc, blen;
+    int32_t best = -1;
+    unsigned best_score = 0, best_depth = 0;
+    for (;;) {      /* 先頭の ./ と ../ は照合に使わない */
+        if (name[0] == '.' && (name[1] == '/' || name[1] == '\\')) name += 2;
+        else if (name[0] == '.' && name[1] == '.' && (name[2] == '/' || name[2] == '\\')) name += 3;
+        else break;
+    }
+    for (; name[n] && n + 1 < sizeof buf; n++) buf[n] = name[n] == '\\' ? '/' : (char)tolower((unsigned char)name[n]);
+    buf[n] = 0;
+    while (n && (buf[n - 1] == ' ' || buf[n - 1] == '\t')) buf[--n] = 0;
+    if (!n) return -1;
+    base = base_of(buf);
+    while (lo < hi) {
+        size_t mid = lo + (hi - lo) / 2;
+        if (strcmp(base_of(d->src[d->by_base[mid]].lower), base) < 0) lo = mid + 1; else hi = mid;
+    }
+    blen = strlen(buf);
+    for (; lo < d->nsrc; lo++) {
+        const source *c = &d->src[d->by_base[lo]];
+        size_t clen = strlen(c->lower), i;
+        unsigned score = 0, depth = 0;
+        if (strcmp(base_of(c->lower), base)) break;
+        if (clen < blen || strcmp(c->lower + clen - blen, buf) || (clen > blen && c->lower[clen - blen - 1] != '/')) continue;
+        for (i = 0; from->lower[i] && from->lower[i] == c->lower[i]; i++) if (c->lower[i] == '/') score++;
+        for (i = 0; c->lower[i]; i++) if (c->lower[i] == '/') depth++;
+        if (best < 0 || score > best_score || (score == best_score && depth < best_depth)) {
+            best = (int32_t)d->by_base[lo]; best_score = score; best_depth = depth;
+        }
+    }
+    return best;
+}
+
+/* 条件を評価する。真 1、偽 0、判定不能 -1 */
+static int eval_dir(defs *d, directive *x)
+{
+    int r;
+    d->site = x; d->log = !x->logged; d->logged_any = 0;
+    if (x->kind == D_IFDEF || x->kind == D_IFNDEF) {
+        if (!x->sym) r = -1;
+        else {
+            const char *body = NULL;
+            int kind = sym_state(d, x->sym, &body);
+            record_read(d, x->sym, kind, body);
+            note_lookup(d, x->sym, kind);
+            r = (kind != SIM_PP_UNDEF) == (x->kind == D_IFDEF);
+        }
+    } else r = sim_pp_eval(x->arg, &d->env);
+    if (d->logged_any) x->logged = 1;
+    x->evaluated = 1;
+    if (r < 0) x->indeterminate = 1;
+    d->site = NULL;
+    return r;
+}
+
+static size_t line_of_offset(const source *s, size_t off)
+{
+    size_t lo = 0, hi = s->nlines;
+    while (hi - lo > 1) { size_t mid = lo + (hi - lo) / 2; if (s->line_off[mid] <= off) lo = mid; else hi = mid; }
+    return lo;
+}
+
+/* 有効な行にある typedef / struct / union の定義を集める。ranges[base..) は読まない行の範囲 */
+static void scan_types(defs *d, const source *s, size_t base)
+{
+    char *t = sim_xmalloc(s->len + 1);
+    size_t li, r = base;
+    lexer l;
+    memcpy(t, s->text, s->len + 1);
+    for (li = 0; li < s->nlines; li++) {
+        size_t b = s->line_off[li], e = li + 1 < s->nlines ? s->line_off[li + 1] - 1 : s->len;
+        while (r < d->nranges && d->ranges[r + 1] <= li) r += 2;
+        if ((r < d->nranges && li >= d->ranges[r]) || *skip_blank(t + b) == '#') memset(t + b, ' ', e - b);
+        if (li + 1 < s->nlines) t[e] = '\n';
+    }
+    l = lex(t);
     while (l.tok[0]) {
-        int td=!strcmp(l.tok,"typedef"), tagged=!strcmp(l.tok,"struct") || !strcmp(l.tok,"union");
+        int td = !strcmp(l.tok, "typedef"), tagged = !strcmp(l.tok, "struct") || !strcmp(l.tok, "union");
         if (td || tagged) {
-            const char *begin=l.start, *body, *last=NULL;
-            char last_name[128]="", tag[128]="";
-            int depth=0, braces=0;
+            const char *begin = l.start, *body, *last = NULL;
+            char last_name[128] = "", tag[128] = "";
+            int depth = 0, braces = 0;
+            unsigned line = s->line_no[line_of_offset(s, (size_t)(begin - t))];
             if (td) next(&l);
-            body=l.start;
-            if (!strcmp(l.tok,"struct") || !strcmp(l.tok,"union")) {
-                lexer t=l; next(&t);
-                if (sim_is_ident_start((unsigned char)t.tok[0])) snprintf(tag,sizeof tag,"%s",t.tok);
+            body = l.start;
+            if (!strcmp(l.tok, "struct") || !strcmp(l.tok, "union")) {
+                lexer u = l; next(&u);
+                if (sim_is_ident_start((unsigned char)u.tok[0])) snprintf(tag, sizeof tag, "%s", u.tok);
             }
             while (l.tok[0]) {
-                if (!strcmp(l.tok,"{")) { depth++; braces=1; }
-                if (!strcmp(l.tok,"}")) depth--;
-                if (!depth && !strcmp(l.tok,";")) break;
-                if (!depth && sim_is_ident_start((unsigned char)l.tok[0])) { last=l.start; snprintf(last_name,sizeof last_name,"%s",l.tok); }
+                if (!strcmp(l.tok, "{")) { depth++; braces = 1; }
+                if (!strcmp(l.tok, "}")) depth--;
+                if (!depth && !strcmp(l.tok, ";")) break;
+                if (!depth && sim_is_ident_start((unsigned char)l.tok[0])) { last = l.start; snprintf(last_name, sizeof last_name, "%s", l.tok); }
                 next(&l);
             }
             if (l.tok[0] && (td || braces)) {
-                if (td && last) { char *text=sim_xstrndup(body,(size_t)(last-body)); add_definition(d,1,last_name,text,file,1); free(text); }
-                if (braces && tag[0]) { char *text=sim_xstrndup(body,(size_t)((td && last?last:l.start)-body)); add_definition(d,1,tag,text,file,1); free(text); }
+                if (td && last) { char *text = sim_xstrndup(body, (size_t)(last - body)); add_definition(d, 1, last_name, text, s->path, line); free(text); }
+                if (braces && tag[0]) { char *text = sim_xstrndup(body, (size_t)((td && last ? last : l.start) - body)); add_definition(d, 1, tag, text, s->path, line); free(text); }
             }
-            if (l.start==begin) next(&l);
+            if (l.start == begin) next(&l);
         }
         if (l.tok[0]) next(&l);
     }
-    free(lines); free(s);
+    free(t);
+}
+
+/* 有効な行の定義を集める。同じファイルを同じ枝の選び方で読んだことがあれば何もしない */
+static void collect(defs *d, source *s, size_t base)
+{
+    uint64_t h = UINT64_C(1469598103934665603);
+    size_t i, r = base;
+    for (i = base; i < d->nranges; i++) { h ^= d->ranges[i]; h *= UINT64_C(1099511628211); }
+    for (i = 0; i < s->nseen; i++) if (s->seen[i] == h) return;
+    s->seen = sim_xrealloc(s->seen, (s->nseen + 1) * sizeof *s->seen);
+    s->seen[s->nseen++] = h;
+    d->collections++;
+    for (i = 0; i < s->ndirs; i++) {
+        const directive *x = &s->dirs[i];
+        if (x->kind != D_DEFINE || x->funclike) continue;
+        while (r < d->nranges && d->ranges[r + 1] <= x->line) r += 2;
+        if (r < d->nranges && x->line >= d->ranges[r]) continue;
+        add_definition(d, 0, d->syms[x->sym].name, x->arg, s->path, s->line_no[x->line]);
+    }
+    if (s->has_types) scan_types(d, s, base);
+}
+
+/* 指令 i の枝（次の枝の指令 nx の手前まで）を読まない */
+static void skip_branch(defs *d, const source *s, uint32_t i, uint32_t nx)
+{
+    uint32_t from = s->dirs[i].line + 1, to = nx < s->ndirs ? s->dirs[nx].line : (uint32_t)s->nlines;
+    if (from >= to) return;
+    if (d->nranges + 2 > d->cap_ranges) { d->cap_ranges = d->cap_ranges ? d->cap_ranges * 2 : 64; d->ranges = sim_xrealloc(d->ranges, d->cap_ranges * sizeof *d->ranges); }
+    d->ranges[d->nranges++] = from; d->ranges[d->nranges++] = to;
+}
+
+#define MAX_INCLUDE_DEPTH 64        /* #include の入れ子。循環はここで打ち切る */
+#define MAX_ROOT_INCLUDES 200000    /* 1 つの起点で展開する #include の数（ガードのない循環が枝分かれする場合の歯止め） */
+#ifndef MAX_MEMOS
+#define MAX_MEMOS 8                 /* 1 ファイルあたりの記録の数（0 にすると毎回読み直す。結果の比較用） */
+#endif
+#define MAX_MEMO_CELLS 8000000      /* 記録全体の大きさの上限（reads + writes の件数） */
+
+static unsigned process_file(defs *d, uint32_t fi, unsigned depth);
+
+/* #include されたファイルを読む。同じ状態で読んだ記録があれば、書き込みを再生するだけにする。入れ子の深さを返す */
+static unsigned include_file(defs *d, uint32_t fi, unsigned depth)
+{
+    source *t = &d->src[fi];
+    unsigned m;
+    size_t k;
+    d->includes++; d->root_includes++;
+    for (m = 0; m < t->nmemos; m++) {
+        const memo *e = &t->memos[m];
+        if (depth + e->height > MAX_INCLUDE_DEPTH) continue;
+        for (k = 0; k < e->nreads; k++) {
+            const char *body = NULL;
+            int kind = sym_state(d, e->reads[k].sym, &body);
+            if (kind != e->reads[k].kind || (kind == SIM_PP_OBJECT && body != e->reads[k].body)) break;
+        }
+        if (k < e->nreads) continue;
+        if (depth > 1) {
+            for (k = 0; k < e->nreads; k++) record_read(d, e->reads[k].sym, e->reads[k].kind, e->reads[k].body);
+            for (k = 0; k < e->nwrites; k++) write_sym(d, e->writes[k].sym, e->writes[k].kind, e->writes[k].body);
+        } else {
+            /* 起点から直接の #include: 外側に記録を作るファイルがないので、読み書きの記録は省いて状態だけ更新する */
+            for (k = 0; k < e->nwrites; k++) {
+                psym *p = &d->syms[e->writes[k].sym];
+                p->gen = d->gen; p->kind = e->writes[k].kind; p->body = e->writes[k].body; p->wtick = ++d->tick;
+            }
+        }
+        d->includes += e->includes; d->root_includes += e->includes; d->memo_hits++;
+        return e->height;
+    }
+    return process_file(d, fi, depth);
+}
+
+static unsigned process_file(defs *d, uint32_t fi, unsigned depth)
+{
+    source *s = &d->src[fi];
+    size_t base = d->nranges, fbase = d->nframes, rstart = d->nrlog, wstart = d->nwlog;
+    uint32_t i = 0, t0 = d->tick;
+    unsigned height = 0, cuts0 = d->include_cut, inc0 = d->includes;
+    s->visited = 1;
+    while (i < s->ndirs) {
+        directive *x = &s->dirs[i];
+        switch (x->kind) {
+        case D_IF: case D_IFDEF: case D_IFNDEF: {
+            /* 系列の条件を先に上から評価する（#elif は前の枝がすべて偽のときだけ評価されるので、
+               ここでの状態で決まる）。真の枝より前に判定不能があれば、系列のすべての枝を読む */
+            int32_t take = -1;
+            int all = !d->cond;
+            uint32_t j = i;
+            while (!all) {
+                directive *y = &s->dirs[j];
+                int r = y->kind == D_ELSE ? 1 : eval_dir(d, y);
+                if (r < 0) all = 1;
+                else if (r) { take = (int32_t)j; break; }
+                else if (y->next >= s->ndirs || s->dirs[y->next].kind == D_ENDIF) break;
+                else j = y->next;
+            }
+            if (d->nframes == d->cap_frames) { d->cap_frames = d->cap_frames ? d->cap_frames * 2 : 32; d->frames = sim_xrealloc(d->frames, d->cap_frames * sizeof *d->frames); }
+            d->frames[d->nframes].take = take; d->frames[d->nframes].all = all; d->nframes++;
+            if (all || take == (int32_t)i) i++;
+            else { skip_branch(d, s, i, x->next); i = x->next; }
+            continue;
+        }
+        case D_ELIF: case D_ELSE:
+            if (d->nframes > fbase && (d->frames[d->nframes - 1].all || d->frames[d->nframes - 1].take == (int32_t)i)) i++;
+            else { skip_branch(d, s, i, x->next); i = x->next; }
+            continue;
+        case D_ENDIF:
+            if (d->nframes > fbase) d->nframes--;
+            break;
+        case D_DEFINE: case D_UNDEF:
+            if (d->cond) write_sym(d, x->sym, x->kind == D_UNDEF ? SIM_PP_UNDEF : x->funclike ? SIM_PP_FUNCTION : SIM_PP_OBJECT, x->arg);
+            break;
+        case D_INCLUDE: {
+            unsigned h;
+            if (!d->cond) break;
+            if (x->target == -2) x->target = resolve_include(d, s, x->arg);
+            if (x->target < 0) break;
+            /* 自分自身を含め、読んでいる途中のファイルもそのまま読む（インクルードガードが普通に効く）。
+               ガードのない循環は深さの上限で打ち切る */
+            if (depth >= MAX_INCLUDE_DEPTH || d->root_includes >= MAX_ROOT_INCLUDES) { d->include_cut++; break; }
+            h = include_file(d, (uint32_t)x->target, depth + 1) + 1;
+            if (h > height) height = h;
+            break;
+        }
+        }
+        i++;
+    }
+    d->nframes = fbase;
+    collect(d, s, base);
+    d->nranges = base;
+    /* 結果を記録する。打ち切りがあった読み方は、深さによって結果が変わるので記録しない */
+    if (depth && d->include_cut == cuts0 && s->nmemos < MAX_MEMOS && d->memo_cells < MAX_MEMO_CELLS) {
+        memo e;
+        size_t k, n = 0;
+        uint32_t serial = ++d->serial;
+        memset(&e, 0, sizeof e);
+        for (k = rstart; k < d->nrlog; k++) if (d->rlog[k].wtick <= t0 && d->syms[d->rlog[k].sym].mark != serial) { d->syms[d->rlog[k].sym].mark = serial; n++; }
+        e.reads = sim_xmalloc((n ? n : 1) * sizeof *e.reads);
+        serial = ++d->serial;
+        for (k = rstart; k < d->nrlog; k++) if (d->rlog[k].wtick <= t0 && d->syms[d->rlog[k].sym].mark != serial) { d->syms[d->rlog[k].sym].mark = serial; e.reads[e.nreads++] = d->rlog[k]; }
+        e.nwrites = d->nwlog - wstart;
+        e.writes = sim_xmalloc((e.nwrites ? e.nwrites : 1) * sizeof *e.writes);
+        if (e.nwrites) memcpy(e.writes, d->wlog + wstart, e.nwrites * sizeof *e.writes);
+        e.includes = d->includes - inc0; e.height = height;
+        s->memos = sim_xrealloc(s->memos, (s->nmemos + 1) * sizeof *s->memos);
+        s->memos[s->nmemos++] = e;
+        d->memo_cells += e.nreads + e.nwrites;
+    }
+    return height;
+}
+
+static void free_sources(defs *d)
+{
+    size_t k;
+    for (k = 0; k < d->nsrc; k++) {
+        source *s = &d->src[k];
+        unsigned m;
+        for (m = 0; m < s->nmemos; m++) { free(s->memos[m].reads); free(s->memos[m].writes); }
+        free(s->lower); free(s->text); free(s->line_off); free(s->line_no); free(s->dirs); free(s->seen); free(s->memos);
+    }
+    free(d->src); free(d->by_base); free(d->ranges); free(d->frames); free(d->rlog); free(d->wlog);
+    for (k = 1; k < d->nsyms; k++) free(d->syms[k].name);
+    free(d->syms); free(d->sym_index);
+    for (k = 0; k < d->ext_cap; k++) free(d->ext[k].name);
+    free(d->ext);
+    for (k = 0; k < d->nowned; k++) free(d->owned[k]);
+    free(d->owned);
+}
+
+/* 走査したファイルをすべて読み、条件を評価して定義を集める */
+static void preprocess(defs *d)
+{
+    size_t k, i;
+    uint64_t t0 = sim_now_ns();
+    d->nsrc = d->nfiles;
+    d->src = sim_xcalloc(d->nsrc ? d->nsrc : 1, sizeof *d->src);
+    d->by_base = sim_xmalloc((d->nsrc ? d->nsrc : 1) * sizeof *d->by_base);
+    for (k = 0; k < d->nsrc && !d->error; k++) {
+        d->src[k].path = d->files[k]; d->src[k].lower = lower_path(d->files[k]);
+        load_source(d, &d->src[k]);
+    }
+    if (d->error) return;
+    d->t_read = sim_now_ns() - t0; t0 = sim_now_ns();
+    for (k = 0; k < d->nsrc; k++) d->by_base[k] = (uint32_t)k;
+    g_sort = d; qsort(d->by_base, d->nsrc, sizeof *d->by_base, base_cmp);
+    if (d->cond)
+        for (k = 0; k < d->nsrc; k++) for (i = 0; i < d->src[k].ndirs; i++) {
+            directive *x = &d->src[k].dirs[i];
+            if (x->kind != D_INCLUDE) continue;
+            x->target = resolve_include(d, &d->src[k], x->arg);
+            if (x->target >= 0) d->src[x->target].included = 1; else d->include_missing++;
+        }
+    for (i = 0; i < 2; i++)
+        for (k = 0; k < d->nsrc; k++) {
+            if (i == 0 ? d->src[k].included : d->src[k].visited) continue;
+            d->gen++; d->roots++;
+            d->tick = 0; d->nrlog = d->nwlog = 0; d->root_includes = 0;
+            process_file(d, (uint32_t)k, 0);
+        }
+    for (k = 0; k < d->nsrc; k++) for (i = 0; i < d->src[k].ndirs; i++) {
+        d->if_evaluated += d->src[k].dirs[i].evaluated;
+        d->if_indeterminate += d->src[k].dirs[i].indeterminate;
+    }
+    d->t_cond = sim_now_ns() - t0;
+}
+
+/* ---------------------------------------------------------------- 定義マクロ（cdef / mtpj / 暗黙） */
+
+enum { ORIGIN_IMPLICIT = 1, ORIGIN_MTPJ, ORIGIN_CFG, ORIGIN_CLI };
+
+static char *own(defs *d, char *s)
+{
+    d->owned = sim_xrealloc(d->owned, (d->nowned + 1) * sizeof *d->owned);
+    return d->owned[d->nowned++] = s;
+}
+
+/* 「名前」または「名前=値」。値を省くと 1 */
+static int add_cdef(defs *d, const char *text, int origin, const char *what)
+{
+    const char *p = skip_blank(text), *b = p, *v;
+    uint32_t id;
+    size_t n;
+    while (sim_is_ident_char((unsigned char)*p)) p++;
+    v = skip_blank(p);
+    if (p == b || !sim_is_ident_start((unsigned char)*b) || (*v && *v != '=')) {
+        snprintf(d->err, d->cap, "%s '%s' は 名前 または 名前=値 の形で指定してください", what, text);
+        d->error = 1; return -1;
+    }
+    id = intern(d, b, (size_t)(p - b));
+    if (*v == '=') {
+        v = skip_blank(v + 1);
+        n = strlen(v);
+        while (n && (v[n - 1] == ' ' || v[n - 1] == '\t' || v[n - 1] == '\r')) n--;
+        d->syms[id].base_body = own(d, sim_xstrndup(v, n));
+    } else d->syms[id].base_body = "1";
+    d->syms[id].base_kind = SIM_PP_OBJECT; d->syms[id].origin = (unsigned char)origin;
+    return 0;
+}
+
+static int add_cundef(defs *d, const char *text, const char *what)
+{
+    const char *p = skip_blank(text), *b = p;
+    uint32_t id;
+    while (sim_is_ident_char((unsigned char)*p)) p++;
+    if (p == b || !sim_is_ident_start((unsigned char)*b) || *skip_blank(p)) {
+        snprintf(d->err, d->cap, "%s '%s' は名前で指定してください", what, text);
+        d->error = 1; return -1;
+    }
+    id = intern(d, b, (size_t)(p - b));
+    d->syms[id].base_kind = SIM_PP_UNDEF; d->syms[id].base_body = NULL; d->syms[id].origin = 0;
+    return 0;
+}
+
+/* ロードモジュールの種類: 0 不明（モックなど）、1 CA78K0R（lmf）、2 CC-RL（abs = ELF） */
+static int compiler_kind(defs *d, const sim_open_opts *o)
+{
+    const char *abi = sim_cfg_get(&d->cfg, "abi"), *abs = sim_cfg_get(&d->cfg, "abs");
+    char *path = o->abs_path ? sim_xstrdup(o->abs_path) : abs ? sim_cfg_path(&d->cfg, abs) : NULL;
+    unsigned char m[4] = {0};
+    size_t n = 0;
+    int kind = 0;
+    if (path) {
+        FILE *fp = fopen(path, "rb");
+        if (fp) { n = fread(m, 1, 4, fp); fclose(fp); }
+        free(path);
+    }
+    if (n >= 2 && m[0] == 0x48 && m[1] == 0x11) kind = 1;
+    else if (n == 4 && !memcmp(m, "\x7f" "ELF", 4)) kind = 2;
+    if (abi && !strcmp(abi, "ca78k0r")) kind = 1;
+    else if (abi && !strcmp(abi, "ccrl")) kind = 2;
+    return kind;
+}
+
+/* コンパイラが暗黙に定義するマクロのうち、品種・メモリモデル・オプションに依らないものだけ。
+   CA78K0R: docs/CA78K0R_NOTES.md 6 節（__K0R__ は共通、__CA78K0R__）。__CHAR_UNSIGNED__ は -qu（char_unsigned = on）のとき。
+     __RL78__ / __RL78_1__〜3__ / __K0R_SMALL__ など、品種とメモリモデルで変わるものは定義しない。
+   CC-RL: __CCRL__ / __CCRL / __RL78__ / __RENESAS__。__RL78_S1__〜S3__ / __RL78_SMALL__ などは定義しない。 */
+static void add_implicit(defs *d, int kind)
+{
+    static const char *const ca[] = {"__K0R__", "__CA78K0R__", NULL};
+    static const char *const cc[] = {"__CCRL__", "__CCRL", "__RL78__", "__RENESAS__", NULL};
+    const char *const *list = kind == 1 ? ca : kind == 2 ? cc : NULL;
+    for (; list && *list; list++) add_cdef(d, *list, ORIGIN_IMPLICIT, "暗黙の定義");
+    if (kind == 1 && d->char_unsigned) add_cdef(d, "__CHAR_UNSIGNED__", ORIGIN_IMPLICIT, "暗黙の定義");
+}
+
+static void list_origin(defs *d, sim_buf *b, int origin, const char *label)
+{
+    size_t k, n = 0;
+    for (k = 1; k < d->nsyms; k++) if (d->syms[k].base_kind && d->syms[k].origin == origin) {
+        sim_buf_printf(b, "%s%s=%s", n ? ", " : label, d->syms[k].name, d->syms[k].base_body);
+        n++;
+    }
+    if (n) sim_buf_addc(b, '\n');
+}
+
+static int ref_cmp(const void *a, const void *b)
+{
+    const psym *x = &g_sort->syms[*(const uint32_t *)a], *y = &g_sort->syms[*(const uint32_t *)b];
+    unsigned rx = x->undef_refs + x->hidden_refs, ry = y->undef_refs + y->hidden_refs;
+    if (rx != ry) return rx < ry ? 1 : -1;
+    return strcmp(x->name, y->name);
+}
+
+/* 条件の中で未定義だった識別子の一覧。hidden = 0: どこにも定義がないもの、1: 定義はあるがその場所から見えなかったもの */
+static void list_undefined(defs *d, sim_buf *b, int hidden, size_t limit)
+{
+    uint32_t *ids = sim_xmalloc((d->nsyms ? d->nsyms : 1) * sizeof *ids);
+    size_t k, n = 0;
+    for (k = 1; k < d->nsyms; k++) if (hidden ? d->syms[k].hidden_refs : d->syms[k].undef_refs) ids[n++] = (uint32_t)k;
+    g_sort = d; qsort(ids, n, sizeof *ids, ref_cmp);
+    if (!hidden) {
+        d->undefined = (unsigned)n;
+        sim_buf_printf(b, "条件の判定で、どこにも定義がなく 0（未定義）とみなした識別子: %zu 個", n);
+        if (n > limit) sim_buf_printf(b, "（参照の多い順に上位 %zu 個。--verbose で全部）", limit);
+        if (n) sim_buf_adds(b, "。品種やビルド構成のスイッチなら cdef / mtpj で与えてください");
+        sim_buf_addc(b, '\n');
+    } else if (n) sim_buf_printf(b, "走査したファイルに #define はあるが、条件の場所からは見えず未定義とみなした識別子: %zu 個（.c の中で #define してからインクルードする形のスイッチは cdef で与えてください）\n", n);
+    for (k = 0; k < n && k < limit; k++) {
+        const psym *p = &d->syms[ids[k]];
+        sim_buf_printf(b, "  %s (%u)\n", p->name, hidden ? p->hidden_refs : p->undef_refs);
+    }
+    free(ids);
 }
 
 static const sim_type basic[] = {
@@ -275,6 +925,7 @@ static const sim_type basic[] = {
     {SIM_T_FLOAT,"f32",4,NULL,0,NULL,0}
 };
 static const sim_type *resolve_name(defs *,const char *,unsigned);
+static const sim_type *external_type(defs *,const char *,unsigned);
 static const sim_type *parse_type(defs *,lexer *,unsigned);
 static uint64_t expression(defs *,lexer *,unsigned,int *);
 static uint64_t atom(defs *d,lexer *l,unsigned depth,int *ok)
@@ -424,6 +1075,33 @@ static const sim_type *resolve_name(defs *d,const char *name,unsigned depth)
         if (v->type) return v->type;
         }
     } }
+    /* ここから先（ロードモジュールの同名の型と ctype）は全変数をたどるので、名前ごとに結果を覚える。
+       マクロの本体の「(」ごとに型かどうかを試すため、型でない名前で何度も呼ばれる */
+    {
+        size_t slot; const sim_type *t;
+        if (d->ext_count*2>=d->ext_cap) {
+            size_t old=d->ext_cap, j; ext_type *prev=d->ext;
+            d->ext_cap=old?old*2:256; d->ext=sim_xcalloc(d->ext_cap,sizeof *d->ext);
+            for (j=0;j<old;j++) if (prev[j].name) {
+                slot=name_hash(prev[j].name)&(d->ext_cap-1);
+                while (d->ext[slot].name) slot=(slot+1)&(d->ext_cap-1);
+                d->ext[slot]=prev[j];
+            }
+            free(prev);
+        }
+        slot=name_hash(name)&(d->ext_cap-1);
+        while (d->ext[slot].name) { if (!strcmp(d->ext[slot].name,name)) return d->ext[slot].type; slot=(slot+1)&(d->ext_cap-1); }
+        t=external_type(d,name,depth);
+        /* external_type が再帰して表を伸ばしたかもしれないので、場所を探し直す */
+        slot=name_hash(name)&(d->ext_cap-1);
+        while (d->ext[slot].name) { if (!strcmp(d->ext[slot].name,name)) return t; slot=(slot+1)&(d->ext_cap-1); }
+        d->ext[slot].name=sim_xstrdup(name); d->ext[slot].type=t; d->ext_count++;
+        return t;
+    }
+}
+static const sim_type *external_type(defs *d,const char *name,unsigned depth)
+{
+    size_t i;
     { const sim_type *t=sim_ctx_named_type(d->ctx,name); if (t) return t; }
     for (i=0;i<(size_t)d->cfg.n;i++) if (!strcmp(d->cfg.e[i].key,"ctype")) {
         lexer l=lex(d->cfg.e[i].value);
@@ -503,7 +1181,7 @@ static void resolve_macro(defs *d,definition *v)
     if (l.tok[0] || !t || !t->size) goto unresolved;
     if (addr>0xFFFFF || t->size>0x100000-addr) { snprintf(d->err,d->cap,"defines: %s:%u %s の番地またはサイズが20ビット範囲外です",v->file,v->line,v->name); d->error=1; return; }
     {
-        int added=sim_ctx_define(d->ctx,v->name,t,addr,bit,bits,v->file,0);
+        int added=sim_ctx_define_at(d->ctx,v->name,t,addr,bit,bits,v->file,v->line,0);
         if (!added) { if (d->verbose) fprintf(stderr,"defines: %s はロードモジュールの同名シンボルを優先\n",v->name); return; }
     }
     if (bits) d->bits++; else if (t->kind==SIM_T_ARRAY) d->arrays++; else d->variables++;
@@ -545,7 +1223,7 @@ static int explicit_var(defs *d,const char *text,const char *file,unsigned line)
     next(&l); if (sim_parse_uint(l.tok,0xFFFFF,&addr) || t->size>0x100000-addr) goto bad;
     next(&l); if (l.tok[0]) goto bad;
     {
-        int added=sim_ctx_define(d->ctx,name,t,addr,bit,bits,file,2);
+        int added=sim_ctx_define_at(d->ctx,name,t,addr,bit,bits,file,line,2);
         if (d->verbose && added==2) fprintf(stderr,"var: %s の同名シンボルを明示定義で上書き\n",name);
     }
     d->explicit_vars++; return 0;
@@ -575,8 +1253,12 @@ static void var_file(defs *d,const char *value)
 
 int sim_defines_load(sim_ctx *c,const sim_open_opts *o,char *err,size_t cap)
 {
-    defs d; char *path; int rc,i; size_t k; uint64_t t0=sim_now_ns(); sim_buf info;
+    defs d; char *path; int rc,i,kind; size_t k; uint64_t t0=sim_now_ns(),t1; sim_buf info;
+    sim_mtpj mtpj; char *mtpj_path=NULL; int have_mtpj=0;
+    unsigned n_implicit=0,n_mtpj=0,n_cfg=0,n_cli=0,n_cundef=0;
     memset(&d,0,sizeof d); d.ctx=c; d.err=err; d.cap=cap; d.verbose=o->verbose;
+    d.env.lookup=lookup_cb; d.env.ctx=&d;
+    memset(&mtpj,0,sizeof mtpj);
     sim_cfg_init(&d.cfg);
     if (o->cfg_path) path=sim_xstrdup(o->cfg_path);
     else if (o->abs_path) { const char *b=sim_basename(o->abs_path); char *dir=sim_xstrndup(o->abs_path,(size_t)(b-o->abs_path)); path=sim_path_join(dir[0]?dir:".","sim.cfg"); free(dir); }
@@ -585,11 +1267,37 @@ int sim_defines_load(sim_ctx *c,const sim_open_opts *o,char *err,size_t cap)
     if (rc==-2 || (rc==-1 && o->cfg_path)) { if (rc==-1) snprintf(err,cap,"設定ファイルを読めません"); sim_cfg_free(&d.cfg); return -1; }
     d.recursive=onoff(&d,"defines_recursive",1); d.guess=onoff(&d,"defines_guess_bits",1);
     d.char_unsigned=onoff(&d,"char_unsigned",0); d.near_base=0xF0000;
+    d.cond=onoff(&d,"defines_cond",1);
     { const char *s=sim_cfg_get(&d.cfg,"defines_near_base"); if (s && (sim_parse_uint(s,0xF0000,&d.near_base) || (d.near_base && d.near_base!=0xF0000))) { snprintf(err,cap,"defines_near_base は 0xF0000 / 0 です"); d.error=1; } }
+    /* 定義マクロ: 暗黙 -> mtpj の定義・定義解除 -> sim.cfg の cdef -> --cdef -> cundef の順に適用する */
+    kind=d.error?0:compiler_kind(&d,o);
+    if (!d.error) add_implicit(&d,kind);
+    if (!d.error) {
+        const char *s=sim_cfg_get(&d.cfg,"mtpj"), *mode=sim_cfg_get(&d.cfg,"mtpj_mode");
+        if (o->mtpj_path) mtpj_path=sim_xstrdup(o->mtpj_path);
+        else if (s) mtpj_path=sim_cfg_path(&d.cfg,s);
+        if (mtpj_path) {
+            if (sim_mtpj_load(&mtpj,mtpj_path,mode,err,cap)) d.error=1;
+            else {
+                have_mtpj=1;
+                for (i=0;i<mtpj.ndefs && !d.error;i++) add_cdef(&d,mtpj.defs[i],ORIGIN_MTPJ,"mtpj の定義マクロ");
+                for (i=0;i<mtpj.nundefs && !d.error;i++) add_cundef(&d,mtpj.undefs[i],"mtpj の定義解除マクロ");
+            }
+        } else if (mode) { snprintf(err,cap,"mtpj_mode は mtpj = パス と一緒に指定してください"); d.error=1; }
+    }
+    for (i=0;i<d.cfg.n && !d.error;i++) if (!strcmp(d.cfg.e[i].key,"cdef")) add_cdef(&d,d.cfg.e[i].value,ORIGIN_CFG,"cdef");
+    for (i=0;i<o->ncdefs && !d.error;i++) add_cdef(&d,o->cdefs[i],ORIGIN_CLI,"--cdef");
+    for (i=0;i<d.cfg.n && !d.error;i++) if (!strcmp(d.cfg.e[i].key,"cundef")) { add_cundef(&d,d.cfg.e[i].value,"cundef"); n_cundef++; }
+    for (k=1;k<d.nsyms;k++) if (d.syms[k].base_kind) switch (d.syms[k].origin) {
+        case ORIGIN_IMPLICIT: n_implicit++; break; case ORIGIN_MTPJ: n_mtpj++; break;
+        case ORIGIN_CFG: n_cfg++; break; case ORIGIN_CLI: n_cli++; break;
+    }
     for (i=0;i<d.cfg.n && !d.error;i++) if (!strcmp(d.cfg.e[i].key,"defines")) collect_path(&d,d.cfg.e[i].value);
     for (i=0;i<o->ndefines && !d.error;i++) collect_path(&d,o->defines[i]);
     qsort(d.files,d.nfiles,sizeof *d.files,path_cmp);
-    for (k=0;k<d.nfiles && !d.error;k++) read_source(&d,d.files[k]);
+    d.t_scan=sim_now_ns()-t0;
+    if (!d.error) preprocess(&d);
+    t1=sim_now_ns();
     for (k=0;k<d.nmacros && !d.error;k++) resolve_macro(&d,&d.macros[k]);
     for (i=0;i<d.cfg.n && !d.error;i++) {
         if (!strcmp(d.cfg.e[i].key,"var")) explicit_var(&d,d.cfg.e[i].value,d.cfg.path?d.cfg.path:"sim.cfg",(unsigned)d.cfg.e[i].line);
@@ -597,14 +1305,70 @@ int sim_defines_load(sim_ctx *c,const sim_open_opts *o,char *err,size_t cap)
     }
     sim_ctx_refresh_symbols(c);
     sim_buf_init(&info);
-    if (d.nfiles || d.explicit_vars) {
+    if (!d.error && (d.nfiles || d.explicit_vars || have_mtpj || n_cfg || n_cli)) {
+        size_t limit=d.verbose?(size_t)-1:20;
         sim_buf_printf(&info,"defines files=%zu variables=%u bits=%u arrays=%u guessed=%u unresolved=%u duplicates=%u pointer-skipped=%u (%.3f s)\n",d.nfiles,d.variables,d.bits,d.arrays,d.guessed,d.unresolved,d.duplicates,d.pointers,(double)(sim_now_ns()-t0)/1e9);
-        sim_buf_printf(&info,"型を解決できなかった定義: %u 件。同じ名前で内容の違う定義: %u 件（defines_exclude で除外できます）\n",d.unresolved,d.duplicates);
+        sim_buf_printf(&info,"型を解決できなかった定義: %u 件。同じ名前で内容の違う定義: %u 件（defines_exclude で除外できます。--verbose でファイル名と行番号を表示）\n",d.unresolved,d.duplicates);
         sim_buf_printf(&info,"var definitions=%u\n",d.explicit_vars);
+        if (d.nfiles) {
+            sim_buf_printf(&info,"defines time: scan=%.3f s read=%.3f s cond=%.3f s resolve=%.3f s (%.1f MB, %zu directives)\n",
+                (double)d.t_scan/1e9,(double)d.t_read/1e9,(double)d.t_cond/1e9,(double)(sim_now_ns()-t1)/1e9,(double)d.bytes/1048576.0,d.ndirectives);
+            sim_buf_printf(&info,"defines cond=%s roots=%u includes=%u include-reused=%u include-missing=%u include-cut=%u if-evaluated=%u if-indeterminate=%u\n",
+                d.cond?"on":"off",d.roots,d.includes,d.memo_hits,d.include_missing,d.include_cut,d.if_evaluated,d.if_indeterminate);
+            if (d.cond) sim_buf_printf(&info,"条件付きコンパイル: 起点 %u ファイル、#include の展開 %u 回（走査した中に見つからない #include %u 箇所、循環・深さの上限で打ち切り %u 回）。"
+                "評価した #if / #ifdef / #ifndef / #elif %u 箇所、判定不能 %u 箇所（判定不能の系列はすべての枝を読みます）\n",
+                d.roots,d.includes,d.include_missing,d.include_cut,d.if_evaluated,d.if_indeterminate);
+            else sim_buf_adds(&info,"条件付きコンパイル: defines_cond = off（#if を評価せず、すべての枝を読みます）\n");
+        }
+        sim_buf_printf(&info,"cdef implicit=%u mtpj=%u cfg=%u cli=%u cundef=%u\n",n_implicit,n_mtpj,n_cfg,n_cli,n_cundef);
+        if (d.verbose) {
+            sim_buf_printf(&info,"コンパイラが暗黙に定義するマクロ（%s。品種・メモリモデル・オプションで変わるものは含めません）:%s\n",
+                kind==1?"CA78K0R":kind==2?"CC-RL":"ロードモジュールの種類が不明のため定義なし",n_implicit?"":" なし");
+            list_origin(&d,&info,ORIGIN_IMPLICIT,"  implicit: ");
+        }
+        if (have_mtpj) {
+            sim_buf_printf(&info,"mtpj: %s、ビルド・モード %s（%d 個中 %d 番目",mtpj_path,mtpj.modes[mtpj.mode],mtpj.nmodes,mtpj.mode+1);
+            for (i=0;i<mtpj.nmodes;i++) sim_buf_printf(&info,"%s%s",i?", ":"。全モード: ",mtpj.modes[i]);
+            sim_buf_adds(&info,"）\n");
+            if (!mtpj.def_element) sim_buf_printf(&info,"mtpj: 定義マクロの要素 <MacroDefinitions-%d> が見つかりません。定義マクロは読んでいません（CA78K0R 以外のプロジェクトか、未対応の版です）\n",mtpj.mode);
+            else {
+                sim_buf_printf(&info,"mtpj: 定義マクロは要素 <%s> から読みました%s。中身の書式（1 行に 名前 または 名前=値）は実例からの推定です。CS+ のコンパイル・オプションの「定義マクロ」と見比べてください\n",
+                    mtpj.def_element,mtpj.compiler_instance?"":"（コンパイラのオプションの Instance を特定できず、最初に現れたものを使いました）");
+                sim_buf_printf(&info,"  mtpj macro definitions (%d):",mtpj.ndefs);
+                for (i=0;i<mtpj.ndefs;i++) sim_buf_printf(&info,"%s %s",i?",":"",mtpj.defs[i]);
+                sim_buf_printf(&info,"%s\n  mtpj macro undefinitions (%d):",mtpj.ndefs?"":" なし",mtpj.nundefs);
+                for (i=0;i<mtpj.nundefs;i++) sim_buf_printf(&info,"%s %s",i?",":"",mtpj.undefs[i]);
+                sim_buf_printf(&info,"%s\n",mtpj.nundefs?"":" なし");
+            }
+            for (i=0;i<mtpj.nbad;i++) sim_buf_printf(&info,"mtpj: 名前として読めない行を無視しました: %s\n",mtpj.bad[i]);
+            if (mtpj.individual) sim_buf_printf(&info,"mtpj: ファイルごとの個別コンパイル・オプションらしい定義マクロが %d 件あります（読んでいません。必要なら cdef で与えてください）\n",mtpj.individual);
+        }
+        list_origin(&d,&info,ORIGIN_MTPJ,"  有効な定義マクロ（mtpj）: ");
+        list_origin(&d,&info,ORIGIN_CFG,"  有効な定義マクロ（cdef）: ");
+        list_origin(&d,&info,ORIGIN_CLI,"  有効な定義マクロ（--cdef）: ");
+        if (n_cundef) {
+            sim_buf_adds(&info,"  cundef:");
+            for (i=0,rc=0;i<d.cfg.n;i++) if (!strcmp(d.cfg.e[i].key,"cundef")) sim_buf_printf(&info,"%s %s",rc++?",":"",d.cfg.e[i].value);
+            sim_buf_addc(&info,'\n');
+        }
+        if (d.nfiles && d.cond) {
+            list_undefined(&d,&info,0,limit);
+            if (d.verbose) {
+                list_undefined(&d,&info,1,limit);
+                for (k=0;k<d.nsrc;k++) { size_t j; for (j=0;j<d.src[k].ndirs;j++) if (d.src[k].dirs[j].indeterminate) {
+                    const directive *x=&d.src[k].dirs[j];
+                    sim_buf_printf(&info,"  判定不能: %s:%u: #%s %s\n",d.src[k].path,d.src[k].line_no[x->line],
+                        x->kind==D_ELIF?"elif":x->kind==D_IF?"if":x->kind==D_IFDEF?"ifdef":"ifndef",skip_blank(x->arg));
+                } }
+            }
+        }
         sim_ctx_set_definition_info(c,sim_buf_cstr(&info));
         if (d.verbose) fputs(sim_buf_cstr(&info),stderr);
     }
     sim_buf_free(&info);
+    if (have_mtpj) sim_mtpj_free(&mtpj);
+    free(mtpj_path);
+    free_sources(&d);
     for (k=0;k<d.nfiles;k++) free(d.files[k]);
     free(d.files);
     free_definitions(d.macros,d.nmacros); free_definitions(d.types,d.ntypes); sim_cfg_free(&d.cfg);

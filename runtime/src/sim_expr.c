@@ -20,7 +20,7 @@ typedef struct {
 typedef struct {
     sim_var var;
     int bit_offset, priority;
-    unsigned bit_size;
+    unsigned bit_size, line;
 } defined_var;
 
 struct sim_ctx {
@@ -39,6 +39,11 @@ struct sim_ctx {
     defined_var **defined;
     size_t ndefined;
     char *definition_info;
+    /* sim_ctx_define 用: vars と同じ並びの登録情報（バックエンドの変数は NULL）と、
+       関数に属さない変数の名前から最初の位置を引くハッシュ表（位置 + 1。0 は空き） */
+    defined_var **var_def;
+    size_t *name_index, name_cap, name_count;
+    size_t owned_cap, defined_cap, vars_cap;    /* 1 件ずつ伸ばさない（定義が数万件あると遅くなる） */
 };
 
 static int streq(const char *a, const char *b) { return a && b && strcmp(a, b) == 0; }
@@ -97,13 +102,17 @@ void sim_ctx_free(sim_ctx *c)
     free(c->funcs);
     for (i = 0; i < c->nowned; i++) free(c->owned[i]);
     free(c->owned); free(c->defined); free(c->definition_info);
+    free(c->var_def); free(c->name_index);
     free(c);
 }
 
 void *sim_ctx_alloc(sim_ctx *c, size_t n)
 {
     void *p = sim_xcalloc(n ? n : 1, 1);
-    c->owned = sim_xrealloc(c->owned, (c->nowned + 1) * sizeof *c->owned);
+    if (c->nowned == c->owned_cap) {
+        c->owned_cap = c->owned_cap ? c->owned_cap * 2 : 64;
+        c->owned = sim_xrealloc(c->owned, c->owned_cap * sizeof *c->owned);
+    }
     c->owned[c->nowned++] = p;
     return p;
 }
@@ -121,27 +130,77 @@ void sim_ctx_refresh_symbols(sim_ctx *c)
 }
 int sim_ctx_define(sim_ctx *c, const char *name, const sim_type *type, uint64_t addr,
                    int bit_offset, unsigned bit_size, const char *file, int priority)
+{ return sim_ctx_define_at(c, name, type, addr, bit_offset, bit_size, file, 0, priority); }
+unsigned sim_ctx_sym_line(sim_ctx *c, size_t i)
+{ return i < c->nvars && c->var_def && c->var_def[i] ? c->var_def[i]->line : 0; }
+
+/* 関数に属さない変数のうち、名前が name の最初のものの位置。なければ nvars。
+   定義が数万件あっても遅くならないよう、ハッシュ表で引く */
+static size_t name_slot(const sim_ctx *c, const char *name)
 {
-    size_t i, slot = c->nvars, k;
+    uint32_t h = 2166136261u;
+    const char *p;
+    for (p = name; *p; p++) { h ^= (unsigned char)*p; h *= 16777619u; }
+    return h & (c->name_cap - 1);
+}
+static void name_insert(sim_ctx *c, size_t i)
+{
+    size_t slot = name_slot(c, c->vars[i]->name);
+    while (c->name_index[slot]) {
+        if (!strcmp(c->vars[c->name_index[slot] - 1]->name, c->vars[i]->name)) return;   /* 最初のものを残す */
+        slot = (slot + 1) & (c->name_cap - 1);
+    }
+    c->name_index[slot] = i + 1; c->name_count++;
+}
+static size_t find_global(sim_ctx *c, const char *name)
+{
+    size_t i, slot;
+    if (!c->name_cap || (c->name_count + 1) * 2 > c->name_cap) {
+        c->name_cap = c->name_cap ? c->name_cap * 2 : 1024;
+        while (c->name_cap < (c->nvars + 1) * 2) c->name_cap *= 2;
+        free(c->name_index); c->name_index = sim_xcalloc(c->name_cap, sizeof *c->name_index); c->name_count = 0;
+        for (i = 0; i < c->nvars; i++) if (!c->vars[i]->func) name_insert(c, i);
+    }
+    slot = name_slot(c, name);
+    while (c->name_index[slot]) {
+        if (!strcmp(c->vars[c->name_index[slot] - 1]->name, name)) return c->name_index[slot] - 1;
+        slot = (slot + 1) & (c->name_cap - 1);
+    }
+    return c->nvars;
+}
+
+int sim_ctx_define_at(sim_ctx *c, const char *name, const sim_type *type, uint64_t addr,
+                      int bit_offset, unsigned bit_size, const char *file, unsigned line, int priority)
+{
+    size_t slot;
     defined_var *d;
     int replaced;
-    for (i = 0; i < c->nvars; i++) if (!c->vars[i]->func && !strcmp(c->vars[i]->name, name)) {
-        int old_priority = 1;
-        for (k = 0; k < c->ndefined; k++) if (&c->defined[k]->var == c->vars[i]) old_priority = c->defined[k]->priority;
+    if (!c->var_def) c->var_def = sim_xcalloc(c->nvars + 1, sizeof *c->var_def);
+    slot = find_global(c, name);
+    if (slot < c->nvars) {
+        int old_priority = c->var_def[slot] ? c->var_def[slot]->priority : 1;
         if (old_priority > priority) return 0;
-        slot = i; break;
     }
     replaced = slot < c->nvars;
     d = sim_ctx_alloc(c, sizeof *d);
     d->var.name = ctx_string(c, name); d->var.file = ctx_string(c, file ? file : "");
     d->var.addr = addr; d->var.type = type; d->var.is_external = 1;
-    d->bit_offset = bit_offset; d->bit_size = bit_size; d->priority = priority;
-    c->defined = sim_xrealloc(c->defined, (c->ndefined + 1) * sizeof *c->defined);
+    d->bit_offset = bit_offset; d->bit_size = bit_size; d->priority = priority; d->line = line;
+    if (c->ndefined == c->defined_cap) {
+        c->defined_cap = c->defined_cap ? c->defined_cap * 2 : 64;
+        c->defined = sim_xrealloc(c->defined, c->defined_cap * sizeof *c->defined);
+    }
     c->defined[c->ndefined++] = d;
     if (slot == c->nvars) {
-        c->vars = sim_xrealloc(c->vars, (c->nvars + 1) * sizeof *c->vars); c->nvars++;
-    }
-    c->vars[slot] = &d->var;
+        if (c->nvars + 1 > c->vars_cap) {
+            c->vars_cap = c->vars_cap ? c->vars_cap * 2 : (c->nvars + 1) * 2;
+            c->vars = sim_xrealloc(c->vars, c->vars_cap * sizeof *c->vars);
+            c->var_def = sim_xrealloc(c->var_def, c->vars_cap * sizeof *c->var_def);
+        }
+        c->nvars++;
+        c->vars[slot] = &d->var; c->var_def[slot] = d;
+        name_insert(c, slot);
+    } else { c->vars[slot] = &d->var; c->var_def[slot] = d; }
     return replaced ? 2 : 1;
 }
 const sim_var *sim_ctx_sym_var(sim_ctx *c, size_t i) { return i < c->nvars ? c->vars[i] : NULL; }

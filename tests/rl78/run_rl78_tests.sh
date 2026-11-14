@@ -223,6 +223,14 @@ for mode in tagref tagaux tagmismatch tagend tagcycle tagwidth; do
     "$WORK/lmf_types" "$WORK/badtag.lmf" bad > "$WORK/tag.log" 2>&1
     check "malformed $mode becomes unknown without recursion or crash" test $? -eq 0
 done
+# 型を解決できない引数（struct 型・不正なタグ参照・補助サイズ 2）を整数の規約で呼ばない。変数は従来どおり生の整数。
+check "mklmf badarg" "$WORK/mklmf" badarg "$WORK/badarg.lmf"
+rl78_run "unresolved LMF argument type is rejected instead of called as integer" 2 "関数 'badarg' の引数 'a'" -- --abs "$WORK/badarg.lmf" "$R/csv/lmf_badarg.csv"
+check "unresolved LMF argument: no call was made" contains "$WORK/r.log" "総数 0, OK 0, NG 0, NO Check 0, エラー 1"
+rl78_run "unresolved LMF variable still falls back to raw integer" 0 "総数 1, OK 1, NG 0" -- --abs "$WORK/badarg.lmf" "$R/csv/lmf_badvar.csv"
+"$RS" list --abs "$WORK/badarg.lmf" bad > "$WORK/badarg.list" 2>/dev/null
+check "unresolved LMF argument listed as unknown type" contains "$WORK/badarg.list" "badarg(? a)"
+check "unresolved LMF variable listed as uint16" grep -q "badvar  *uint16" "$WORK/badarg.list"
 rl78_run "probe 32-bit skip result" 0 "総数 1, OK 1, NG 0" -- --abs "$PROBE" --cfg "$R/cfg/probe_skip.cfg" "$R/csv/probe_skip.csv"
 
 echo "== 本物のバックエンドの GUI サーバ"
@@ -463,6 +471,25 @@ check "macros in C files" contains "$WORK/header_list.log" "MORE"
 rl78_run "var and varfile real" 0 "総数 1, OK 1, NG 0" -- --abs "$WORK/test.lmf" --cfg "$T/defines/var_real.cfg" "$T/defines/var_real.csv"
 
 rl78_run "header arrays nested union and mixed bit storage real" 0 "総数 1, OK 1, NG 0" -- --abs "$WORK/test.lmf" --cfg "$T/defines/real.cfg" "$T/defines/types_real.csv"
+
+echo "== defines: コンパイルスイッチ（本物）"
+cond_suite "cond real" "$RS" FF9 "$T/defines/cond_real.csv" "--abs $WORK/test.lmf"
+# コンパイラが暗黙に定義するマクロ: lmf なら CA78K0R、ELF なら CC-RL。cundef で外せる
+cond_cfg
+cond_list -v
+check "cond real: LMF defines the CA78K0R implicit macros" sh -c 'grep -q -E "^var  0xFF97E COND_K0R +u8 " "$1" && grep -q -F "implicit: __K0R__=1, __CA78K0R__=1" "$2"' sh "$WORK/cond_list.log" "$WORK/cond_info.log"
+check "cond real: implicit macro is not reported as undefined" sh -c '! grep -q "^  __K0R__ (" "$1"' sh "$WORK/cond_info.log"
+cond_cfg 'cundef = __K0R__' 'char_unsigned = on'
+cond_list -v
+check "cond real: cundef removes an implicit macro" cond_at 7F COND_K0R u8
+check "cond real: char_unsigned = on adds __CHAR_UNSIGNED__" contains "$WORK/cond_info.log" "implicit: __CA78K0R__=1, __CHAR_UNSIGNED__=1"
+COND_ARGS="--abs $TP"
+cond_cfg
+cond_list -v
+check "cond real: ELF defines the CC-RL implicit macros" sh -c 'grep -q -E "^var  0xFF97F COND_K0R +u8 " "$1" && grep -q -F "implicit: __CCRL__=1, __CCRL=1, __RL78__=1, __RENESAS__=1" "$2"' sh "$WORK/cond_list.log" "$WORK/cond_info.log"
+# probe の lmf と、その CS+ プロジェクトファイル（定義マクロは空）の組み合わせ
+"$RS" info --abs "$PROBE" --mtpj "$T/ca78k0r_probe/ca78k0r_probe.mtpj" --defines "$COND" --cdef PRODUCT=2 > "$WORK/cond_probe.log" 2>&1
+check "cond real: probe lmf with its own project file" sh -c '[ "$1" -eq 0 ] && grep -q -F "mtpj macro definitions (0): なし" "$2" && grep -q "cdef implicit=2 mtpj=0 cfg=0 cli=1 cundef=0" "$2"' sh "$?" "$WORK/cond_probe.log"
 
 # Socket-dependent integration. Keep explicit failure rather than reporting
 # zero checks as success when this sandbox cannot listen.

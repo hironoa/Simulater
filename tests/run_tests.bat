@@ -906,6 +906,94 @@ if errorlevel 1 (call :ng "header list mock") else (call :ok "header list mock")
 set RC=%ERRORLEVEL%
 if "%RC%"=="0" (call :ok "var and varfile mock") else (call :ng "var and varfile mock")
 
+echo == defines: compile switches (mock)
+rem findstr patterns are plain substrings (letters, digits, spaces, underscores). Macro values such as
+rem PRODUCT=2 go into the cfg file, not onto a call line, because cmd splits arguments at "=".
+"%CC%" -std=c11 -O2 -Wall -Wextra -I"%ROOT%\runtime\src" "%T%\tools\check_ppexpr.c" "%ROOT%\runtime\src\sim_ppexpr.c" -o "%WORK%\check_ppexpr.exe" > "%WORK%\ppexpr_build.log" 2>&1
+set RC=%ERRORLEVEL%
+if "%RC%"=="0" (call :ok "build check_ppexpr") else (call :ng "build check_ppexpr" & type "%WORK%\ppexpr_build.log")
+"%WORK%\check_ppexpr.exe" > "%WORK%\ppexpr.log" 2>&1
+set RC=%ERRORLEVEL%
+if "%RC%"=="0" (call :ok "preprocessor expression evaluator boundary cases") else (call :ng "preprocessor expression evaluator boundary cases" & type "%WORK%\ppexpr.log")
+findstr /l /c:"cases, 0 failed" "%WORK%\ppexpr.log" >nul
+if errorlevel 1 (call :ng "preprocessor expression evaluator ran its cases") else (call :ok "preprocessor expression evaluator ran its cases")
+
+call :cond_cfg
+call :cond_list
+call :cond_has "0x0F964 COND_REG" "cond: no switch takes the else branch"
+call :cond_has "0x0F967 COND_SIM" "cond: ifdef SIM undefined"
+call :cond_has "0x0F96F COND_INC" "cond: switch from an included header"
+call :cond_has "0x0F977 COND_SHORT" "cond: short circuit"
+call :cond_has "0x0F978 COND_NEAR_OK" "cond: nearest same-named header"
+call :cond_has "0x0F97F COND_K0R" "cond: no implicit macros on mock"
+call :cond_info_has "if-indeterminate" "cond: info shows the condition counts"
+call :cond_info_has "COND_UNSET_SWITCH" "cond: undefined identifier listed"
+call :cond_info_lacks "COND_PRODUCT_H" "cond: include guard not listed"
+call :cond_info_has "defines time" "cond: info shows the time breakdown"
+
+call :cond_cfg
+>> "%WORK%\cond.cfg" echo cdef = PRODUCT=2
+>> "%WORK%\cond.cfg" echo cdef = SIM
+>> "%WORK%\cond.cfg" echo cdef = COND_A
+call :cond_list
+call :cond_has "0x0F962 COND_REG" "cond: cdef PRODUCT 2 selects the elif branch"
+call :cond_has "0x0F966 COND_SIM" "cond: ifdef SIM defined"
+call :cond_has "0x0F968 COND_AB" "cond: defined A and not defined B"
+call :cond_has "0x0F96B COND_NEST" "cond: nested conditions"
+call :cond_has "0x0F96E COND_INC" "cond: included header sees SIM"
+"%SIM%" list --cfg "%WORK%\cond.cfg" --where COND_REG > "%WORK%\cond_list.log" 2>&1
+call :cond_has "cond_product.h:15" "cond: list where shows file and line"
+"%SIM%" run "%T%\defines\cond_mock.csv" --cfg "%WORK%\cond.cfg" -o "%WORK%\cond_out" > "%WORK%\cond_run.log" 2>&1
+set RC=%ERRORLEVEL%
+if "%RC%"=="0" (call :ok "cond: 16-bit typedef and struct member with PRODUCT 2") else (call :ng "cond: 16-bit typedef and struct member with PRODUCT 2")
+
+call :cond_cfg
+>> "%WORK%\cond.cfg" echo cdef = PRODUCT=1
+call :cond_list
+call :cond_has "0x0F960 COND_REG" "cond: cdef PRODUCT 1 selects the if branch"
+"%SIM%" run "%T%\defines\cond_mock.csv" --cfg "%WORK%\cond.cfg" -o "%WORK%\cond_out" > "%WORK%\cond_run.log" 2>&1
+set RC=%ERRORLEVEL%
+if "%RC%"=="2" (call :ok "cond: PRODUCT 1 has no 16-bit register or member") else (call :ng "cond: PRODUCT 1 has no 16-bit register or member")
+
+call :cond_cfg
+>> "%WORK%\cond.cfg" echo cdef = SIM
+>> "%WORK%\cond.cfg" echo cundef = SIM
+call :cond_list
+call :cond_has "0x0F967 COND_SIM" "cond: cundef removes a cdef"
+
+call :cond_cfg
+>> "%WORK%\cond.cfg" echo cdef = PRODUCT=2
+>> "%WORK%\cond.cfg" echo defines_cond = off
+call :cond_list
+call :cond_has "0x0F960 COND_REG" "cond: defines_cond off reads every branch"
+
+call :cond_cfg
+>> "%WORK%\cond.cfg" echo mtpj = %T%\defines\cond\cond_test.mtpj
+call :cond_list
+call :cond_has "0x0F960 COND_REG" "cond: mtpj macro definitions"
+call :cond_has "0x0F966 COND_SIM" "cond: mtpj macro without a value"
+call :cond_has "0x0F969 COND_AB" "cond: mtpj macro undefinition"
+call :cond_has "0x0F982 COND_ESC" "cond: mtpj value with XML escapes"
+call :cond_info_has "MTPJ_ONLY" "cond: info lists the mtpj macros"
+call :cond_info_has "DefaultBuild" "cond: info shows the build mode"
+call :cond_info_lacks "ASM_ONLY" "cond: assembler macros not used"
+>> "%WORK%\cond.cfg" echo mtpj_mode = ProductB
+call :cond_list
+call :cond_has "0x0F962 COND_REG" "cond: mtpj_mode selects another build mode"
+call :cond_info_has "9BAD LINE" "cond: unreadable mtpj line reported"
+
+call :cond_cfg
+>> "%WORK%\cond.cfg" echo cdef = 1BAD
+"%SIM%" info --cfg "%WORK%\cond.cfg" > "%WORK%\cond_info.log" 2>&1
+set RC=%ERRORLEVEL%
+if "%RC%"=="2" (call :ok "cond: bad cdef rejected") else (call :ng "cond: bad cdef rejected")
+call :cond_cfg
+>> "%WORK%\cond.cfg" echo mtpj = %T%\defines\cond\cond_test.mtpj
+>> "%WORK%\cond.cfg" echo mtpj_mode = NoSuchMode
+"%SIM%" info --cfg "%WORK%\cond.cfg" > "%WORK%\cond_info.log" 2>&1
+set RC=%ERRORLEVEL%
+if "%RC%"=="2" (call :ok "cond: unknown build mode rejected") else (call :ng "cond: unknown build mode rejected")
+
 set /a MOCK_TOTAL=PASS+FAIL
 set /a MOCK_FAIL=FAIL
 call "%T%\rl78\run_rl78_tests.bat"
@@ -976,4 +1064,29 @@ if "%RC%"=="2" (call :ok "output collision %1 exit 2") else (call :ng "output co
 if exist "%WORK%\collision\out_%1" (call :ng "output collision %1 creates nothing") else (call :ok "output collision %1 creates nothing")
 findstr /l /c:"out_%1" "%WORK%\collision.log" >nul
 if errorlevel 1 (call :ng "output collision %1 names the output folder") else (call :ok "output collision %1 names the output folder")
+exit /b 0
+
+:cond_cfg
+> "%WORK%\cond.cfg" echo defines = %T%\defines\cond
+>> "%WORK%\cond.cfg" echo defines_near_base = 0
+exit /b 0
+
+:cond_list
+"%SIM%" list --cfg "%WORK%\cond.cfg" COND_ > "%WORK%\cond_list.log" 2>&1
+"%SIM%" info --cfg "%WORK%\cond.cfg" > "%WORK%\cond_info.log" 2>&1
+exit /b 0
+
+:cond_has
+findstr /l /c:"%~1" "%WORK%\cond_list.log" >nul
+if errorlevel 1 (call :ng "%~2") else (call :ok "%~2")
+exit /b 0
+
+:cond_info_has
+findstr /l /c:"%~1" "%WORK%\cond_info.log" >nul
+if errorlevel 1 (call :ng "%~2") else (call :ok "%~2")
+exit /b 0
+
+:cond_info_lacks
+findstr /l /c:"%~1" "%WORK%\cond_info.log" >nul
+if errorlevel 1 (call :ok "%~2") else (call :ng "%~2")
 exit /b 0

@@ -3,10 +3,11 @@
  *
  *   sim run [--abs X.abs] [--cfg sim.cfg] <テスト.csv>... [-o 出力フォルダ] [--expect-actual] [--fixed-time] [--quiet]
  *   sim gui [--abs X.abs] [--cfg sim.cfg] [--port 8765] [--period-ms 5] [--func 関数名] [--speed 1] [--no-browser] [--record-max N]
- *   sim list [--abs X.abs] [--cfg sim.cfg] [文字列]
+ *   sim list [--abs X.abs] [--cfg sim.cfg] [--where] [文字列]
  *   sim info [--abs X.abs] [--cfg sim.cfg]
  *   sim --version
  *   共通: --verbose（-v）で読み込み中の警告と詳細を出す
+ *         --defines パス、--cdef 名前[=値]、--mtpj X.mtpj（ヘッダの直アドレス定義とコンパイルスイッチ）
  *
  * 終了コード: 0 = すべて OK、1 = NG あり、2 = 実行できないエラー
  */
@@ -31,10 +32,12 @@ static void usage(void)
             "使い方:\n"
             "  sim run --abs <X.abs> [--cfg sim.cfg] <テスト.csv>... [-o 出力フォルダ] [--expect-actual] [--fixed-time] [--quiet]\n"
             "  sim gui --abs <X.abs> [--cfg sim.cfg] [--port 8765] [--period-ms 5] [--func 関数名] [--speed 1] [--no-browser] [--record-max N]\n"
-            "  sim list --abs <X.abs> [--cfg sim.cfg] [文字列]\n"
+            "  sim list --abs <X.abs> [--cfg sim.cfg] [--where] [文字列]\n"
             "  sim info --abs <X.abs> [--cfg sim.cfg] [--trace-startup] [--trace-head N] [--trace-tail N]\n"
             "  sim --version\n"
-            "  共通: --verbose（-v）で読み込みの警告と詳細を出す。--abs を省くと設定ファイルの abs= を使う\n");
+            "  共通: --verbose（-v）で読み込みの警告と詳細を出す。--abs を省くと設定ファイルの abs= を使う\n"
+            "        --defines <パス> でヘッダの直アドレス定義を読む。--cdef <名前[=値]>（複数可）と --mtpj <X.mtpj> は\n"
+            "        その #if / #ifdef の評価に使う定義マクロ。sim list --where は定義元のファイル名と行番号を表示する\n");
 }
 
 static sim_open_opts g_open;
@@ -55,6 +58,15 @@ static int take_common(int *argc, char **argv)
             if (i+1 >= *argc) { fprintf(stderr, "エラー: --defines の後にパスがありません\n"); return -1; }
             g_open.defines = sim_xrealloc(g_open.defines, (size_t)(g_open.ndefines+1)*sizeof *g_open.defines);
             g_open.defines[g_open.ndefines++] = argv[++i];
+        }
+        else if (!strcmp(argv[i], "--cdef")) {
+            if (i+1 >= *argc) { fprintf(stderr, "エラー: --cdef の後に 名前[=値] がありません\n"); return -1; }
+            g_open.cdefs = sim_xrealloc(g_open.cdefs, (size_t)(g_open.ncdefs+1)*sizeof *g_open.cdefs);
+            g_open.cdefs[g_open.ncdefs++] = argv[++i];
+        }
+        else if (!strcmp(argv[i], "--mtpj")) {
+            if (i+1 >= *argc) { fprintf(stderr, "エラー: --mtpj の後にファイル名がありません\n"); return -1; }
+            g_open.mtpj_path = argv[++i];
         }
         else if (!strncmp(argv[i], "--csv-init=", 11)) g_open.csv_init = argv[i] + 11;
         else if (strcmp(argv[i], "--trace-startup") == 0) g_open.trace_startup = 1;
@@ -202,10 +214,17 @@ static int cmd_gui(int argc, char **argv)
 
 static int cmd_list(int argc, char **argv)
 {
-    sim_ctx *c = open_ctx();
-    const char *q = argc > 0 ? argv[0] : "";
+    sim_ctx *c;
+    const char *q = "";
     size_t i, n;
+    int where = 0, a;
     sim_backend *b;
+    for (a = 0; a < argc; a++) {
+        if (!strcmp(argv[a], "--where")) where = 1;
+        else if (argv[a][0] == '-' && argv[a][1] == '-') { fprintf(stderr, "エラー: 不明なオプション %s\n", argv[a]); usage(); return 2; }
+        else q = argv[a];
+    }
+    c = open_ctx();
     if (!c) return 2;
     b = sim_ctx_backend(c);
     n = sim_ctx_sym_count(c);
@@ -214,8 +233,11 @@ static int cmd_list(int argc, char **argv)
         const sim_var *v = sim_ctx_sym_var(c, i);
         if (!sim_strcasestr_found(sim_ctx_sym_name(c, i), q)) continue;
         sim_type_display(sim_ctx_sym_type(c, i), tn, sizeof tn);
-        printf("var  0x%05llX %-40s %s%s  [%s]\n", (unsigned long long)v->addr, sim_ctx_sym_name(c, i), tn,
+        printf("var  0x%05llX %-40s %s%s  [%s", (unsigned long long)v->addr, sim_ctx_sym_name(c, i), tn,
                sim_ctx_sym_const(c, i) ? " (const)" : "", v->file ? v->file : "");
+        /* --where: ヘッダ（defines）や var / varfile から取り込んだ定義は、定義元の行番号も表示する */
+        if (where && sim_ctx_sym_line(c, i)) printf(":%u", sim_ctx_sym_line(c, i));
+        printf("]\n");
     }
     n = b->func_count(b);
     for (i = 0; i < n; i++) {
