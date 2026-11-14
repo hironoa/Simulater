@@ -1,0 +1,3 @@
+mod,f_halt,halt = stop なら HALT で止めて NG,0,1
+#COMMENT,g_out
+,0x77

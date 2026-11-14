@@ -1,0 +1,10 @@
+mod,eng_judge_gear,NG を含むテスト,3,2
+#COMMENT,@rpm,@temp,@cur_gear,eng_judge_gear@@,g_gear_up_rpm
+,1600,80,1,2,0|1500|2500|3500|4500,OK,0.0000ms
+,1600,80,1,2?(3),0|1500|2500|3500|4500,NG,0.0000ms
+,900,80,2,0x01?(0x02),0|1500|2500|3500|4500?(0|1500|2500|3500|4400),NG,0.0000ms
+,900,80,2,0x01,0|1500|2500|3500|4500,NO Check,0.0000ms
+mod,calc_duty,浮動小数の NG,1,2
+#COMMENT,@temp,calc_duty@@,&g_eng_name
+,90,0.5?(0.25),'ENG-A'?('ENG-B'),NG,0.0000ms
+,90,0.5,'ENG-A',OK,0.0000ms

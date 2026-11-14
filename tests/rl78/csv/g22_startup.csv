@@ -1,0 +1,5 @@
+mod,R_ADC_Set_PowerOn,スタートアップ後の RAM（ram_fill = 0xA5 で始めて、初期値つき変数が設定されているか）,0,3
+#COMMENT,g_result_buffer,0xFEF00:2,0xFFE80
+;,g_result_buffer は .data（ROM 0x00082）から .dataR（0xFEF00）へコピーされた初期値 0（スタックの外なので stkinit は触らない）
+;,0xFFE80 はどのセクションにもない saddr 領域なので ram_fill の 0xA5 のまま
+,0,0,0xA5

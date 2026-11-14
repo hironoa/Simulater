@@ -1,0 +1,88 @@
+mod,f_mix,1/2/1 バイトの引数（A、BC、X）と 2 バイトの戻り値（AX）,3,4
+#COMMENT,@a,@b,@c,f_mix@@,g_a,g_b,g_c
+,0x12,0x3456,0x78,0x3457,0x12,0x3456,0x78,OK,0.0000ms
+,255,65535,0,0,255,65535,0,OK,0.0000ms
+mod,f_long,4 バイトの引数（BC-AX）と 2 バイト（DE）、4 バイトの戻り値（BC-AX）,2,3
+#COMMENT,@x,@y,f_long@@,g_l,g_w
+,0x12345678,0x1111,0x12346789,0x12345678,0x1111,OK,0.0000ms
+,0x0000FFFF,1,0x00010000,0x0000FFFF,1,OK,0.0000ms
+,4294967295,1,0,4294967295,1,OK,0.0000ms
+mod,f_stack,レジスタに入らない引数はスタック（2 バイト、1 バイト、4 バイトの順に低いアドレスから）,6,7
+#COMMENT,@a,@b,@c,@d,@e,@f,f_stack@@,g_sa,g_sb,g_sc,g_sdd,g_se,g_sf
+,0x1111,0x2222,0x3333,0x4444,0x55,0x66778899,0x4444,0x1111,0x2222,0x3333,0x4444,0x55,0x66778899,OK,0.0000ms
+mod,f_args8,1 バイトの引数 8 個（A、X、C、B、E、D、スタック 2 個）,8,2
+#COMMENT,@a1,@a2,@a3,@a4,@a5,@a6,@a7,@a8,f_args8@@,&g_b8
+,1,2,3,4,5,6,7,8,8,1|2|3|4|5|6|7|8,OK,0.0000ms
+mod,f_mix2,1・4・2・1 バイトの混在（A、DE-BC、スタック、X）,4,4
+#COMMENT,@a,@b,@c,@d,g_m_a,g_m_b,g_m_c,g_m_d
+,0xA1,0xB2B3B4B5,0xC6C7,0xD8,0xA1,0xB2B3B4B5,0xC6C7,0xD8,OK,0.0000ms
+mod,f_far_read,far ポインタの引数（A-DE）で ROM の const と RAM を読む,1,1
+#COMMENT,@p,f_far_read@@
+,0x02000,100,OK,0.0000ms
+,0x02008,0x52,OK,0.0000ms
+,0xFE003,1,OK,0.0000ms
+mod,f_far_write,far ポインタの戻り値（A-DE）,2,3
+#COMMENT,@p,@v,f_far_write@@,g_b8[2],0xFE11C
+,0xFE11C,0x99,0xFE11C,0x99,0x99,OK,0.0000ms
+mod,f_far2,far ポインタが X-DE に入る（A と BC が先に埋まる）,3,4
+#COMMENT,@a,@w,@p,g_m_a,g_m_c,g_fp,0xFE12A:4
+,0x11,0x2233,0xFE15E,0x11,0x2233,0xFE15E,0x000FE15E,OK,0.0000ms
+,0x22,0x4455,0x12345,0x22,0x4455,0x12345,0x00012345,OK,0.0000ms
+mod,f_far3,far ポインタがスタックに乗る（A、X、C、B と DE、BC が埋まる）,3,3
+#COMMENT,@w1,@w2,@p,g_sa,g_sb,g_fp
+,0x0102,0x0304,0x5ABCD,0x0102,0x0304,0x5ABCD,OK,0.0000ms
+mod,f_far2,far ポインタの先を読み書きする（下位 20 ビットのアドレス）,4,3
+#COMMENT,&g_b8,@a,@w,@p,g_fp[0],g_fp[3],*g_fp
+,9|8|7|6,0,0,0xFE11A,9,6,9,OK,0.0000ms
+mod,f_sum,near ポインタの引数と $ による確保,3,1
+#COMMENT,$@p,*@p,@n,f_sum@@
+,4,1|2|3|4,4,10,OK,0.0000ms
+,3,100|200|255,3,555,OK,0.0000ms
+,0,,0,0,OK,0.0000ms
+mod,f_sum,near ポインタで変数を渡す（0xF0000 を基準）,3,2
+#COMMENT,&g_b8,@p,@n,f_sum@@,@p[1]
+,1|1|1|250,0xE11A,4,253,1,OK,0.0000ms
+mod,f_neg,符号付き 1 バイトの戻り値,0,1
+#COMMENT,f_neg@@
+,-3,OK,0.0000ms
+mod,f_float,float の戻り値（BC-AX）,0,1
+#COMMENT,f_float@@
+,1.5,OK,0.0000ms
+mod,f_ll,8 バイトの戻り値（呼び出し側の領域へのポインタを AX で渡す）,0,1
+#COMMENT,f_ll@@
+,0x0123456789ABCDEF,OK,0.0000ms
+mod,f_ptr_struct,構造体へのポインタ引数,2,2
+#COMMENT,g_st.w,@p,f_ptr_struct@@,@p->s
+,0x1234,0xE13E,0x1234,0,OK,0.0000ms
+mod,f_ptr_struct,$ で確保した構造体,3,2
+#COMMENT,$@p,@p->w,@p->s,f_ptr_struct@@,@p[0].s
+,1,0x5678,-2,0x5678,-2,OK,0.0000ms
+mod,cnt_call,関数内 static（lexical_block の中）,0,2
+#COMMENT,cnt_call@@,cnt_call@calls
+,1,1,OK,0.0000ms
+,2,2,OK,0.0000ms
+mod,engine_inc,同じ名前のファイル内 static,2,2
+#COMMENT,engine.c/s_cnt,sensor.c/s_cnt,engine.c/s_cnt,sensor.c/s_cnt
+,5,7,6,7,OK,0.0000ms
+mod,sensor_inc,同じ名前のファイル内 static,2,2
+#COMMENT,engine.c/s_cnt,sensor.c/s_cnt,engine.c/s_cnt,sensor.c/s_cnt
+,5,7,5,9,OK,0.0000ms
+mod,intr_reti,RETI で戻る割り込みハンドラ（戻り番地の 4 バイト目の PSW を戻す）,0,1
+#COMMENT,g_isr_cnt
+,1,OK,0.0000ms
+,2,OK,0.0000ms
+mod,f_halt,HALT は既定で読み飛ばす,0,1
+#COMMENT,g_out
+,0x77,OK,0.0000ms
+mod,f_mulhu,S3 の MULHU（core = auto で有効）,2,1
+#COMMENT,@a,@b,f_mulhu@@
+,0x1234,0x5678,0x06260060,OK,0.0000ms
+,65535,65535,4294836225,OK,0.0000ms
+mod,f_mdu,乗除算器 SFR（core = auto で有効。MDAL × MDAH → MDBL）,2,1
+#COMMENT,@a,@b,f_mdu@@
+,0x1234,0x5678,0x0060,OK,0.0000ms
+,300,300,24464,OK,0.0000ms
+mod,TEST_cycle,10us インナーループ型のテストドライバ（1000 回、割り込み関数を 10 回呼ぶ）,0,4
+#COMMENT,TEST_time_us,g_ms_tick,TEST_cycle_cnt,TEST_cycle@sub
+,10000,10,1,0,OK,0.0000ms
+,20000,20,2,0,OK,0.0000ms

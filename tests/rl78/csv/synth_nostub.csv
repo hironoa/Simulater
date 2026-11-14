@@ -1,0 +1,3 @@
+mod,use_io,スタブなしなら ADCR (0xFFF1E) + 1,2,1
+#COMMENT,0xFFF1E:2,g_stub_val,use_io@@
+,0x0100,0x0222,0x0101

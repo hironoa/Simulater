@@ -1,0 +1,4 @@
+mod,mul16,test,2,1
+#COMMENT,@a,@b,mul16@@
+,1,2,2
+,abc,2,0

@@ -1,0 +1,7 @@
+; 期待値にカンマや二重引用符を含む文字列。不一致の結果セル（実測?(期待)）全体を CSV として引用する
+mod,eng_name_len,引用の必要な期待値,1,1
+#COMMENT,&g_eng_name,&g_eng_name
+,'ABC',"'A,B'"
+,'ABC',"'A""B'"
+,"'A,B'",'ABC'
+,'ABC','ABC'

@@ -1,0 +1,5 @@
+#COMMENT,@a,@b,mul16@@
+,1,1,1
+mod,mul16,after,2,1
+#COMMENT,@a,@b,mul16@@
+,2,3,6,OK,0.0000ms

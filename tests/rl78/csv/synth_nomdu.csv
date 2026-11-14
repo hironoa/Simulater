@@ -1,0 +1,6 @@
+mod,f_mdu,core = S3 で mdu = off なら乗除算器 SFR はただのメモリ（MDBL は 0 のまま）,2,1
+#COMMENT,@a,@b,f_mdu@@
+,300,300,0
+mod,f_mulhu,core = S3 では MULHU が使える,2,1
+#COMMENT,@a,@b,f_mulhu@@
+,2,3,6
