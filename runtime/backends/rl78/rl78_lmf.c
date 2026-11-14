@@ -277,7 +277,10 @@ unknown:
 unknown_label:
     t = ar_alloc(&c->t->ar, sizeof *t); t->kind = SIM_T_UNKNOWN; t->name = "?";
     t->size = !function && s->aux && s->cls != 0x12 ? u16(s->aux+6) : 0;
-    if (!depth && (t->size==1 || t->size==2 || t->size==4)) { t->kind=SIM_T_UINT; t->name=t->size==1?"uint8":t->size==2?"uint16":"uint32"; }
+    /* 生の整数として読み書きできるのはメモリ上の変数だけ。引数（記憶クラス 9 / 0x11）と戻り値は
+       型不明のまま返し、呼び出し規約の対応外チェックでエラーにする（整数の規約で呼ばない）。 */
+    if (!function && !depth && s->cls != 9 && s->cls != 0x11 &&
+        (t->size==1 || t->size==2 || t->size==4)) { t->kind=SIM_T_UINT; t->name=t->size==1?"uint8":t->size==2?"uint16":"uint32"; }
     return t;
 }
 

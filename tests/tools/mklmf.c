@@ -83,6 +83,15 @@ int main(int argc,char **argv)
     sym(".bf",LP_third32,1,0,0x65,0,1);
     sym("_a",0,-1,12,0x11,0,0); sym("_b",4,-1,12,9,0,0); sym("_c",6,-1,5,9,0,0);
     sym(".ef",LP_third32+code_size(LP_third32)-1,1,0,0x65,0,1);
+    if (!strcmp(mode,"badarg")) {
+        /* レジスタ渡しの引数 _a と変数 _badvar: struct 型、不正なタグ参照、補助サイズ 2。
+           変数だけが符号なし整数へフォールバックし、引数は型不明のまま対応外になること。 */
+        a=sym("_badarg",LP_echo16,1,4,0x26,2,1); w32(a+4,code_size(LP_echo16)); w32(a+16,1);
+        sym(".bf",LP_echo16,1,0,0x65,0,1);
+        a=sym("_a",0,-1,8,0x11,0,1); w32(a,0xFFFFFFFFu); w16(a+6,2);
+        sym(".ef",LP_echo16+1,1,0,0x65,0,1);
+        a=sym("_badvar",0xFE030,2,8,0x26,0,1); w32(a,0xFFFFFFFFu); w16(a+6,2);
+    }
     var("_init",0xFE000,13,0,0,0,0x26); var("_ticks",0xFE002,13,0,0,0,0x26);
     var("_arr",0xFE004,12,3,4,4,0x26); var("_ptr",0xFE008,12,1,2,0,0x26);
     var("_unknown",0xFE00A,8,0,6,0,0x26); var("_mystery",0xFE010,13,0,2,0,0x55);
@@ -121,7 +130,7 @@ int main(int argc,char **argv)
     }
     else if(!strcmp(mode,"tagwidth")) w16(member_aux+6,33);
     else if(!strcmp(mode,"checksum")) w16(192,LP_rom_check);
-    else if(strcmp(mode,"normal") && strcmp(mode,"diagnostics")) return 2;
+    else if(strcmp(mode,"normal") && strcmp(mode,"diagnostics") && strcmp(mode,"badarg")) return 2;
     f=fopen(argv[2],"wb"); if(!f) return 1;
     if(fwrite(image,1,pos,f)!=pos) { fclose(f); return 1; }
     return fclose(f)!=0;
