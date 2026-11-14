@@ -1,0 +1,156 @@
+#05
+;FF     PUBLIC
+02FFED8@@CPR1
+02FFEDE@@FPRF1
+02FFEDF@@FPRF2
+02FFEDE@@FPRFP
+02FFED8@@FPRS
+02FFEDC@@FPRXD
+02FFEDC@@FPRXP
+02FFEDD@@FPRXS
+010035B@@finfws
+010037E@@fmthrr
+010019C@@fmul
+01002AF@@fnor
+0100325@@fret
+0100343@@fret0
+0100346@@fret0s
+010034F@@fret0x
+01002E7@@fstore
+01002DA@@funite
+0100353@@fx0div
+010033F@@fxinex
+0100373@@fxnan1
+010036E@@fxnan2
+0100357@@fxover
+010017B@@lsadd
+010018A@@lssub
+010017B@@luadd
+010018A@@lusub
+02FC068_?DATA
+02FC114_?DATAL
+02FC114_?DATS
+02FC114_?INIS
+02FC114_?INIT
+02FC114_?INITL
+01000AE_?RLINIT
+01000AE_?R_INIS
+01000AE_?R_INIT
+02FBF98_@BRKADR
+02FBF86_@DIVR
+02FBF80_@FNCENT
+02FBF00_@FNCTBL
+02FBF8A_@LDIVR
+0000000_@MAA
+02FBFBA_@MEMBTM
+02FBF9A_@MEMTOP
+02FFED8_@RTARG0
+02FFED9_@RTARG1
+02FFEDA_@RTARG2
+02FFEDB_@RTARG3
+02FFEDC_@RTARG4
+02FFEDD_@RTARG5
+02FFEDE_@RTARG6
+02FFEDF_@RTARG7
+01FFE20_@SADBEG
+00000C0_@SADSIZ
+02FBF82_@SEED
+00FFED8_@STBEG
+00FC114_@STEND
+02FBF92_@TOKPTR
+010017B_@cend
+01000CE_@cstart
+01004A3_add2
+0103008_c_inner
+0103000_c_tbl
+0103004_c_wtbl
+02FBF96_errno
+0100883_exit
+01005C6_f_enum
+010056C_f_farptr
+0100520_f_float
+01005FD_f_locals
+0100502_f_long2
+01004CF_f_mix
+010053E_f_ptr
+010059A_f_ret_struct
+01005D3_f_static1
+01005DD_f_static2
+0100581_f_struct_ptr
+01004B0_f_u32
+010049A_f_u8
+0100496_f_void
+02FC086_g_be
+02FC0B0_g_bits16
+02FC0AE_g_bits8
+02FC0B4_g_bitsm
+02FC032_g_bss_outer
+02FC02E_g_bss_uc
+02FC030_g_bss_ui
+02FC068_g_c
+02FC080_g_d
+02FC07C_g_f
+02FC104_g_fn
+02FC056_g_fn_tbl
+02FC0DC_g_fp_outer
+02FC0D8_g_fp_uc
+02FC070_g_i
+02FC0C2_g_iarr
+02FC074_g_l
+02FC0BC_g_mat2
+02FBFFE_g_mat3
+02FC085_g_ne
+02FC088_g_outer
+02FBFBA_g_outer_arr
+02FC0E6_g_p_arr
+02FC0D6_g_p_const
+02FC0D2_g_p_inner
+02FC0D0_g_p_outer
+02FC0CC_g_p_uc
+02FC0CE_g_p_ui
+02FC0E0_g_parr
+02FC0D4_g_pp_uc
+02FC06C_g_s
+02FC069_g_sc
+02FC084_g_se
+02FC0F8_g_td_pp
+02FC0F0_g_td_pt
+02FC0EA_g_td_u16
+02FC0EC_g_td_u32
+02FC0E8_g_td_u8
+02FC06A_g_uc
+02FC072_g_ui
+02FC078_g_ul
+02FC0AA_g_uni
+02FC06E_g_us
+02FC0FA_g_vol
+010083E_hdwinit
+0100637_main
+01003A8_matherr
+010083F_stkinit
+;FF     @cstart
+;FF     probe
+<02FC05EL0027
+02FC064_buf
+02FC10A_cnt
+02FC108_cnt
+01005EA_f_file_static
+02FC10C_keep
+02FC112_nested
+02FC054_s_file_bss
+02FC0FE_s_file_in
+02FC0FB_s_file_uc
+02FC0FC_s_file_ui
+;FF     @ladd
+;FF     @lsub
+;FF     @hdwinit
+;FF     @stkinit
+;FF     @RTARG0
+;FF     exit
+;FF     m_fmul
+;FF     m_fcom1
+;FF     m_fcom5
+;FF     m_fcom6
+;FF     @rom
+=
+

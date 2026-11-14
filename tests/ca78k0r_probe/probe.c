@@ -1,16 +1,16 @@
 /*
- * probe.c - CA78K0R ã® lmf ã«å…¥ã‚‹ãƒ‡ãƒãƒƒã‚°æƒ…å ±ï¼ˆå‹ï¼‰ã‚’èª¿ã¹ã‚‹ãŸã‚ã®è©¦é¨“ç”¨ã‚½ãƒ¼ã‚¹
+ * probe.c - CA78K0R ‚Ì lmf ‚É“ü‚éƒfƒoƒbƒOî•ñiŒ^j‚ğ’²‚×‚é‚½‚ß‚ÌŒ±—pƒ\[ƒX
  *
- * è£½å“ã®ã‚½ãƒ¼ã‚¹ã¨ã¯ç„¡é–¢ä¿‚ã®ã€å½¢å¼èª¿æŸ»ã ã‘ã‚’ç›®çš„ã«ã—ãŸãƒ•ã‚¡ã‚¤ãƒ«ã§ã™ã€‚
- * CS+ ã§ CA78K0R ã®æ–°ã—ã„ãƒ—ãƒ­ã‚¸ã‚§ã‚¯ãƒˆã‚’ä½œã‚Šã€ã“ã®ãƒ•ã‚¡ã‚¤ãƒ« 1 ã¤ã ã‘ã‚’è¿½åŠ ã—ã¦ãƒ“ãƒ«ãƒ‰ã—ã¦ãã ã•ã„
- * ï¼ˆãƒ‡ãƒãƒƒã‚°æƒ…å ±ã¤ãã€‚æœ€é©åŒ–ã®è¨­å®šã¯è£½å“ã®ãƒ“ãƒ«ãƒ‰ã¨åŒã˜ã«ã—ã¦ãã ã•ã„ï¼‰ã€‚
- * ã§ãã‚ãŒã£ãŸ DefaultBuild ãƒ•ã‚©ãƒ«ãƒ€ã® .lmf / .map / .sym / .hex ã‚’é€ã£ã¦ãã ã•ã„ã€‚
+ * »•i‚Ìƒ\[ƒX‚Æ‚Í–³ŠÖŒW‚ÌAŒ`®’²¸‚¾‚¯‚ğ–Ú“I‚É‚µ‚½ƒtƒ@ƒCƒ‹‚Å‚·B
+ * CS+ ‚Å CA78K0R ‚ÌV‚µ‚¢ƒvƒƒWƒFƒNƒg‚ğì‚èA‚±‚Ìƒtƒ@ƒCƒ‹ 1 ‚Â‚¾‚¯‚ğ’Ç‰Á‚µ‚Äƒrƒ‹ƒh‚µ‚Ä‚­‚¾‚³‚¢
+ * iƒfƒoƒbƒOî•ñ‚Â‚«BÅ“K‰»‚Ìİ’è‚Í»•i‚Ìƒrƒ‹ƒh‚Æ“¯‚¶‚É‚µ‚Ä‚­‚¾‚³‚¢jB
+ * ‚Å‚«‚ ‚ª‚Á‚½ DefaultBuild ƒtƒHƒ‹ƒ_‚Ì .lmf / .map / .sym / .hex ‚ğ‘—‚Á‚Ä‚­‚¾‚³‚¢B
  *
- * ã©ã®ãƒ¡ãƒ³ãƒãŒã©ã“ã«ç½®ã‹ã‚ŒãŸã‹ã‚’ãƒ¡ãƒ¢ãƒªã‚¤ãƒ¡ãƒ¼ã‚¸ã‹ã‚‰èª­ã¿å–ã‚Œã‚‹ã‚ˆã†ã€
- * åˆæœŸå€¤ã¯ã™ã¹ã¦é•ã†å€¤ã«ã—ã¦ã‚ã‚Šã¾ã™ã€‚å€¤ã‚’å¤‰ãˆãªã„ã§ãã ã•ã„ã€‚
+ * ‚Ç‚Ìƒƒ“ƒo‚ª‚Ç‚±‚É’u‚©‚ê‚½‚©‚ğƒƒ‚ƒŠƒCƒ[ƒW‚©‚ç“Ç‚İæ‚ê‚é‚æ‚¤A
+ * ‰Šú’l‚Í‚·‚×‚Äˆá‚¤’l‚É‚µ‚Ä‚ ‚è‚Ü‚·B’l‚ğ•Ï‚¦‚È‚¢‚Å‚­‚¾‚³‚¢B
  */
 
-/* ---- åŸºæœ¬å‹ ---- */
+/* ---- Šî–{Œ^ ---- */
 char            g_c    = 0x11;
 signed char     g_sc   = -0x12;
 unsigned char   g_uc   = 0x13;
@@ -31,7 +31,7 @@ enum small_e g_se = SE_C;
 enum neg_e   g_ne = NE_M;
 enum big_e   g_be = BE_B;
 
-/* ---- æ§‹é€ ä½“ã€å…¥ã‚Œå­ã€é…åˆ— ---- */
+/* ---- \‘¢‘ÌA“ü‚êqA”z—ñ ---- */
 struct inner {
     unsigned char  ia;      /* 0x31 */
     unsigned int   ib;      /* 0x3233 */
@@ -60,7 +60,7 @@ struct outer g_outer = {
 
 struct outer g_outer_arr[2];
 
-/* ---- å…±ç”¨ä½“ ---- */
+/* ---- ‹¤—p‘Ì ---- */
 union uni {
     unsigned long  ul;
     unsigned int   ui[2];
@@ -69,7 +69,7 @@ union uni {
 };
 union uni g_uni = { 0x61626364UL };
 
-/* ---- ãƒ“ãƒƒãƒˆãƒ•ã‚£ãƒ¼ãƒ«ãƒ‰ ---- */
+/* ---- ƒrƒbƒgƒtƒB[ƒ‹ƒh ---- */
 struct bits8 {
     unsigned char b0 : 1;
     unsigned char b1 : 1;
@@ -81,7 +81,7 @@ struct bits16 {
     unsigned int f1  : 4;
     unsigned int f5  : 7;
     unsigned int f12 : 4;
-    unsigned int g0  : 9;   /* æ¬¡ã® 16 ãƒ“ãƒƒãƒˆã¸ */
+    unsigned int g0  : 9;   /* Ÿ‚Ì 16 ƒrƒbƒg‚Ö */
     unsigned int g9  : 3;
 };
 struct bits_mixed {
@@ -97,12 +97,12 @@ struct bits8      g_bits8  = { 1, 0, 5, 2 };
 struct bits16     g_bits16 = { 1, 9, 0x55, 3, 0x1AA, 5 };
 struct bits_mixed g_bitsm  = { 0x71, 2, 0x2A, 0x15, 0x3FF, -3, 0x72 };
 
-/* ---- å¤šæ¬¡å…ƒé…åˆ— ---- */
+/* ---- ‘½ŸŒ³”z—ñ ---- */
 unsigned char g_mat2[2][3]     = { { 0x81, 0x82, 0x83 }, { 0x84, 0x85, 0x86 } };
 unsigned int  g_mat3[2][3][4];
 int           g_iarr[5]        = { 0x0101, 0x0202, 0x0303, 0x0404, 0x0505 };
 
-/* ---- ãƒã‚¤ãƒ³ã‚¿ ---- */
+/* ---- ƒ|ƒCƒ“ƒ^ ---- */
 unsigned char         *g_p_uc    = &g_uc;
 unsigned int          *g_p_ui    = &g_ui;
 struct outer          *g_p_outer = &g_outer;
@@ -126,29 +126,29 @@ U32     g_td_u32 = 0x94959697UL;
 POINT_T g_td_pt  = { 0x98, 0x999A, 0x9B9C9D9EUL };
 POINT_P g_td_pp  = &g_td_pt;
 
-/* ---- constï¼ˆROMï¼‰ã¨ volatile ---- */
+/* ---- constiROMj‚Æ volatile ---- */
 const unsigned char  c_tbl[4]  = { 0xA1, 0xA2, 0xA3, 0xA4 };
 const unsigned int   c_wtbl[2] = { 0xA5A6, 0xA7A8 };
 const struct inner   c_inner   = { 0xA9, 0xAAAB, 0xAC };
 volatile unsigned char g_vol   = 0xAD;
 
-/* ---- åˆæœŸå€¤ãªã—ï¼ˆbssï¼‰ ---- */
+/* ---- ‰Šú’l‚È‚µibssj ---- */
 unsigned char g_bss_uc;
 unsigned int  g_bss_ui;
 struct outer  g_bss_outer;
 
-/* ---- ãƒ•ã‚¡ã‚¤ãƒ«å†… static ---- */
+/* ---- ƒtƒ@ƒCƒ‹“à static ---- */
 static unsigned char  s_file_uc  = 0xB1;
 static unsigned int   s_file_ui  = 0xB2B3;
 static struct inner   s_file_in  = { 0xB4, 0xB5B6, 0xB7 };
 static unsigned char  s_file_bss;
 
-/* ---- é–¢æ•°ãƒã‚¤ãƒ³ã‚¿ ---- */
+/* ---- ŠÖ”ƒ|ƒCƒ“ƒ^ ---- */
 unsigned int add2(unsigned int a, unsigned int b);
 unsigned int (*g_fn)(unsigned int, unsigned int) = add2;
 void (*g_fn_tbl[2])(void);
 
-/* ---- é–¢æ•°: å¼•æ•°ã¨æˆ»ã‚Šå€¤ã®ã„ã‚ã„ã‚ ---- */
+/* ---- ŠÖ”: ˆø”‚Æ–ß‚è’l‚Ì‚¢‚ë‚¢‚ë ---- */
 void f_void(void)
 {
     g_bss_uc++;
@@ -218,7 +218,7 @@ enum small_e f_enum(enum small_e e)
     return (e == SE_A) ? SE_B : SE_A;
 }
 
-/* é–¢æ•°å†… staticï¼ˆåŒã˜åå‰ã‚’ 2 ã¤ã®é–¢æ•°ã«ç½®ãï¼‰ */
+/* ŠÖ”“à statici“¯‚¶–¼‘O‚ğ 2 ‚Â‚ÌŠÖ”‚É’u‚­j */
 unsigned int f_static1(void)
 {
     static unsigned int  cnt = 0xC1C2;
@@ -233,7 +233,7 @@ unsigned int f_static2(void)
     static struct inner keep = { 0xC5, 0xC6C7, 0xC8 };
     keep.ia++;
     {
-        static unsigned char nested = 0xC9;   /* ãƒ–ãƒ­ãƒƒã‚¯ã®ä¸­ã® static */
+        static unsigned char nested = 0xC9;   /* ƒuƒƒbƒN‚Ì’†‚Ì static */
         nested++;
     }
     return ++cnt;
@@ -244,7 +244,7 @@ static unsigned char f_file_static(unsigned char a)
     return (unsigned char)(a + s_file_uc + s_file_bss);
 }
 
-/* ãƒ­ãƒ¼ã‚«ãƒ«å¤‰æ•°ã¨ãƒ¬ã‚¸ã‚¹ã‚¿å¤‰æ•° */
+/* ƒ[ƒJƒ‹•Ï”‚ÆƒŒƒWƒXƒ^•Ï” */
 unsigned int f_locals(unsigned int a)
 {
     unsigned char  l8  = 1;

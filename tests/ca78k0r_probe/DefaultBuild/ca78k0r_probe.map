@@ -1,0 +1,463 @@
+
+
+
+78K0R Linker V1.70                            Date:14 Nov 2026 Page:   1
+
+Command:   -yC:\Program Files (x86)\Renesas Electronics\CS+\CACX\Device\
+           RL78\Devicefile -_msgoff -oDefaultBuild\ca78k0r_probe.lmf -gi
+           00000000000000000000h -mi0 -w2 -s -pDefaultBuild\ca78k0r_prob
+           e.map -kl -kp C:\Program Files (x86)\Renesas Electronics\CS+\
+           CACX\CA78K0R\V1.60\lib78k0r\s0rll.rel DefaultBuild\probe.rel 
+           -bcl78m -bcl78mf -iC:\Program Files (x86)\Renesas Electronics
+           \CS+\CACX\CA78K0R\V1.60\lib78k0r
+Para-file:
+Out-file:  DefaultBuild\ca78k0r_probe.lmf
+Map-file:  DefaultBuild\ca78k0r_probe.map
+Direc-file:
+Directive:
+
+
+*** Link information ***
+
+    24 output segment(s)
+  89AH byte(s) real data
+   508 symbol(s) defined
+
+
+*** Memory map ***
+
+
+  SPACE=REGULAR
+
+  MEMORY=ROM
+  BASE ADDRESS=00000H   SIZE=30000H
+         OUTPUT   INPUT    INPUT      BASE      SIZE
+         SEGMENT  SEGMENT  MODULE     ADDRESS
+         @@VECT00                     00000H    00002H  CSEG AT
+                  @@VECT00 @cstart    00000H    00002H
+         @@CNSTL                      00002H    00000H  CSEG PAGE64KP
+                  @@CNSTL  @cstart    00002H    00000H
+         @@CNSTL                      00002H    00000H  CSEG PAGE64KP
+                  @@CNSTL  probe      00002H    00000H
+         @@R_INIT                     00002H    000ACH  CSEG UNIT64KP
+                  @@R_INIT @cstart    00002H    00000H
+                  @@R_INIT probe      00002H    000ACH
+                  @@R_INIT @rom       000AEH    00000H
+         @@RLINIT                     000AEH    00000H  CSEG UNIT64KP
+                  @@RLINIT @cstart    000AEH    00000H
+                  @@RLINIT probe      000AEH    00000H
+                  @@RLINIT @rom       000AEH    00000H
+         @@R_INIS                     000AEH    00000H  CSEG UNIT64KP
+                  @@R_INIS @cstart    000AEH    00000H
+                  @@R_INIS probe      000AEH    00000H
+                  @@R_INIS @rom       000AEH    00000H
+         @@CALT                       000AEH    00000H  CSEG
+                  @@CALT   @cstart    000AEH    00000H
+                  @@CALT   probe      000AEH    00000H
+* gap *                               000AEH    00012H
+         ?CSEGOB0                     000C0H    00004H  CSEG OPT_BYTE
+         @@CODE                       000C4H    00000H  CSEG BASE
+                  @@CODE   probe      000C4H    00000H
+         @@BASE                       000C4H    00000H  CSEG BASE
+                  @@BASE   probe      000C4H    00000H
+         ?CSEGSI                      000C4H    0000AH  CSEG
+         @@LCODE                      000CEH    002F9H  CSEG BASE
+                  @@LCODE  @cstart    000CEH    000ADH
+                  @@LCODE  @ladd      0017BH    0000FH
+                  @@LCODE  @lsub      0018AH    00012H
+                  @@LCODE  m_fmul     0019CH    00113H
+                  @@LCODE  m_fcom1    002AFH    000CFH
+                  @@LCODE  m_fcom5    0037EH    0002AH
+                  @@LCODE  m_fcom6    003A8H    0001FH
+* gap *                               003C7H    00001H
+         @@CNSTL                      003C8H    000CEH  CSEG PAGE64KP
+                  @@CNSTL  m_fcom5    003C8H    000CEH
+         @@CODEL                      00496H    003A8H  CSEG
+                  @@CODEL  probe      00496H    003A8H
+         @@LCODEL                     0083EH    00061H  CSEG
+                  @@LCODEL @hdwinit   0083EH    00001H
+                  @@LCODEL @stkinit   0083FH    00044H
+                  @@LCODEL exit       00883H    0001CH
+* gap *                               0089FH    02761H
+         @@CNST                       03000H    0000EH  CSEG MIRRORP
+                  @@CNST   @cstart    03000H    00000H
+                  @@CNST   probe      03000H    0000EH
+* gap *                               0300EH    2CFF2H
+
+  MEMORY=RAM
+  BASE ADDRESS=FBF00H   SIZE=04100H
+         OUTPUT   INPUT    INPUT      BASE      SIZE
+         SEGMENT  SEGMENT  MODULE     ADDRESS
+         @@DATA                       FBF00H    00168H  DSEG BASEP
+                  @@DATA   @cstart    FBF00H    000BAH
+                  @@DATA   probe      FBFBAH    000AEH
+                  @@DATA   @rom       FC068H    00000H
+         @@INIT                       FC068H    000ACH  DSEG BASEP
+                  @@INIT   @cstart    FC068H    00000H
+                  @@INIT   probe      FC068H    000ACH
+                  @@INIT   @rom       FC114H    00000H
+         @@INIS                       FC114H    00000H  DSEG UNITP
+                  @@INIS   @cstart    FC114H    00000H
+                  @@INIS   probe      FC114H    00000H
+                  @@INIS   @rom       FC114H    00000H
+         @@DATS                       FC114H    00000H  DSEG UNITP
+                  @@DATS   @cstart    FC114H    00000H
+                  @@DATS   probe      FC114H    00000H
+                  @@DATS   @rom       FC114H    00000H
+         @@INITL                      FC114H    00000H  DSEG UNIT64KP
+                  @@INITL  @cstart    FC114H    00000H
+                  @@INITL  probe      FC114H    00000H
+                  @@INITL  @rom       FC114H    00000H
+         @@DATAL                      FC114H    00000H  DSEG UNIT64KP
+                  @@DATAL  @cstart    FC114H    00000H
+                  @@DATAL  probe      FC114H    00000H
+                  @@DATAL  @rom       FC114H    00000H
+         @@BITS                       FC114H    00000H  BSEG
+                  @@BITS   @cstart    FC114H.0  00000H.0
+                  @@BITS   probe      FC114H.0  00000H.0
+* gap *                               FC114H    03DC4H
+         @@RTARG0                     FFED8H    00008H  DSEG AT
+                  @@RTARG0 @RTARG0    FFED8H    00008H
+* gap *                               FFEE0H    00020H
+* gap (Not Free Area) *               FFF00H    00100H
+
+
+
+*** Local symbol list ***
+
+MODULE    ATTR       VALUE    NAME
+
+@cstart
+          MOD                 @cstart
+          DSEG                @@DATA
+          CSEG                @@VECT00
+          CSEG                @@LCODE
+          CSEG                @@R_INIT
+          CSEG                @@RLINIT
+          CSEG                @@R_INIS
+          DSEG                @@INIT
+          DSEG                @@INITL
+          DSEG                @@DATAL
+          DSEG                @@INIS
+          DSEG                @@DATS
+          CSEG                @@CALT
+          CSEG                @@CNST
+          CSEG                @@CNSTL
+          BSEG                @@BITS
+probe
+          MOD                 probe
+          BSEG                @@BITS
+          CSEG                @@CNST
+          CSEG                @@R_INIT
+          DSEG                @@INIT
+          DSEG                @@DATA
+          CSEG                @@R_INIS
+          DSEG                @@INIS
+          DSEG                @@DATS
+          CSEG                @@CNSTL
+          CSEG                @@RLINIT
+          DSEG                @@INITL
+          DSEG                @@DATAL
+          CSEG                @@CALT
+          CSEG                @@CODE
+          CSEG                @@CODEL
+          CSEG                @@BASE
+                     00000H   _small_e
+                     00000H   _SE_A
+                     00001H   _SE_B
+                     00064H   _SE_C
+                     00000H   _neg_e
+                     0FFFDH   _NE_M
+                     00000H   _NE_Z
+                     00007H   _NE_P
+                     00000H   _big_e
+                     00000H   _BE_A
+                     003E8H   _BE_B
+                     00000H   _inner
+                     00000H   _ia
+                     00002H   _ib
+                     00004H   _ic
+                     00000H   _outer
+                     00000H   _oa
+                     00002H   _in
+                     00008H   _ol
+                     0000CH   _arr
+                     00010H   _warr
+                     00014H   _ins
+                     00020H   _tail
+                     00000H   .0fake
+                     00000H   _lo
+                     00001H   _hi
+                     00002H   _w
+                     00000H   _uni
+                     00000H   _ul
+                     00000H   _ui
+                     00000H   _uc
+                     00000H   _parts
+                     00000H   _bits8
+                     00000H   _b0
+                     00001H   _b1
+                     00002H   _n2
+                     00005H   _n5
+                     00000H   _bits16
+                     00000H   _f0
+                     00001H   _f1
+                     00005H   _f5
+                     0000CH   _f12
+                     00010H   _g0
+                     00019H   _g9
+                     00000H   _bits_mixed
+                     00000H   _head
+                     00008H   _m0
+                     0000AH   _m2
+                     00010H   _w0
+                     00015H   _w5
+                     00020H   _s0
+                     00006H   _tail
+                     00000H   .1fake
+                     00000H   _x
+                     00002H   _y
+                     00004H   _z
+          ADDR       FC0FBH   _s_file_uc
+          ADDR       FC0FCH   _s_file_ui
+          ADDR       FC0FEH   _s_file_in
+          ADDR       FC054H   _s_file_bss
+                     00006H   _a
+                     00000H   _a
+                     00008H   _b
+                     00000H   _a
+                     00000H   _a
+                     00008H   _b
+                     0000CH   _c
+                     0000EH   _d
+                     00000H   _a
+                     0000AH   _b
+                     00000H   _a
+                     0000AH   _b
+                     00004H   _p
+                     0000CH   _n
+                     00002H   _i
+                     00000H   _sum
+                     00000H   _p
+                     00103H   _p
+                     00006H   _a
+                     00000H   _r
+                     00006H   _e
+          ADDR       FC108H   _cnt
+          ADDR       FC064H   _buf
+          ADDR       FC10AH   _cnt
+          ADDR       FC10CH   _keep
+          ADDR       FC112H   _nested
+          ADDR       005EAH   _f_file_static
+                     00006H   _a
+                     00010H   _a
+                     0000FH   _l8
+                     0000CH   _l16
+                     00008H   _l32
+                     00002H   _ls
+                     00000H   _r
+                     00000H   _t
+          ADDR       FC05EH   L0027
+@ladd
+          MOD                 @ladd
+          CSEG                @@LCODE
+@lsub
+          MOD                 @lsub
+          CSEG                @@LCODE
+@hdwinit
+          MOD                 @hdwinit
+          CSEG                @@LCODEL
+@stkinit
+          MOD                 @stkinit
+          CSEG                @@LCODEL
+@RTARG0
+          MOD                 @RTARG0
+          DSEG                @@RTARG0
+exit
+          MOD                 exit
+          CSEG                @@LCODEL
+m_fmul
+          MOD                 m_fmul
+          CSEG                @@LCODE
+m_fcom1
+          MOD                 m_fcom1
+          CSEG                @@LCODE
+m_fcom5
+          MOD                 m_fcom5
+          CSEG                @@LCODE
+          CSEG                @@CNSTL
+m_fcom6
+          MOD                 m_fcom6
+          CSEG                @@LCODE
+@rom
+          MOD                 @rom
+          CSEG                @@R_INIT
+          CSEG                @@RLINIT
+          CSEG                @@R_INIS
+          DSEG                @@INIT
+          DSEG                @@INITL
+          DSEG                @@DATA
+          DSEG                @@DATAL
+          DSEG                @@INIS
+          DSEG                @@DATS
+
+
+
+*** Public symbol list ***
+
+MODULE    ATTR       VALUE    NAME
+
+@cstart
+          ADDR       000CEH   _@cstart
+          ADDR       0017BH   _@cend
+          ADDR       FBF98H   _@BRKADR
+          ADDR       FBF9AH   _@MEMTOP
+          ADDR       FBFBAH   _@MEMBTM
+          ADDR       FBF00H   _@FNCTBL
+          ADDR       FBF80H   _@FNCENT
+          ADDR       FBF82H   _@SEED
+          ADDR       FBF86H   _@DIVR
+          ADDR       FBF8AH   _@LDIVR
+          ADDR       FBF92H   _@TOKPTR
+          ADDR       FBF96H   _errno
+probe
+                     00637H   _main
+          NUM        FFED8H   _@STBEG
+          NUM        FC114H   _@STEND
+@stkinit
+          ADDR       0083FH   _stkinit
+@hdwinit
+          ADDR       0083EH   _hdwinit
+          NUM        000C0H   _@SADSIZ
+          ADDR       FFE20H   _@SADBEG
+exit
+          ADDR       00883H   _exit
+          NUM        00000H   _@MAA
+@rom
+          ADDR       000AEH   _?R_INIT
+          ADDR       000AEH   _?RLINIT
+          ADDR       000AEH   _?R_INIS
+          ADDR       FC068H   _?DATA
+          ADDR       FC114H   _?DATAL
+          ADDR       FC114H   _?DATS
+probe
+                     00496H   _f_void
+                     0049AH   _f_u8
+                     004A3H   _add2
+                     004B0H   _f_u32
+                     004CFH   _f_mix
+                     00502H   _f_long2
+                     00520H   _f_float
+                     0053EH   _f_ptr
+                     0056CH   _f_farptr
+                     00581H   _f_struct_ptr
+                     0059AH   _f_ret_struct
+                     005C6H   _f_enum
+                     005D3H   _f_static1
+                     005DDH   _f_static2
+                     005FDH   _f_locals
+                     FC068H   _g_c
+                     FC069H   _g_sc
+                     FC06AH   _g_uc
+                     FC06CH   _g_s
+                     FC06EH   _g_us
+                     FC070H   _g_i
+                     FC072H   _g_ui
+                     FC074H   _g_l
+                     FC078H   _g_ul
+                     FC07CH   _g_f
+                     FC080H   _g_d
+                     FC084H   _g_se
+                     FC085H   _g_ne
+                     FC086H   _g_be
+                     FC088H   _g_outer
+                     FBFBAH   _g_outer_arr
+                     FC0AAH   _g_uni
+                     FC0AEH   _g_bits8
+                     FC0B0H   _g_bits16
+                     FC0B4H   _g_bitsm
+                     FC0BCH   _g_mat2
+                     FBFFEH   _g_mat3
+                     FC0C2H   _g_iarr
+                     FC0CCH   _g_p_uc
+                     FC0CEH   _g_p_ui
+                     FC0D0H   _g_p_outer
+                     FC0D2H   _g_p_inner
+                     FC0D4H   _g_pp_uc
+                     FC0D6H   _g_p_const
+                     FC0D8H   _g_fp_uc
+                     FC0DCH   _g_fp_outer
+                     FC0E0H   _g_parr
+                     FC0E6H   _g_p_arr
+                     FC0E8H   _g_td_u8
+                     FC0EAH   _g_td_u16
+                     FC0ECH   _g_td_u32
+                     FC0F0H   _g_td_pt
+                     FC0F8H   _g_td_pp
+                     03000H   _c_tbl
+                     03004H   _c_wtbl
+                     03008H   _c_inner
+                     FC0FAH   _g_vol
+                     FC02EH   _g_bss_uc
+                     FC030H   _g_bss_ui
+                     FC032H   _g_bss_outer
+                     FC104H   _g_fn
+                     FC056H   _g_fn_tbl
+@RTARG0
+          ADDR       FFED8H   _@RTARG0
+          ADDR       FFEDAH   _@RTARG2
+          ADDR       FFEDCH   _@RTARG4
+@ladd
+          ADDR       0017BH   @@luadd
+@RTARG0
+          ADDR       FFED9H   _@RTARG1
+          ADDR       FFEDEH   _@RTARG6
+          ADDR       FFEDDH   _@RTARG5
+@lsub
+          ADDR       0018AH   @@lssub
+m_fmul
+          ADDR       0019CH   @@fmul
+@ladd
+          ADDR       0017BH   @@lsadd
+@lsub
+          ADDR       0018AH   @@lusub
+@RTARG0
+          ADDR       FFEDBH   _@RTARG3
+@rom
+          ADDR       FC114H   _?INIT
+          ADDR       FC114H   _?INITL
+          ADDR       FC114H   _?INIS
+@RTARG0
+          ADDR       FFEDFH   _@RTARG7
+          ADDR       FFED8H   @@CPR1
+          ADDR       FFED8H   @@FPRS
+          ADDR       FFEDCH   @@FPRXP
+          ADDR       FFEDCH   @@FPRXD
+          ADDR       FFEDDH   @@FPRXS
+          ADDR       FFEDEH   @@FPRFP
+          ADDR       FFEDEH   @@FPRF1
+          ADDR       FFEDFH   @@FPRF2
+m_fcom1
+          ADDR       002E7H   @@fstore
+          ADDR       002AFH   @@fnor
+          ADDR       002DAH   @@funite
+          ADDR       00373H   @@fxnan1
+          ADDR       0036EH   @@fxnan2
+          ADDR       00353H   @@fx0div
+          ADDR       00357H   @@fxover
+          ADDR       0033FH   @@fxinex
+          ADDR       0035BH   @@finfws
+          ADDR       00343H   @@fret0
+          ADDR       00346H   @@fret0s
+          ADDR       00325H   @@fret
+m_fcom5
+          ADDR       0037EH   @@fmthrr
+m_fcom1
+          ADDR       0034FH   @@fret0x
+m_fcom6
+          ADDR       003A8H   _matherr
+
+
+ Target chip : R5F10PGH
+ Device file : V1.11
+
