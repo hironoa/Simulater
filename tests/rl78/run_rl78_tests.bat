@@ -264,6 +264,54 @@ set RC=%ERRORLEVEL%
 if "%RC%"=="2" (call :ok "stub skip conflict exits 2") else (call :ng "stub skip conflict exits 2")
 call :run "trace startup retains existing ABI 43 rows" 0 "OK 43, NG 0" --abs "%TP%" --trace-startup "%R%\csv\synth_call.csv" "%R%\csv\synth_types.csv"
 
+echo == ROM checksum and opcode FFH
+"%WORK%\mkabs.exe" checksum "%WORK%\checksum.abs"
+set RC=%ERRORLEVEL%
+if "%RC%"=="0" (call :ok "mkabs checksum") else (call :ng "mkabs checksum")
+"%WORK%\mklmf.exe" checksum "%WORK%\checksum.lmf"
+set RC=%ERRORLEVEL%
+if "%RC%"=="0" (call :ok "mklmf checksum") else (call :ng "mklmf checksum")
+call :rom_check ccrl checksum.abs 0x13D plain ""
+call :rom_check ccrl checksum.abs 0x13D trace --trace-startup
+call :rom_check ca checksum.lmf 0x10E plain ""
+call :rom_check ca checksum.lmf 0x10E trace --trace-startup
+fc /b "%WORK%\count_ccrl.plain" "%WORK%\count_ccrl.trace" >nul
+set RC=%ERRORLEVEL%
+if "%RC%"=="0" (call :ok "CCRL plain trace equal counts") else (call :ng "CCRL plain trace equal counts")
+fc /b "%WORK%\count_ca.plain" "%WORK%\count_ca.trace" >nul
+set RC=%ERRORLEVEL%
+if "%RC%"=="0" (call :ok "CA plain trace equal counts") else (call :ng "CA plain trace equal counts")
+
+echo == Boundary startup comparison and LMF groups
+"%WORK%\mkabs.exe" boundary "%WORK%\boundary.abs"
+set RC=%ERRORLEVEL%
+if "%RC%"=="0" (call :ok "mkabs boundary") else (call :ng "mkabs boundary")
+> "%WORK%\boundary.cfg" echo init_end = boundary_end
+>> "%WORK%\boundary.cfg" echo stub = boundary_end:boundary_short
+>> "%WORK%\boundary.cfg" echo skip = boundary_short
+"%RS%" info --abs "%WORK%\boundary.abs" --cfg "%WORK%\boundary.cfg" --trace-startup > "%WORK%\boundary.log" 2>&1
+set RC=%ERRORLEVEL%
+if "%RC%"=="0" (call :ok "boundary stops before FFH") else (call :ng "boundary stops before FFH")
+call :has "%WORK%\boundary.log" "MATCH" "boundary both paths match"
+"%WORK%\mklmf.exe" diagnostics "%WORK%\diag.lmf"
+set RC=%ERRORLEVEL%
+if "%RC%"=="0" (call :ok "mklmf diagnostics") else (call :ng "mklmf diagnostics")
+"%RS%" info --abs "%WORK%\diag.lmf" > "%WORK%\diag.log" 2>&1
+set RC=%ERRORLEVEL%
+if "%RC%"=="0" (call :ok "LMF diagnostics load") else (call :ng "LMF diagnostics load")
+call :has "%WORK%\diag.log" "0x55 0xDEAD 0x0000 normal 2" "LMF grouped repeated combinations"
+call :has "%WORK%\diag.log" "0x55 0xDEAD 0x0000 absolute 1" "LMF absolute combination"
+findstr /l /c:"unknown" "%WORK%\diag.log" >nul
+if errorlevel 1 (call :ok "LMF default hides names") else (call :ng "LMF default hides names")
+"%RS%" info --abs "%WORK%\diag.lmf" -v -v > "%WORK%\diag_names.log" 2>&1
+call :has "%WORK%\diag_names.log" "unknown" "LMF named examples explicit"
+call :run "header names and modi real" 0 "OK 2, NG 0" --abs "%WORK%\test.lmf" --cfg "%T%\defines\real.cfg" "%T%\defines\real.csv"
+"%RS%" info --abs "%WORK%\test.lmf" --cfg "%T%\defines\real.cfg" > "%WORK%\header.log" 2>&1
+set RC=%ERRORLEVEL%
+if "%RC%"=="0" (call :ok "header info real") else (call :ng "header info real")
+call :has "%WORK%\header.log" "defines files" "recursive header scan real"
+call :run "var and varfile real" 0 "OK 1, NG 0" --abs "%WORK%\test.lmf" --cfg "%T%\defines\var_real.cfg" "%T%\defines\var_real.csv"
+
 exit /b 0
 
 rem ---------------------------------------------------------------- subroutines
@@ -390,4 +438,20 @@ if "%RC%"=="0" (call :ok "mklmf %1") else (call :ng "mklmf %1")
 "%WORK%\lmf_types.exe" "%WORK%\badtag.lmf" bad > "%WORK%\tag.log" 2>&1
 set RC=%ERRORLEVEL%
 if "%RC%"=="0" (call :ok "malformed %1 becomes unknown") else (call :ng "malformed %1 becomes unknown")
+exit /b 0
+
+:rom_check
+"%RS%" info --abs "%WORK%\%~2" --cfg "%R%\cfg\rom_check_%~1.cfg" %~5 > "%WORK%\rom_%~1.%~4.log" 2>&1
+set RC=%ERRORLEVEL%
+if "%RC%"=="0" (call :ok "ROM checksum %~1 %~4 reaches main") else (call :ng "ROM checksum %~1 %~4 reaches main")
+call :has "%WORK%\rom_%~1.%~4.log" "main" "ROM checksum init end"
+findstr /l /c:"Hz" "%WORK%\rom_%~1.%~4.log" > "%WORK%\count_%~1.%~4"
+copy /y "%R%\cfg\rom_check_%~1.cfg" "%WORK%\corrupt.cfg" >nul
+>> "%WORK%\corrupt.cfg" echo poke = %~3:0
+"%RS%" info --abs "%WORK%\%~2" --cfg "%WORK%\corrupt.cfg" %~5 > "%WORK%\reset_%~1.%~4.log" 2>&1
+set RC=%ERRORLEVEL%
+if "%RC%"=="2" (call :ok "ROM checksum %~1 %~4 rejects corruption") else (call :ng "ROM checksum %~1 %~4 rejects corruption")
+call :has "%WORK%\reset_%~1.%~4.log" "FFH" "ROM checksum FFH diagnostic"
+call :has "%WORK%\reset_%~1.%~4.log" "original bytes" "ROM checksum original bytes"
+call :has "%WORK%\reset_%~1.%~4.log" "breakpoint" "ROM checksum breakpoint context"
 exit /b 0

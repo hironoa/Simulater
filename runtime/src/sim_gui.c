@@ -1219,7 +1219,15 @@ static void rebuild_cols_locked(void)
     free_cols(&G.out_cols, &G.nout_cols);
     /* 再生が終わった（または止めた）CSV の列は使わない。残しておくと、その後の手動の書き込みの順が変わる */
     if (G.play_active)
-        for (i = 0; i < G.play_cols; i++) G.play_col_ids[i] = col_index(&G.in_cols, &G.nin_cols, G.play.names[i]);
+        for (i = 0; i < G.play_cols; i++) {
+            /* Keep initialization and row inputs as distinct ordered columns,
+               even with the same name, so partial array/string writes replay. */
+            if (G.play.init_columns) {
+                G.in_cols = sim_xrealloc(G.in_cols, (size_t)(G.nin_cols + 1) * sizeof *G.in_cols);
+                G.play_col_ids[i] = G.nin_cols;
+                G.in_cols[G.nin_cols++] = sim_xstrdup(G.play.names[i]);
+            } else G.play_col_ids[i] = col_index(&G.in_cols, &G.nin_cols, G.play.names[i]);
+        }
     for (i = 0; i < G.nholds; i++) G.holds[i].col = col_index(&G.in_cols, &G.nin_cols, G.holds[i].name);
     for (i = 0; i < G.nwatch; i++) G.watch[i].col = col_index(&G.out_cols, &G.nout_cols, G.watch[i].name);
 }
@@ -1396,6 +1404,7 @@ static void api_load_csv(sim_sock s, req_t *r)
     const sim_func *nf = NULL, *f;
     sim_ref **refs;
     if (sim_csv_load_table(r->body, r->body_len, &t, err, sizeof err)) { send_error(s, 400, err); return; }
+    sim_csv_table_expand_init(&t, G.b->csv_init);
     if (t.nrows == 0) {
         sim_csv_table_free(&t);
         send_error(s, 400, "再生するデータ行がありません（先頭の mod ブロック）");
@@ -1407,8 +1416,8 @@ static void api_load_csv(sim_sock s, req_t *r)
      * （P1 と P1_bit.no0 など）は別の列として受け付ける。出力列の同名・入力と出力の同名も受け付ける */
     for (i = 0; i < t.nin; i++) {
         int k;
-        for (k = 0; k < i && strcmp(t.names[k], t.names[i]) != 0; k++) {}
-        if (k < i) {
+        for (k = t.init_columns; k < i && strcmp(t.names[k], t.names[i]) != 0; k++) {}
+        if (k < i && k >= t.init_columns && i >= t.init_columns) {
             char m[1200];
             snprintf(m, sizeof m,
                      "入力 %d 列目と %d 列目が同じ名前 '%.256s' です。GUI では同じ名前の入力列が複数ある CSV は"
@@ -1501,6 +1510,7 @@ static void api_load_csv(sim_sock s, req_t *r)
         sim_buf_printf(&b, ",\"blocks\":%d,\"warning\":", t.nblocks);
         sim_buf_json_str(&b, m);
     }
+    if (t.warning) { sim_buf_adds(&b, ",\"initWarning\":"); sim_buf_json_str(&b, t.warning); }
     sim_buf_addc(&b, '}');
     sim_mutex_unlock(G.mu);
     send_json(s, 200, &b);

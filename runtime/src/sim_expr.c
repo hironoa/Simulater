@@ -17,6 +17,12 @@ typedef struct {
     int is_const;
 } sym_entry;
 
+typedef struct {
+    sim_var var;
+    int bit_offset, priority;
+    unsigned bit_size;
+} defined_var;
+
 struct sim_ctx {
     sim_backend *b;
     const sim_var **vars;
@@ -28,6 +34,11 @@ struct sim_ctx {
     const sim_func *func;
     int64_t args[SIM_MAX_ARGS];
     uint64_t ret_raw;
+    void **owned;
+    size_t nowned;
+    defined_var **defined;
+    size_t ndefined;
+    char *definition_info;
 };
 
 static int streq(const char *a, const char *b) { return a && b && strcmp(a, b) == 0; }
@@ -84,8 +95,75 @@ void sim_ctx_free(sim_ctx *c)
     free(c->syms);
     free(c->vars);
     free(c->funcs);
+    for (i = 0; i < c->nowned; i++) free(c->owned[i]);
+    free(c->owned); free(c->defined); free(c->definition_info);
     free(c);
 }
+
+void *sim_ctx_alloc(sim_ctx *c, size_t n)
+{
+    void *p = sim_xcalloc(n ? n : 1, 1);
+    c->owned = sim_xrealloc(c->owned, (c->nowned + 1) * sizeof *c->owned);
+    c->owned[c->nowned++] = p;
+    return p;
+}
+static char *ctx_string(sim_ctx *c, const char *s)
+{
+    char *p = sim_ctx_alloc(c, strlen(s) + 1);
+    strcpy(p, s); return p;
+}
+void sim_ctx_refresh_symbols(sim_ctx *c)
+{
+    size_t i;
+    for (i = 0; i < c->nsyms; i++) free(c->syms[i].name);
+    free(c->syms); c->syms = NULL; c->nsyms = 0;
+    build_syms(c);
+}
+int sim_ctx_define(sim_ctx *c, const char *name, const sim_type *type, uint64_t addr,
+                   int bit_offset, unsigned bit_size, const char *file, int priority)
+{
+    size_t i, slot = c->nvars, k;
+    defined_var *d;
+    int replaced;
+    for (i = 0; i < c->nvars; i++) if (!c->vars[i]->func && !strcmp(c->vars[i]->name, name)) {
+        int old_priority = 1;
+        for (k = 0; k < c->ndefined; k++) if (&c->defined[k]->var == c->vars[i]) old_priority = c->defined[k]->priority;
+        if (old_priority > priority) return 0;
+        slot = i; break;
+    }
+    replaced = slot < c->nvars;
+    d = sim_ctx_alloc(c, sizeof *d);
+    d->var.name = ctx_string(c, name); d->var.file = ctx_string(c, file ? file : "");
+    d->var.addr = addr; d->var.type = type; d->var.is_external = 1;
+    d->bit_offset = bit_offset; d->bit_size = bit_size; d->priority = priority;
+    c->defined = sim_xrealloc(c->defined, (c->ndefined + 1) * sizeof *c->defined);
+    c->defined[c->ndefined++] = d;
+    if (slot == c->nvars) {
+        c->vars = sim_xrealloc(c->vars, (c->nvars + 1) * sizeof *c->vars); c->nvars++;
+    }
+    c->vars[slot] = &d->var;
+    return replaced ? 2 : 1;
+}
+const sim_var *sim_ctx_sym_var(sim_ctx *c, size_t i) { return i < c->nvars ? c->vars[i] : NULL; }
+const sim_type *sim_ctx_named_type(sim_ctx *c, const char *name)
+{
+    size_t i;
+    for (i = 0; i < c->nvars; i++) {
+        const sim_type *t = c->vars[i]->type;
+        unsigned depth = 0;
+        while (t && depth++ < 16) {
+            const char *s = t->name ? t->name : "";
+            if (!strcmp(s, name) || (!strncmp(s, "struct ", 7) && !strcmp(s + 7, name)) ||
+                (!strncmp(s, "union ", 6) && !strcmp(s + 6, name))) return t;
+            t = t->target;
+        }
+    }
+    return NULL;
+}
+void sim_ctx_set_definition_info(sim_ctx *c, const char *info)
+{ free(c->definition_info); c->definition_info = sim_xstrdup(info); }
+void sim_ctx_print_definition_info(sim_ctx *c, FILE *out)
+{ if (c->definition_info) fputs(c->definition_info, out); }
 
 sim_backend *sim_ctx_backend(sim_ctx *c) { return c->b; }
 size_t sim_ctx_sym_count(sim_ctx *c) { return c->nsyms; }
@@ -590,6 +668,15 @@ static sim_ref *ref_parse(sim_ctx *c, const char *text, char *err, size_t errlen
     }
 
     /* 後置 */
+    if (r->base == RB_MEM) {
+        size_t i;
+        for (i = 0; i < c->ndefined; i++) {
+            const defined_var *d = c->defined[i];
+            if (d->var.addr == r->addr && d->var.type == r->type && !strcmp(d->var.name, id1)) {
+                r->bit_off = d->bit_offset; r->bit_size = d->bit_size;
+            }
+        }
+    }
     for (;;) {
         while (*p == ' ') p++;
         if (!*p) break;

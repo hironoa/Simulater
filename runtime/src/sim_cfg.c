@@ -86,3 +86,14 @@ char *sim_cfg_path(const sim_cfg *c, const char *rel)
     if (!c->dir) return sim_xstrdup(rel);
     return sim_path_join(c->dir, rel);
 }
+
+int sim_cfg_csv_init(sim_cfg *c, const char *override, char *err, size_t errlen)
+{
+    const char *s = sim_cfg_get(c, "csv_init");
+    if (override) s = override;
+    if (!s || !strcmp(s, "auto")) return 0;
+    if (!strcmp(s, "once")) return 1;
+    if (!strcmp(s, "every")) return 2;
+    snprintf(err, errlen, "csv_init = %s は読めません（auto / once / every）", s);
+    return -1;
+}

@@ -201,6 +201,7 @@ check "LMF type checker build" "$CC" -std=c11 -O2 -Wall -Wextra -D_DEFAULT_SOURC
 "$WORK/lmf_types" "$PROBE" probe > "$WORK/probe_types.txt" 2> "$WORK/probe_warnings.txt"
 check "probe: 57 variables / 17 functions / 0 LMF warnings" test $? -eq 0
 check "probe: reference types, addresses, sizes and function signatures" cmp -s "$WORK/probe_types.txt" "$R/expected/probe_types.txt"
+if ! cmp -s "$WORK/probe_types.txt" "$R/expected/probe_types.txt"; then diff -u "$R/expected/probe_types.txt" "$WORK/probe_types.txt"; fi
 "$RS" list --abs "$PROBE" > "$WORK/probe_list_raw.txt" 2> "$WORK/probe_stderr.txt"
 check "probe: sim list exit 0" test $? -eq 0
 "$WORK/lmf_types" "$WORK/probe_list_raw.txt" list > "$WORK/probe_list.txt"
@@ -209,6 +210,7 @@ check "probe: sim list matches lmfdump declarations / addresses" cmp -s "$WORK/p
 "$RS" info --abs "$PROBE" -v > "$WORK/probe_info.txt" 2>&1
 check "probe: startup reaches main" contains "$WORK/probe_info.txt" "main（0x00637）"
 check "probe: no loader or SYM warnings" sh -c '! grep -E "LMF:|SYM:.*(食い違い|一致しません)|読み込みの警告" "$1"' sh "$WORK/probe_info.txt"
+grep -E "^LMF 型診断:|^型情報なし" "$WORK/probe_info.txt"
 rl78_run "probe initial values (50 rows)" 0 "総数 50, OK 50, NG 0" -- --abs "$PROBE" "$R/csv/probe_init.csv"
 rl78_run "probe calls (17 rows)" 0 "総数 17, OK 17, NG 0" -- --abs "$PROBE" "$R/csv/probe_call.csv"
 rl78_run "probe member / bitfield writes (2 rows)" 0 "総数 2, OK 2, NG 0" -- --abs "$PROBE" "$R/csv/probe_write.csv"
@@ -388,3 +390,114 @@ perf "f_neg（2 命令）を $N 回（1 呼び出しあたりのオーバーヘ�
 OVH=$(awk '/^実行時間/ { gsub(/[^0-9.]/, " "); split($0, a, " "); print a[2] }' "$WORK/perf.log")
 [ -n "$OVH" ] && echo "        1 呼び出しあたり: $(awk -v s="$OVH" -v n="$N" 'BEGIN { printf "%.2f us", s / n * 1e6 }')（対象関数の呼び出しにかかった時間 / 回数。CSV の処理は含まない）"
 perf "G23 の get_fclk_freq_hz を $N 回" --abs "$G23" "$WORK/perf_g23.csv"
+
+# Both execution paths must reach main with checksummed breakpoint bytes.
+check "mkabs checksum" "$WORK/mkabs" checksum "$WORK/checksum.abs"
+check "mklmf checksum" "$WORK/mklmf" checksum "$WORK/checksum.lmf"
+for image in ccrl ca; do
+    if [ "$image" = ccrl ]; then rom_image="$WORK/checksum.abs"; else rom_image="$WORK/checksum.lmf"; fi
+    for mode in plain trace; do
+        trace_opt=""
+        if [ "$mode" = trace ]; then trace_opt="--trace-startup"; fi
+        "$RS" info --abs "$rom_image" --cfg "$R/cfg/rom_check_$image.cfg" $trace_opt > "$WORK/rom_$image.$mode.log" 2>&1
+        RC=$?
+        check "ROM checksum $image $mode reaches main" test "$RC" -eq 0
+        check "ROM checksum $image $mode init_end" contains "$WORK/rom_$image.$mode.log" "初期設定終了: main"
+        grep "初期設定終了:" "$WORK/rom_$image.$mode.log" > "$WORK/count_$image.$mode"
+        cat "$R/cfg/rom_check_$image.cfg" > "$WORK/corrupt.cfg"
+        if [ "$image" = ccrl ]; then echo "poke = 0x13D:0"; else echo "poke = 0x10E:0"; fi >> "$WORK/corrupt.cfg"
+        "$RS" info --abs "$rom_image" --cfg "$WORK/corrupt.cfg" $trace_opt > "$WORK/reset_$image.$mode.log" 2>&1
+        RC=$?
+        check "ROM checksum $image $mode rejects corruption" test "$RC" -eq 2
+        check "ROM checksum $image $mode FFH diagnostic" contains "$WORK/reset_$image.$mode.log" "命令コード FFH を実行しました"
+        check "ROM checksum $image $mode original bytes" contains "$WORK/reset_$image.$mode.log" "original bytes=FF"
+        check "ROM checksum $image $mode genuine FF has no breakpoint" contains "$WORK/reset_$image.$mode.log" "breakpoint=none"
+        if [ "$mode" = trace ]; then
+            check "ROM checksum $image trace branch history" contains "$WORK/reset_$image.$mode.log" "FFH 経路:"
+            check "ROM checksum $image trace memory observations" contains "$WORK/reset_$image.$mode.log" "last read:"
+        fi
+
+    done
+    check "ROM checksum $image equal instruction and clock counts" cmp -s "$WORK/count_$image.plain" "$WORK/count_$image.trace"
+done
+
+# PSW slow-path immediately before init_end must not resume past the trap.
+check "mklmf diagnostics" "$WORK/mklmf" diagnostics "$WORK/diag.lmf"
+"$RS" info --abs "$WORK/diag.lmf" > "$WORK/diag.log" 2>&1
+RC=$?
+check "LMF diagnostic symbols load" test "$RC" -eq 0
+check "LMF summary groups repeated combinations" contains "$WORK/diag.log" "0x55 0xDEAD 0x0000 normal 2"
+check "LMF summary distinguishes absolute section" contains "$WORK/diag.log" "0x55 0xDEAD 0x0000 absolute 1"
+check "LMF summary hides names" sh -c '! grep -F -q diag_unknown_a "$1"' sh "$WORK/diag.log"
+"$RS" info --abs "$WORK/diag.lmf" -v -v > "$WORK/diag_names.log" 2>&1
+check "LMF double verbose reveals examples" contains "$WORK/diag_names.log" "diag_unknown_a"
+printf 'mod,cycle,t,3,3\n#COMMENT,abs_reg:1,diag_unknown_a:2,asm_data:2,abs_reg:1,diag_unknown_a:2,asm_data:2\n,0xAB,0x1234,0x5678,0xAB,0x1234,0x5678\n' > "$WORK/diag.csv"
+rl78_run "LMF absolute and unknown names remain writable" 0 "総数 1, OK 1, NG 0" -- --abs "$WORK/diag.lmf" "$WORK/diag.csv"
+
+check "mkabs boundary" "$WORK/mkabs" boundary "$WORK/boundary.abs"
+printf 'init_end = boundary_end\nstub = boundary_end:boundary_short\nskip = boundary_short\n' > "$WORK/boundary.cfg"
+for mode in plain trace; do
+    trace_opt=""
+    [ "$mode" = trace ] && trace_opt="--trace-startup"
+    "$RS" info --abs "$WORK/boundary.abs" --cfg "$WORK/boundary.cfg" $trace_opt > "$WORK/boundary.$mode.log" 2>&1
+    RC=$?
+    check "boundary $mode stops at init_end FFH" test "$RC" -eq 0
+    if [ "$mode" = trace ]; then
+        check "trace compares both startup paths" contains "$WORK/boundary.$mode.log" "startup compare: MATCH"
+        check "trace identifies normal result" contains "$WORK/boundary.$mode.log" "normal: OK"
+        check "trace identifies diagnostic result" contains "$WORK/boundary.$mode.log" "diagnostic: OK"
+    fi
+    printf 'mod,boundary_end,overlap,0,0\n#COMMENT\nstep 1\nstep 2\nmod,boundary_end,reset,0,0\n#COMMENT\nstep 1\n' > "$WORK/boundary.csv"
+    rl78_run "boundary $mode stub skip overlap and snapshot reset" 0 "総数 3, OK 0, NG 0, NO Check 3" -- --abs "$WORK/boundary.abs" --cfg "$WORK/boundary.cfg" $trace_opt "$WORK/boundary.csv"
+done
+
+rl78_run "header names and modi initializers real" 0 "総数 2, OK 2, NG 0" -- --abs "$WORK/test.lmf" --cfg "$T/defines/real.cfg" "$T/defines/real.csv"
+"$RS" info --abs "$WORK/test.lmf" --cfg "$T/defines/real.cfg" > "$WORK/header_info.log" 2>&1
+RC=$?
+check "header definitions info" test "$RC" -eq 0
+check "recursive header file count" contains "$WORK/header_info.log" "defines files=4"
+"$RS" list --abs "$WORK/test.lmf" --cfg "$T/defines/real.cfg" > "$WORK/header_list.log" 2>&1
+check "header names in list real" contains "$WORK/header_list.log" "df_unit"
+check "macros in C files" contains "$WORK/header_list.log" "MORE"
+
+rl78_run "var and varfile real" 0 "総数 1, OK 1, NG 0" -- --abs "$WORK/test.lmf" --cfg "$T/defines/var_real.cfg" "$T/defines/var_real.csv"
+
+rl78_run "header arrays nested union and mixed bit storage real" 0 "総数 1, OK 1, NG 0" -- --abs "$WORK/test.lmf" --cfg "$T/defines/real.cfg" "$T/defines/types_real.csv"
+
+# Socket-dependent integration. Keep explicit failure rather than reporting
+# zero checks as success when this sandbox cannot listen.
+PORT=31329
+U="http://127.0.0.1:$PORT"
+printf 'defines = %s/defines/types\ndefines = %s/defines/device/regs.h\nvar = NAMED_P1 : u8 @ 0xFFF01\n' "$T" "$T" >> "$WORK/boundary.cfg"
+"$RS" gui --abs "$WORK/boundary.abs" --cfg "$WORK/boundary.cfg" --func boundary_end --no-browser --port "$PORT" > "$WORK/boundary_gui.log" 2>&1 &
+GUI_PID=$!
+i=0
+while [ $i -lt 50 ]; do
+    curl -s "$U/api/info" > "$WORK/boundary_info.json" 2>/dev/null && break
+    kill -0 "$GUI_PID" 2>/dev/null || break
+    i=$((i+1)); sleep 0.1
+done
+if curl -s "$U/api/info" > "$WORK/boundary_info.json" 2>/dev/null; then
+    ok "boundary GUI listens"
+    for body in '{"cmd":"step"}' '{"cmd":"reset"}' '{"func":"boundary_short","cmd":"step"}' '{"func":"boundary_end","cmd":"step"}'; do
+        CODE=$(curl -s -o "$WORK/boundary_ctl.json" -w '%{http_code}' -X POST -d "$body" "$U/api/control")
+        check "GUI breakpoint roles after reset or function change" test "$CODE" = 200
+        check "GUI breakpoint role call has no error" contains "$WORK/boundary_ctl.json" '"error":""'
+    done
+    curl -s "$U/api/symbols?q=df_unit" > "$WORK/boundary_search.json"
+    check "GUI searches header definition" contains "$WORK/boundary_search.json" "df_unit"
+    CODE=$(curl -s -o "$WORK/boundary_watch.json" -w '%{http_code}' -X POST -d '{"names":["df_unit","NAMED_P1"]}' "$U/api/watch")
+    check "GUI watches header and named address" test "$CODE" = 200
+    CODE=$(curl -s -o "$WORK/boundary_write.json" -w '%{http_code}' -X POST -d '{"name":"NAMED_P1","value":"0xAB"}' "$U/api/write")
+    check "GUI writes named address" test "$CODE" = 200
+    printf 'modi,boundary_end,t,1,1\n#InitWheneverCall,df_unit\n0,5\n#COMMENT,Fs_ckc_css,df_unit\n,1,5\n,0,5\n' > "$WORK/boundary_play.csv"
+    CODE=$(curl -s -o "$WORK/boundary_load.json" -w '%{http_code}' -X POST --data-binary "@$WORK/boundary_play.csv" "$U/api/load-csv")
+    check "GUI modi playback load" test "$CODE" = 200
+    sleep 0.1
+    curl -s "$U/api/export.csv" > "$WORK/boundary_export.csv"
+    rl78_run "GUI modi recording reruns with initialization" 0 "NG 0" -- --abs "$WORK/boundary.abs" --cfg "$WORK/boundary.cfg" "$WORK/boundary_export.csv"
+else
+    ng "GUI boundary and header integration unavailable" "$(head -2 "$WORK/boundary_gui.log")"
+fi
+kill "$GUI_PID" 2>/dev/null; wait "$GUI_PID" 2>/dev/null
+GUI_PID=""

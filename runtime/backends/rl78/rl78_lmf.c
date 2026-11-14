@@ -20,6 +20,7 @@ typedef struct {
     uint32_t index;
     sim_type *tag;
     int state; /* 0=未読、1=復元中、2=正常、3=不正 */
+    int reported;
 } lsymbol;
 
 /* 文字列は必ず表内の NUL まで。固定長名は別途複写する。 */
@@ -46,6 +47,62 @@ typedef struct {
     uint32_t n, count;
     int char_unsigned;
 } ltypes;
+
+static int no_type(const lsymbol *s)
+{
+    const char *p=s->name;
+    if ((!s->typ && (!s->x || s->x==2)) || !strncmp(p,"_@",2) || *p=='?') return 1;
+    if (*p++!='L' || !*p) return 0;
+    for (;*p;p++) if (*p<'0' || *p>'9') return 0;
+    return 1;
+}
+/* Count symbols once even if both storage and type are unsupported, or a
+   recursive type definition is visited through several variables. */
+static void lmf_issue(ltypes *c,const lsymbol *symbol)
+{
+    lsymbol *s=&c->syms[symbol-c->syms];
+    unsigned section=s->sc>0?0:s->sc==-1?1:s->sc==0?2:3;
+    size_t i;
+    rl78_lmf_group *g;
+    if (s->reported) return;
+    s->reported=1;
+    if (no_type(s)) { c->w->lmf_untyped++; return; }
+    for (i=0;i<c->w->nlmf_groups;i++) {
+        g=&c->w->lmf_groups[i];
+        if (g->cls==s->cls && g->typ==s->typ && g->derived==s->x && g->section==section) break;
+    }
+    if (i==c->w->nlmf_groups) {
+        c->w->lmf_groups=sim_xrealloc(c->w->lmf_groups,(i+1)*sizeof *g);
+        g=&c->w->lmf_groups[c->w->nlmf_groups++]; memset(g,0,sizeof *g);
+        g->cls=s->cls; g->typ=s->typ; g->derived=s->x; g->section=section;
+    }
+    g=&c->w->lmf_groups[i]; g->count++;
+    if (g->nnames<3) g->names[g->nnames++]=sim_xstrdup(s->name);
+}
+static int group_cmp(const void *a,const void *b)
+{
+    const rl78_lmf_group *x=a,*y=b;
+    if (x->count!=y->count) return x->count>y->count?-1:1;
+    if (x->cls!=y->cls) return x->cls<y->cls?-1:1;
+    if (x->typ!=y->typ) return x->typ<y->typ?-1:1;
+    if (x->derived!=y->derived) return x->derived<y->derived?-1:1;
+    return x->section<y->section?-1:x->section>y->section;
+}
+void rl78_lmf_print_summary(const rl78_warns *w,FILE *out)
+{
+    static const char *sections[]={"normal","absolute","undefined","debug"};
+    size_t i;
+    fprintf(out,"LMF 型診断: %zu 種類\n",w->nlmf_groups);
+    if (w->nlmf_groups) fprintf(out,"storage type derived section count\n");
+    for (i=0;i<w->nlmf_groups;i++) {
+        const rl78_lmf_group *g=&w->lmf_groups[i]; unsigned j;
+        fprintf(out,"0x%02X 0x%04X 0x%04X %s %u",g->cls,g->typ,g->derived,sections[g->section],g->count);
+        if (w->lmf_names) for (j=0;j<g->nnames;j++) fprintf(out," %s",g->names[j]);
+        fputc('\n',out);
+    }
+    fprintf(out,"型情報なし（アセンブラなど）: %u 件\n",w->lmf_untyped);
+    if (w->nlmf_groups) fprintf(out,"この表を開発者に伝えると対応を追加できます。名前の例は -v -v / --lmf-names で表示します。\n");
+}
 
 static sim_type *lmf_type(ltypes *c, const lsymbol *s, int function, unsigned depth);
 
@@ -140,7 +197,7 @@ static sim_type *tag_type(ltypes *c, lsymbol *s, unsigned depth)
     s->tag = t; s->state = 2; return t;
 bad:
     s->state = 3;
-    rl78_warn(c->w, "LMF: %s 不正または未対応のタグ定義（entry %u）", s->name, s->index);
+    lmf_issue(c,s);
     return NULL;
 }
 
@@ -158,7 +215,7 @@ static sim_type *lmf_type(ltypes *c, const lsymbol *s, int function, unsigned de
     unsigned b = s->typ & 15u, q = s->typ & ~15u;
     unsigned x = function ? s->x >> 2 : s->x, levels[8], dims[8], pk[8];
     unsigned n = 0, ai = 0, k, ptrbits = 0;
-    if (!s->typ && !s->x && (s->cls == 3 || s->cls == 0x26)) goto unknown_label;
+    if (!s->typ && (!s->x || s->x==2)) { lmf_issue(c,s); goto unknown_label; }
     if (depth >= 64 || s->naux > 1 || s->cls == 0x27 ||
         (q != 0 && q != 0x100 && q != 0x1000 && q != 0x1100 && q != 0x5000 && q != 0x5100 &&
          !(function && s->typ == 0xE001))) goto unknown;
@@ -216,10 +273,11 @@ static sim_type *lmf_type(ltypes *c, const lsymbol *s, int function, unsigned de
     }
     return d;
 unknown:
-    rl78_warn(c->w, "LMF: %s 未対応または不正な型コード 0x%04X 派生型 0x%04X / 記憶クラス 0x%02X", s->name, s->typ, s->x, s->cls);
+    lmf_issue(c,s);
 unknown_label:
     t = ar_alloc(&c->t->ar, sizeof *t); t->kind = SIM_T_UNKNOWN; t->name = "?";
     t->size = !function && s->aux && s->cls != 0x12 ? u16(s->aux+6) : 0;
+    if (!depth && (t->size==1 || t->size==2 || t->size==4)) { t->kind=SIM_T_UINT; t->name=t->size==1?"uint8":t->size==2?"uint16":"uint32"; }
     return t;
 }
 
@@ -304,6 +362,7 @@ int rl78_lmf_load(rl78_elf *e, rl78_symtab *t, rl78_warns *w,
     for (i = 0; i < n; i++) {
         lsymbol *s = &syms[i];
         int known = 1;
+        if (s->name[0]!='.' && (s->sc>0 || s->sc==-1) && !s->typ && (!s->x || s->x==2)) lmf_issue(&types,s);
         if (s->cls == 0x67) { active = (size_t)-1; continue; }
         if (s->cls == 0x65 && !strcmp(s->name, ".ef")) { active = (size_t)-1; continue; }
         if ((s->cls == 0x26 || s->cls == 3) && (s->x & 3) == 2) {
@@ -338,15 +397,15 @@ int rl78_lmf_load(rl78_elf *e, rl78_symtab *t, rl78_warns *w,
         switch (s->cls) {
         case 8: case 10: case 11: case 12: case 15: case 16: case 18: case 0x66:
             continue;
-        case 1: case 4: case 9: case 0x11: case 0x20: case 0x64: case 0x65: case 0x77: case 0x78: continue;
-        case 3: case 0x26: case 0x27: break;
+        case 1: case 4: case 9: case 0x11: case 0x64: case 0x65: case 0x77: case 0x78: continue;
+        case 3: case 0x20: case 0x26: case 0x27: break;
         default:
             known = 0;
-            rl78_warn(w,"LMF: %s 未対応の記憶クラス 0x%02X / 型コード 0x%04X",s->name,s->cls,s->typ);
+            lmf_issue(&types,s);
         }
-        if (s->sc > 0 && s->value <= 0xFFFFF && s->name[0] != '.') {
+        if ((s->sc > 0 || s->sc==-1) && s->value <= 0xFFFFF && s->name[0] != '.') {
             sim_var *v = rl78_symtab_add_var(t);
-            const rl78_sect *sec = &e->sect[s->sc-1];
+            const rl78_sect *sec = s->sc>0?&e->sect[s->sc-1]:NULL;
             const char *owner = s->cls == 3 ? s->file : "";
             uint32_t j, best = 0; int found = 0;
             for (j = 0; j < n; j++) if (syms[j].cls == 0x78 && syms[j].sc == s->sc && syms[j].value <= s->value &&
@@ -355,14 +414,27 @@ int rl78_lmf_load(rl78_elf *e, rl78_symtab *t, rl78_warns *w,
             }
             v->name = cname(s->name); v->file = owner; v->addr = s->value;
             v->func = s->cls == 3 && active != (size_t)-1 ? t->funcs[active].f.name : NULL;
-            v->is_external = s->cls == 0x26 || s->cls == 0x27;
-            v->is_const = !(sec->flags & RL78_SHF_WRITE) || ((s->typ & 0xF000) == 0x5000);
+            v->is_external = s->cls != 3;
+            v->is_const = (sec && !(sec->flags & RL78_SHF_WRITE)) || ((s->typ & 0xF000) == 0x5000);
             v->type = lmf_type(&types,s,0,0);
             if (!known) {
                 sim_type *u = ar_alloc(&t->ar,sizeof *u); u->kind = SIM_T_UNKNOWN; u->name = "?";
-                u->size = s->aux ? u16(s->aux+6) : 0; v->type = u;
+                u->size = s->aux ? u16(s->aux+6) : 0;
+                if (u->size==1 || u->size==2 || u->size==4) { u->kind=SIM_T_UINT; u->name=u->size==1?"uint8":u->size==2?"uint16":"uint32"; }
+                v->type = u;
             }
         }
+    }
+    qsort(w->lmf_groups,w->nlmf_groups,sizeof *w->lmf_groups,group_cmp);
+    {
+        size_t k; int verbose=w->verbose;
+        w->verbose=0;
+        for (k=0;k<w->nlmf_groups;k++) {
+            const rl78_lmf_group *g=&w->lmf_groups[k];
+            rl78_warn(w,"LMF: 記憶クラス 0x%02X / 型コード 0x%04X / 派生型 0x%04X: %u 件",g->cls,g->typ,g->derived,g->count);
+        }
+        w->verbose=verbose;
+        if (verbose || w->lmf_names) rl78_lmf_print_summary(w,stderr);
     }
     free(by_index); free(syms); return 0;
 fail:

@@ -29,10 +29,20 @@ void ar_free(rl78_arena *a);
 /* ---------------------------------------------------------------- 警告 */
 
 typedef struct {
+    unsigned cls, typ, derived, section, count;
+    char *names[3];
+    unsigned nnames;
+} rl78_lmf_group;
+typedef struct {
     char **msg;
     int n, cap;
     int verbose;     /* 1 なら出たその場で標準エラーにも出す */
+    int lmf_names;
+    rl78_lmf_group *lmf_groups;
+    size_t nlmf_groups;
+    unsigned lmf_untyped;
 } rl78_warns;
+void rl78_lmf_print_summary(const rl78_warns *w, FILE *out);
 
 #if defined(__GNUC__) || defined(__clang__)
 void rl78_warn(rl78_warns *w, const char *fmt, ...) __attribute__((format(printf, 2, 3)));

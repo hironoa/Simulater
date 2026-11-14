@@ -1,0 +1,2 @@
+W : u16 @ 0xE100
+TBL : u8[3] @ 0xE110 # array

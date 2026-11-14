@@ -13,6 +13,7 @@
 #define _CRT_SECURE_NO_WARNINGS
 #include "sim_backend.h"
 #include "sim_csv.h"
+#include "sim_defines.h"
 #include "sim_expr.h"
 #include "sim_gui.h"
 #include "sim_platform.h"
@@ -49,6 +50,13 @@ static int take_common(int *argc, char **argv)
         }
         if (strcmp(argv[i], "--abs") == 0) g_open.abs_path = argv[++i];
         else if (strcmp(argv[i], "--cfg") == 0) g_open.cfg_path = argv[++i];
+        else if (!strcmp(argv[i], "--lmf-names")) g_open.lmf_names = 1;
+        else if (!strcmp(argv[i], "--defines")) {
+            if (i+1 >= *argc) { fprintf(stderr, "エラー: --defines の後にパスがありません\n"); return -1; }
+            g_open.defines = sim_xrealloc(g_open.defines, (size_t)(g_open.ndefines+1)*sizeof *g_open.defines);
+            g_open.defines[g_open.ndefines++] = argv[++i];
+        }
+        else if (!strncmp(argv[i], "--csv-init=", 11)) g_open.csv_init = argv[i] + 11;
         else if (strcmp(argv[i], "--trace-startup") == 0) g_open.trace_startup = 1;
         else if (!strcmp(argv[i], "--trace-head") || !strcmp(argv[i], "--trace-tail")) {
             uint64_t n;
@@ -59,7 +67,7 @@ static int take_common(int *argc, char **argv)
             }
             if (head) g_open.trace_head = (unsigned)n; else g_open.trace_tail = (unsigned)n;
         }
-        else if (strcmp(argv[i], "--verbose") == 0 || strcmp(argv[i], "-v") == 0) g_open.verbose = 1;
+        else if (strcmp(argv[i], "--verbose") == 0 || strcmp(argv[i], "-v") == 0) g_open.verbose++;
         else argv[k++] = argv[i];
     }
     *argc = k;
@@ -76,7 +84,14 @@ static sim_ctx *open_ctx(void)
         fprintf(stderr, "エラー: ターゲットを開けません: %s\n", err);
         return NULL;
     }
-    return sim_ctx_new(b);
+    {
+        sim_ctx *c = sim_ctx_new(b);
+        if (sim_defines_load(c, &g_open, err, sizeof err)) {
+            fprintf(stderr, "エラー: 定義を読めません: %s\n", err);
+            sim_ctx_free(c); b->close(b); return NULL;
+        }
+        return c;
+    }
 }
 
 static int cmd_run(int argc, char **argv)
@@ -196,7 +211,7 @@ static int cmd_list(int argc, char **argv)
     n = sim_ctx_sym_count(c);
     for (i = 0; i < n; i++) {
         char tn[256];
-        const sim_var *v = b->var_at(b, i);
+        const sim_var *v = sim_ctx_sym_var(c, i);
         if (!sim_strcasestr_found(sim_ctx_sym_name(c, i), q)) continue;
         sim_type_display(sim_ctx_sym_type(c, i), tn, sizeof tn);
         printf("var  0x%05llX %-40s %s%s  [%s]\n", (unsigned long long)v->addr, sim_ctx_sym_name(c, i), tn,
@@ -235,6 +250,7 @@ static int cmd_info(int argc, char **argv)
     b = sim_ctx_backend(c);
     printf("バックエンド: %s\n", b->name);
     if (b->print_info) b->print_info(b, stdout);
+    sim_ctx_print_definition_info(c, stdout);
     printf("変数: %zu 個、関数: %zu 個\n", sim_ctx_sym_count(c), b->func_count(b));
     sim_ctx_free(c);
     b->close(b);

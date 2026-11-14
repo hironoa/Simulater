@@ -34,7 +34,7 @@ int main(int argc, char **argv)
     if (!strcmp(argv[2], "bad")) {
         int found = 0;
         for (i = 0; i < t.nvars; i++) if (!strcmp(t.vars[i].name, "agg")) {
-            found++; bad |= t.vars[i].type->kind != SIM_T_UNKNOWN;
+            found++; bad |= t.vars[i].type->kind != SIM_T_UINT || t.vars[i].type->size != 4;
         }
         bad |= found != 1 || w.n == 0;
         printf("malformed tag: checked %d, failures %d\n", found, bad);

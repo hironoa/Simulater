@@ -1,5 +1,5 @@
 
-/var/folders/q0/zwcbvnzs6lsdfyq_6khy350h0000gn/T//testprog.V72UKD/t.elf:     file format elf32-rl78
+/var/folders/q0/zwcbvnzs6lsdfyq_6khy350h0000gn/T//testprog.OMKYmZ/t.elf:     file format elf32-rl78
 
 
 Disassembly of section .text:
@@ -292,7 +292,36 @@ Disassembly of section .text:
      2c7:	df f9                         	bnz	$2c2 <_wait_sfr+0x3>
      2c9:	d7                            	ret
 
-000002ca <_code_end>:
+000002ca <_rom_check>:
+     2ca:	36 3d 81                      	movw	hl, #0x813d
+     2cd:	53 00                         	mov	b, #0
+     2cf:	8b                            	mov	a, [hl]
+     2d0:	61 0b                         	add	a, b
+     2d2:	73                            	mov	b, a
+     2d3:	a7                            	incw	hl
+     2d4:	17                            	movw	ax, hl
+     2d5:	44 47 82                      	cmpw	ax, #0x8247
+     2d8:	df f5                         	bnz	$2cf <_rom_check+0x5>
+     2da:	63                            	mov	a, b
+     2db:	4c 9c                         	cmp	a, #156
+     2dd:	dd 03                         	bz	$2e2 <_rom_reset+0x3>
+
+000002df <_rom_reset>:
+     2df:	ff                            	brk1
+     2e0:	ef fd                         	br	$2df <_rom_reset>
+     2e2:	ec 00 01 00                   	br	!!100 <_start>
+
+000002e6 <_boundary_boot>:
+     2e6:	cb f8 20 fe                   	movw	sp, #0xfe20
+     2ea:	ce fa 06                      	mov	psw, #6
+
+000002ed <_boundary_end>:
+     2ed:	ff                            	brk1
+
+000002ee <_boundary_short>:
+     2ee:	d7                            	ret
+
+000002ef <_code_end>:
 	...
 
 00001800 <_data_rom>:
@@ -328,6 +357,4 @@ Disassembly of section .text:
 Disassembly of section .plt:
 
 00002010 <.plt>:
-    2010:	00                            	nop
-    2011:	00                            	nop
 	...

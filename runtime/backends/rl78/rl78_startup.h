@@ -95,11 +95,21 @@ typedef struct {
     unsigned value;
     uint64_t count;
 } trace_read;
+typedef struct {
+    uint32_t pc, next, read_addr, read_pc;
+    unsigned read_value;
+    uint64_t insn, read_insn;
+    int taken, have_read;
+} trace_branch;
 typedef struct startup_trace {
     trace_call *head, *tail, pending;
     unsigned nh, nt;
     uint64_t calls;
     int have_pending;
+    int conditional, transfer, insn_len;
+    trace_branch branches[64], last_transfer;
+    uint64_t nbranches;
+    int have_transfer, ff_fault;
     uint32_t pc, base_sp, pcs[TRACE_WINDOW];
     uint64_t insn, steps, bus_count;
     struct { uint32_t addr, pc, value; uint64_t insn; } bus[2048];
@@ -205,12 +215,50 @@ static void trace_before(be_t *z, uint32_t pc)
     const rl78_funcinfo *f = trace_func(t, pc);
     uint32_t sp = rl78_get_reg(z->cpu, RL78_REG_SP);
     t->pc = pc; t->insn = z->tot_insns + 1;
+    {
+        char d[128], op[16];
+        t->insn_len = rl78_disasm(z->cpu, pc, d, sizeof d);
+        op[0] = 0; sscanf(d, "%15s", op);
+        t->conditional = !strcmp(op, "BC") || !strcmp(op, "BNC") || !strcmp(op, "BZ") ||
+            !strcmp(op, "BNZ") || !strcmp(op, "BH") || !strcmp(op, "BNH") ||
+            !strcmp(op, "BT") || !strcmp(op, "BF") || !strcmp(op, "BTCLR") || !strncmp(op, "SK", 2);
+        t->transfer = t->conditional || !strcmp(op, "BR") || !strncmp(op, "CALL", 4);
+    }
+
     if (sp >= (z->ram_lo & 0xFFFFu) && sp <= 0xFEE0u && sp > t->base_sp) t->base_sp = sp;
     if (!f || f->f.addr != pc) return;
     if (t->have_pending && t->pending.pc == pc && t->pending.sp == sp) { t->pending.repeats++; return; }
     trace_flush(t);
     t->pending.pc = pc; t->pending.sp = sp; t->pending.insn = t->insn; t->pending.repeats = 1;
     t->have_pending = 1;
+}
+static void trace_after(be_t *z, uint32_t next)
+{
+    startup_trace *t = z->trace;
+    trace_branch b;
+    t->pcs[t->steps++ % TRACE_WINDOW] = t->pc;
+    if (!t->transfer) return;
+    memset(&b, 0, sizeof b);
+    b.pc = t->pc; b.next = next; b.insn = t->insn;
+    b.taken = next != ((t->pc + (unsigned)t->insn_len) & 0xFFFFFu);
+    if (t->bus_count) {
+        uint64_t ix = (t->bus_count - 1) % 2048;
+        b.have_read = 1; b.read_addr = t->bus[ix].addr; b.read_value = t->bus[ix].value;
+        b.read_pc = t->bus[ix].pc; b.read_insn = t->bus[ix].insn;
+    }
+    if (b.taken) { t->last_transfer = b; t->have_transfer = 1; }
+    if (t->conditional) t->branches[t->nbranches++ % 64] = b;
+}
+static void trace_print_branch(be_t *z, const trace_branch *b)
+{
+    char d[160];
+    disasm_at(z, b->pc, d, sizeof d);
+    printf("  #%llu 0x%05X -> 0x%05X %s %s\n", (unsigned long long)b->insn,
+           b->pc, b->next, b->taken ? "taken" : "not-taken", d);
+    if (b->have_read)
+        printf("    last read: 0x%05X = 0x%02X (PC=0x%05X, #%llu)\n",
+               b->read_addr, b->read_value, b->read_pc, (unsigned long long)b->read_insn);
+    else printf("    last read: none\n");
 }
 static void trace_begin(be_t *z, const sim_open_opts *o)
 {
@@ -270,6 +318,13 @@ static void trace_end(be_t *z, int failed)
         disasm_at(z, a, d, sizeof d); printf("  0x%05X %s\n", a, d);
     }
     { char d[160]; disasm_at(z, pc, d, sizeof d); printf("停止命令: 0x%05X %s\n", pc, d); }
+    if (failed && t->ff_fault) {
+        printf("FFH 経路: 最後の分岐・CALL（停止命令までの間に通常命令を含む場合があります）\n");
+        if (t->have_transfer) trace_print_branch(z, &t->last_transfer);
+        printf("直近の条件分岐（最大64件。last read は直近の観測で、条件との因果は未確定）:\n");
+        for (i = t->nbranches > 64 ? t->nbranches - 64 : 0; i < t->nbranches; i++)
+            trace_print_branch(z, &t->branches[i % 64]);
+    }
     printf("バックトレース（推定: SPから2バイト単位で最大64枠を探索、4バイトの戻り番地を復元。局所変数・PUSHを誤認する場合があります）:\n");
     for (i = 0; i < 64; i++) {
         uint32_t a = 0xF0000u | rl78_get_reg(z->cpu, RL78_REG_SP), ret;

@@ -10,6 +10,7 @@ rem Prints the number of checks run and failed at the end; exits 1 when any chec
 rem Messages are ASCII only so that cmd.exe parses this file the same on any code page.
 rem Japanese error messages are checked through their ASCII parts.
 setlocal EnableExtensions
+if not defined CC set "CC=clang"
 
 set "ROOT=%~dp0.."
 for %%I in ("%ROOT%") do set "ROOT=%%~fI"
@@ -873,6 +874,38 @@ curl -s --max-time 2 -X POST --data-binary "@%T%\gui\reset.json" "%U%/api/contro
 taskkill /f /im sim_guitest.exe >nul 2>nul
 
 :after_gui
+"%CC%" -std=c11 -O2 -Wall -Wextra -D_DEFAULT_SOURCE -I"%ROOT%\runtime\include" -I"%ROOT%\runtime\src" "%T%\tools\check_csv_table.c" "%ROOT%\runtime\src\sim_csv.c" "%ROOT%\runtime\src\sim_expr.c" "%ROOT%\runtime\src\sim_util.c" "%ROOT%\runtime\src\sim_platform.c" "%ROOT%\runtime\src\sim_cfg.c" "%ROOT%\runtime\backends\mock\mock_backend.c" -o "%WORK%\csv_table.exe" -lws2_32
+set RC=%ERRORLEVEL%
+if "%RC%"=="0" (call :ok "build GUI CSV table checks") else (call :ng "build GUI CSV table checks")
+"%WORK%\csv_table.exe"
+set RC=%ERRORLEVEL%
+if "%RC%"=="0" (call :ok "GUI CSV initialization expansion") else (call :ng "GUI CSV initialization expansion")
+echo == modi and configured definitions
+call :run_cmp modi_every.csv 0
+call :run_cmp modi_auto_once.csv 0
+"%SIM%" run "%T%\csv\modi_once.csv" --csv-init=once -o "%WORK%\modi_once" --fixed-time > "%WORK%\modi.log" 2>&1
+set RC=%ERRORLEVEL%
+if "%RC%"=="0" (call :ok "modi once") else (call :ng "modi once")
+fc /b "%WORK%\modi_once\modi_once.csv" "%T%\expected\modi_once.csv" >nul
+set RC=%ERRORLEVEL%
+if "%RC%"=="0" (call :ok "modi preserves metadata bytes") else (call :ng "modi preserves metadata bytes")
+"%SIM%" run "%WORK%\modi_once\modi_once.csv" --csv-init=once -o "%WORK%\modi_reread" > "%WORK%\modi.log" 2>&1
+set RC=%ERRORLEVEL%
+if "%RC%"=="0" (call :ok "modi result reread") else (call :ng "modi result reread")
+> "%WORK%\csv_init.cfg" echo csv_init = once
+"%SIM%" run "%T%\csv\modi_every.csv" --cfg "%WORK%\csv_init.cfg" --csv-init=every -o "%WORK%\modi_override" > "%WORK%\modi.log" 2>&1
+set RC=%ERRORLEVEL%
+if "%RC%"=="0" (call :ok "csv init CLI overrides cfg") else (call :ng "csv init CLI overrides cfg")
+"%SIM%" run "%T%\defines\mock.csv" --cfg "%T%\defines\mock.cfg" -o "%WORK%\header_mock" > "%WORK%\header.log" 2>&1
+set RC=%ERRORLEVEL%
+if "%RC%"=="0" (call :ok "header names and modi mock") else (call :ng "header names and modi mock")
+"%SIM%" list --cfg "%T%\defines\mock.cfg" > "%WORK%\header_list.log" 2>&1
+findstr /l /c:"df" "%WORK%\header_list.log" >nul
+if errorlevel 1 (call :ng "header list mock") else (call :ok "header list mock")
+"%SIM%" run "%T%\defines\var_mock.csv" --cfg "%T%\defines\var_mock.cfg" -o "%WORK%\var_mock" > "%WORK%\var.log" 2>&1
+set RC=%ERRORLEVEL%
+if "%RC%"=="0" (call :ok "var and varfile mock") else (call :ng "var and varfile mock")
+
 set /a MOCK_TOTAL=PASS+FAIL
 set /a MOCK_FAIL=FAIL
 call "%T%\rl78\run_rl78_tests.bat"

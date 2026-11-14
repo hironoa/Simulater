@@ -49,6 +49,19 @@ run_cmp() {
     else ng "$_csv: 結果 CSV が期待どおり（バイト単位）" "$(diff "$T/expected/$_csv" "$_out/$_csv" | head -5)"; fi
 }
 
+
+check "build GUI CSV table checks" "${CC:-clang}" -std=c11 -O2 -Wall -Wextra -D_DEFAULT_SOURCE -I"$ROOT/runtime/include" -I"$ROOT/runtime/src" \
+    "$T/tools/check_csv_table.c" "$ROOT/runtime/src/sim_csv.c" "$ROOT/runtime/src/sim_expr.c" "$ROOT/runtime/src/sim_util.c" "$ROOT/runtime/src/sim_platform.c" "$ROOT/runtime/src/sim_cfg.c" "$ROOT/runtime/backends/mock/mock_backend.c" -o "$WORK/csv_table" -lpthread -lm
+check "GUI CSV initialization expansion" "$WORK/csv_table"
+
+echo "== header defines (mock)"
+"$SIM" run "$T/defines/mock.csv" --cfg "$T/defines/mock.cfg" -o "$WORK/header_mock" > "$WORK/header_mock.log" 2>&1
+RC=$?
+check "header names and modi initializers mock" test "$RC" -eq 0
+if [ "$RC" -ne 0 ]; then cat "$WORK/header_mock.log"; fi
+"$SIM" list --cfg "$T/defines/mock.cfg" > "$WORK/header_list.log" 2>&1
+check "header names in list mock" contains "$WORK/header_list.log" "df_unit"
+check "unsupported macro postfix is not silently truncated" sh -c '! grep -F -q unsupported_index "$1"' sh "$WORK/header_list.log"
 echo "== テスト CSV の実行と結果 CSV"
 run_cmp unit_all.csv 0
 run_cmp ng_case.csv 1
@@ -968,6 +981,56 @@ data: {"periodMs":2,"func":"TEST_cycle","names":["g_eng.state","TEST_cycle_cnt",
     GUI_PID=""
 fi
 
+
+echo "== modi initialization"
+run_cmp modi_every.csv 0
+run_cmp modi_auto_once.csv 0
+"$SIM" run "$T/csv/modi_once.csv" --csv-init=once -o "$WORK/modi_once" --fixed-time > "$WORK/modi.log" 2>&1
+RC=$?
+check "modi once distinct second row" test "$RC" -eq 0
+check "modi once preserves header bytes" cmp -s "$WORK/modi_once/modi_once.csv" "$T/expected/modi_once.csv"
+"$SIM" run "$WORK/modi_once/modi_once.csv" --csv-init=once -o "$WORK/modi_reread" --fixed-time > "$WORK/modi.log" 2>&1
+RC=$?
+check "modi result CSV reread" test "$RC" -eq 0
+printf "csv_init = once\n" > "$WORK/csv_init.cfg"
+"$SIM" run "$T/csv/modi_every.csv" --cfg "$WORK/csv_init.cfg" --csv-init=every -o "$WORK/modi_override" > "$WORK/modi.log" 2>&1
+RC=$?
+check "csv init CLI overrides cfg" test "$RC" -eq 0
+for bad in missing range duplicate values; do
+    case "$bad" in
+    missing) printf "modi,intr_tm00,t,0,0\n#InitOnce,no_such_var\n0,1\n#COMMENT\nstep 1\n" ;;
+    range) printf "modi,intr_tm00,t,0,0\n#InitOnce,g_mode\n0,256\n#COMMENT\nstep 1\n" ;;
+    duplicate) printf "modi,intr_tm00,t,0,0\n#InitOnce,g_mode\n0,1\n#InitOnce,g_mode\n0,2\n#COMMENT\nstep 1\n" ;;
+    values) printf "modi,intr_tm00,t,0,0\n#InitOnce,g_mode\n0,1\n0,2\n#COMMENT\nstep 1\n" ;;
+    esac > "$WORK/modi_bad.csv"
+    "$SIM" run "$WORK/modi_bad.csv" -o "$WORK/modi_bad" > "$WORK/modi.log" 2>&1
+    RC=$?
+    check "modi rejects $bad" test "$RC" -eq 2
+done
+
+
+"$SIM" run "$T/defines/var_mock.csv" --cfg "$T/defines/var_mock.cfg" -o "$WORK/var_mock" > "$WORK/var_mock.log" 2>&1
+RC=$?
+check "var and varfile byte word bit range array float signed mock" test "$RC" -eq 0
+"$SIM" list --cfg "$T/defines/var_mock.cfg" > "$WORK/var_list.log" 2>&1
+check "configured vars in list" contains "$WORK/var_list.log" "TBL"
+
+"$SIM" run "$T/defines/types_mock.csv" --cfg "$T/defines/mock.cfg" -o "$WORK/types_mock" > "$WORK/types_mock.log" 2>&1
+RC=$?
+check "header arrays nested union and mixed bit storage" test "$RC" -eq 0
+if [ "$RC" -ne 0 ]; then cat "$WORK/types_mock.log"; fi
+for bad in path address varbit vararray policy; do
+    case "$bad" in
+    path) printf "defines = missing/no_such_header.h\n" ;;
+    address) printf "var = BAD : u16 @ 0xFFFFF\n" ;;
+    varbit) printf "var = BAD : u8.8 @ 0xFF01\n" ;;
+    vararray) printf "var = BAD : u8[0] @ 0xF900\n" ;;
+    policy) printf "csv_init = invalid\n" ;;
+    esac > "$WORK/bad_defs.cfg"
+    "$SIM" info --cfg "$WORK/bad_defs.cfg" > "$WORK/bad_defs.log" 2>&1
+    RC=$?
+    check "definition config rejects $bad" test "$RC" -eq 2
+done
 MOCK_PASS=$PASS
 MOCK_FAIL=$FAIL
 . "$T/rl78/run_rl78_tests.sh"

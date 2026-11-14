@@ -439,3 +439,55 @@ int sim_same_file(const char *a, const char *b)
 }
 
 #endif
+
+#ifndef _WIN32
+#include <dirent.h>
+#endif
+int sim_path_kind(const char *path)
+{
+#ifdef _WIN32
+    DWORD a = GetFileAttributesA(path);
+    if (a == INVALID_FILE_ATTRIBUTES || (a & FILE_ATTRIBUTE_REPARSE_POINT)) return 0;
+    return (a & FILE_ATTRIBUTE_DIRECTORY) ? 2 : 1;
+#else
+    struct stat st;
+    if (lstat(path, &st)) return 0;
+    return S_ISDIR(st.st_mode) ? 2 : S_ISREG(st.st_mode) ? 1 : 0;
+#endif
+}
+int sim_dir_each(const char *path, void (*visit)(void *, const char *, int), void *ctx)
+{
+#ifdef _WIN32
+    WIN32_FIND_DATAA data;
+    size_t n = strlen(path);
+    char *pattern = malloc(n + 3);
+    HANDLE h;
+    if (!pattern) return -1;
+    memcpy(pattern, path, n); memcpy(pattern + n, "\\*", 3);
+    h = FindFirstFileA(pattern, &data); free(pattern);
+    if (h == INVALID_HANDLE_VALUE) return -1;
+    do {
+        if (!strcmp(data.cFileName, ".") || !strcmp(data.cFileName, "..") ||
+            (data.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)) continue;
+        visit(ctx, data.cFileName, (data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) ? 2 : 1);
+    } while (FindNextFileA(h, &data));
+    { DWORD e = GetLastError(); FindClose(h); return e == ERROR_NO_MORE_FILES ? 0 : -1; }
+#else
+    struct dirent *de;
+    DIR *dir = opendir(path);
+    if (!dir) return -1;
+    while ((de = readdir(dir)) != NULL) {
+        char *p;
+        size_t a, b;
+        int kind;
+        if (!strcmp(de->d_name, ".") || !strcmp(de->d_name, "..")) continue;
+        a = strlen(path); b = strlen(de->d_name);
+        p = malloc(a + b + 2);
+        if (!p) { closedir(dir); return -1; }
+        memcpy(p, path, a); p[a] = '/'; memcpy(p + a + 1, de->d_name, b + 1);
+        kind = sim_path_kind(p); free(p);
+        if (kind) visit(ctx, de->d_name, kind);
+    }
+    closedir(dir); return 0;
+#endif
+}

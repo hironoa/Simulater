@@ -89,6 +89,16 @@ int main(int argc,char **argv)
     var("_vol",0xFE012,0x100D,0,0,0,0x26); var("_float",0xFE014,6,0,0,0,0x26);
     var("_private",0xFE018,13,0,0,0,3);
     sym("_@STBEG",0xFFDE0,-1,0,0x20,0,0); sym("_@STEND",0xFF000,-1,0,0x20,0,0);
+    if (!strcmp(mode,"diagnostics")) {
+        var("_diag_unknown_a",0xFE030,0xDEAD,0,2,0,0x55);
+        var("_diag_unknown_b",0xFE032,0xDEAD,0,2,0,0x55);
+        a=sym("_abs_reg",0xFFF01,-1,0xDEAD,0x55,0,1); w16(a+6,1);
+        sym("_asm_label",LP_echo8,1,0,0x26,0,0);
+        sym("_@generated",0xFE034,2,0,0x55,0,0);
+        sym("?generated",0xFE035,2,0,0x55,0,0);
+        sym("L0001",0xFE036,2,0,0x55,0,0);
+        a=sym("_asm_data",0xFE038,-1,0,0x26,0,1); w16(a+6,2);
+    }
     w32(8,(unsigned)sy); w32(12,count); w32(pos,(unsigned)strings); memcpy(image+pos+4,str+4,strings-4); pos+=strings;
     if(!strcmp(mode,"truncated")) pos=19;
     else if(!strcmp(mode,"section")) w32(88+28,0xFFFFFFF0u);
@@ -110,7 +120,8 @@ int main(int argc,char **argv)
         w32(member_aux,tag_index); w16(member_aux+6,4);
     }
     else if(!strcmp(mode,"tagwidth")) w16(member_aux+6,33);
-    else if(strcmp(mode,"normal")) return 2;
+    else if(!strcmp(mode,"checksum")) w16(192,LP_rom_check);
+    else if(strcmp(mode,"normal") && strcmp(mode,"diagnostics")) return 2;
     f=fopen(argv[2],"wb"); if(!f) return 1;
     if(fwrite(image,1,pos,f)!=pos) { fclose(f); return 1; }
     return fclose(f)!=0;

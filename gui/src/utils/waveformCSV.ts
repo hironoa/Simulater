@@ -3,11 +3,12 @@ import Papa from "papaparse";
 // sim_csv.c の first_key と同じく、前後の空白（全角を含む）と外側の引用を除く。
 const firstKey = (row: string[]) => (row[0] ?? "").trim().replace(/^"(.*)"$/s, "$1").trim();
 const rowKind = (row: string[]) => firstKey(row).toLowerCase();
+const isMod = (row: string[]) => ["mod", "modi"].includes(rowKind(row));
 const isHeader = (row: string[]) => rowKind(row).startsWith("#comment");
 
 /** `mod,関数名,題名,入力数,出力数` の入力数・出力数。読めなければ null。 */
 function readModCounts(row: string[] | undefined): { inputs: number; outputs: number } | null {
-  if (!row || rowKind(row) !== "mod") return null;
+  if (!row || !isMod(row)) return null;
   const count = (cell: string | undefined) => {
     const text = cell?.trim() ?? "";
     return /^\d+$/.test(text) ? Number(text) : null;
@@ -90,7 +91,7 @@ export function decodeWaveformCSV(text: string) {
       parsed.data.push(result.data);
     },
   });
-  const modIndices = parsed.data.flatMap((row, i) => rowKind(row) === "mod" ? [i] : []);
+  const modIndices = parsed.data.flatMap((row, i) => isMod(row) ? [i] : []);
   const commentIndices = parsed.data.flatMap((row, i) => isHeader(row) ? [i] : []);
   const blockCount = modIndices.length || commentIndices.length;
   const end = (modIndices.length ? modIndices[1] : commentIndices[1]) ?? parsed.data.length;
@@ -107,7 +108,7 @@ export function decodeWaveformCSV(text: string) {
     const name = rawHeaders[i]?.trim();
     if (name) columns.push({ name, colIdx: i });
   }
-  const mod = headerIdx > 0 ? readModCounts(parsed.data[headerIdx - 1]) : null;
+  const mod = modIndices.length ? readModCounts(parsed.data[start]) : null;
   const isOutput = (colIdx: number) =>
     !!mod && colIdx > mod.inputs && colIdx <= mod.inputs + mod.outputs;
   const picked = pickColumns(columns, isOutput);
@@ -117,8 +118,11 @@ export function decodeWaveformCSV(text: string) {
   headers.forEach((h) => (seriesMap[h] = []));
   const steps: number[] = [];
 
+  let initValues = false;
   dataRows.forEach((row) => {
+    if (initValues) { initValues = false; return; }
     const key = firstKey(row);
+    if (key.toLowerCase().startsWith("#init")) { initValues = true; return; }
     if (key.startsWith(";") || key.startsWith("#")) return;
     steps.push(steps.length + 1);
     picked.forEach(({ colIdx }, i) => seriesMap[headers[i]].push(cellValue(row[colIdx])));

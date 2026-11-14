@@ -10,6 +10,7 @@
  */
 #define _CRT_SECURE_NO_WARNINGS
 #include "sim_backend.h"
+#include "sim_cfg.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -484,7 +485,17 @@ sim_backend *sim_backend_open(const sim_open_opts *o, char *err, size_t errlen)
     static const uint16_t gear_up[5] = {0, 1500, 2500, 3500, 4500};
     static const uint16_t lut[4] = {100, 200, 400, 800};
     int i;
-    (void)o;
+    sim_cfg cfg;
+    int cfg_rc, init_mode;
+    sim_cfg_init(&cfg);
+    cfg_rc = sim_cfg_load(&cfg, o->cfg_path ? o->cfg_path : "sim.cfg", err, errlen);
+    if (cfg_rc == -2 || (cfg_rc == -1 && o->cfg_path)) {
+        if (cfg_rc == -1) snprintf(err, errlen, "設定ファイル %s を読めません", o->cfg_path);
+        sim_cfg_free(&cfg); free(b); free(m); return NULL;
+    }
+    init_mode = sim_cfg_csv_init(&cfg, o->csv_init, err, errlen);
+    sim_cfg_free(&cfg);
+    if (init_mode < 0) { free(b); free(m); return NULL; }
     if (!b || !m) { snprintf(err, errlen, "メモリが足りません"); free(b); free(m); return NULL; }
     /* 初期値（C の初期化子にあたるもの） */
     for (i = 0; i < 5; i++) wr16(m, A_GEAR_UP + 2u * (uint32_t)i, gear_up[i]);
@@ -498,6 +509,7 @@ sim_backend *sim_backend_open(const sim_open_opts *o, char *err, size_t errlen)
     memcpy(m->init, m->mem, MEM_SIZE);
     m->heap = HEAP_BEGIN;
 
+    b->csv_init = init_mode;
     b->name = "mock";
     b->ptr_size = 2;
     b->big_endian = 0;
