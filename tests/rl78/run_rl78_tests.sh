@@ -166,7 +166,7 @@ check "LMF unknown storage warning" contains "$WORK/lmf.log" "0x55"
 check "LMF list" test $? -eq 0
 check "LMF array symbol" contains "$WORK/lmf.list" "arr"
 rl78_run "LMF ABI/startup/driver/unknown size (16 rows)" 0 "総数 16, OK 16, NG 0" -- --abs "$WORK/test.lmf" "$R/csv/lmf_call.csv"
-rl78_run "LMF first long rejected" 1 "AX/BC" -- --abs "$WORK/test.lmf" "$R/csv/lmf_first32.csv"
+rl78_run "LMF first long accepted" 0 "総数 1, OK 0, NG 0, NO Check 1" -- --abs "$WORK/test.lmf" "$R/csv/lmf_first32.csv"
 printf 'abi = ccrl\n' > "$WORK/abi.cfg"
 "$RS" info --abs "$WORK/test.lmf" --cfg "$WORK/abi.cfg" > "$WORK/lmf.log" 2>&1
 check "ABI override" contains "$WORK/lmf.log" "ABI: ccrl"
@@ -192,6 +192,36 @@ check "mklmf no debug" "$WORK/mklmf" nodbg "$WORK/nodbg.lmf"
 printf '#05\n;FF PUBLIC\n010010E_main\n0100141_cycle\n02FE000_init\n02FE002_ticks\n=\n' > "$WORK/nodbg.sym"
 printf 'mod,cycle,SYM fallback,1,2\n#COMMENT,ticks:2,init:2,ticks:2\n,4,0x1234,5\n' > "$WORK/sym.csv"
 rl78_run "LMF without debug uses SYM addresses" 0 "総数 1, OK 1, NG 0" -- --abs "$WORK/nodbg.lmf" "$WORK/sym.csv"
+
+echo "== CA78K0R probe: 型・サイズ・初期値・呼び出し"
+PROBE="$T/ca78k0r_probe/DefaultBuild/ca78k0r_probe.lmf"
+B="$ROOT/runtime/backends/rl78"
+check "LMF type checker build" "$CC" -std=c11 -O2 -Wall -Wextra -D_DEFAULT_SOURCE -I"$B" -I"$ROOT/runtime/include" -I"$ROOT/runtime/src" \
+    "$T/tools/check_lmf_types.c" "$B/rl78_lmf.c" "$B/rl78_elf.c" "$B/rl78_dwarf.c" "$B/rl78_map.c" "$ROOT/runtime/src/sim_util.c" -o "$WORK/lmf_types"
+"$WORK/lmf_types" "$PROBE" probe > "$WORK/probe_types.txt" 2> "$WORK/probe_warnings.txt"
+check "probe: 57 variables / 17 functions / 0 LMF warnings" test $? -eq 0
+check "probe: reference types, addresses, sizes and function signatures" cmp -s "$WORK/probe_types.txt" "$R/expected/probe_types.txt"
+"$RS" list --abs "$PROBE" > "$WORK/probe_list_raw.txt" 2> "$WORK/probe_stderr.txt"
+check "probe: sim list exit 0" test $? -eq 0
+"$WORK/lmf_types" "$WORK/probe_list_raw.txt" list > "$WORK/probe_list.txt"
+check "probe: sim list has 57 typed variables" test $? -eq 0
+check "probe: sim list matches lmfdump declarations / addresses" cmp -s "$WORK/probe_list.txt" "$R/expected/probe_list.txt"
+"$RS" info --abs "$PROBE" -v > "$WORK/probe_info.txt" 2>&1
+check "probe: startup reaches main" contains "$WORK/probe_info.txt" "main（0x00637）"
+check "probe: no loader or SYM warnings" sh -c '! grep -E "LMF:|SYM:.*(食い違い|一致しません)|読み込みの警告" "$1"' sh "$WORK/probe_info.txt"
+rl78_run "probe initial values (50 rows)" 0 "総数 50, OK 50, NG 0" -- --abs "$PROBE" "$R/csv/probe_init.csv"
+rl78_run "probe calls (17 rows)" 0 "総数 17, OK 17, NG 0" -- --abs "$PROBE" "$R/csv/probe_call.csv"
+rl78_run "probe member / bitfield writes (2 rows)" 0 "総数 2, OK 2, NG 0" -- --abs "$PROBE" "$R/csv/probe_write.csv"
+rl78_run "probe struct return rejected" 2 "戻り値は構造体" -- --abs "$PROBE" "$R/csv/probe_ret_struct.csv"
+rl78_run "probe float argument rejected" 2 "浮動小数の引数には対応していません" -- --abs "$PROBE" "$R/csv/probe_float.csv"
+rl78_run "probe char_unsigned" 0 "総数 1, OK 1, NG 0" -- --abs "$PROBE" --cfg "$R/cfg/probe_char.cfg" "$R/csv/probe_char.csv"
+rl78_run "generated struct, bitfields and far pointer" 0 "総数 1, OK 1, NG 0" -- --abs "$WORK/test.lmf" "$R/csv/lmf_aggregate.csv"
+for mode in tagref tagaux tagmismatch tagend tagcycle tagwidth; do
+    check "mklmf $mode" "$WORK/mklmf" "$mode" "$WORK/badtag.lmf"
+    "$WORK/lmf_types" "$WORK/badtag.lmf" bad > "$WORK/tag.log" 2>&1
+    check "malformed $mode becomes unknown without recursion or crash" test $? -eq 0
+done
+rl78_run "probe 32-bit skip result" 0 "総数 1, OK 1, NG 0" -- --abs "$PROBE" --cfg "$R/cfg/probe_skip.cfg" "$R/csv/probe_skip.csv"
 
 echo "== 本物のバックエンドの GUI サーバ"
 if command -v curl > /dev/null 2>&1; then

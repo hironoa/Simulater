@@ -1,0 +1,41 @@
+mod,f_u8,C return,1,1
+#COMMENT,@a,f_u8@@
+,19,20
+,255,0
+mod,add2,word stack,2,1
+#COMMENT,@a,@b,add2@@
+,4660,258,4918
+mod,f_u32,AX BC and DE BC,1,1
+#COMMENT,@a,f_u32@@
+,539042339,555951399
+,287454020,304363080
+mod,f_mix,mixed stack slots,4,1
+#COMMENT,@a,@b,@c,@d,f_mix@@
+,1,33752069,1543,8,33753621
+mod,f_long2,two long arguments,2,1
+#COMMENT,@a,@b,f_long2@@
+,286397204,16909060,269488144
+,-5,7,-12
+mod,f_ptr,allocated byte array,3,1
+#COMMENT,$@p,*@p,@n,f_ptr@@
+,3,1|2|3,3,6
+mod,f_farptr,far address,1,1
+#COMMENT,@p,f_farptr@@
+,1032298,19
+mod,f_struct_ptr,allocated struct,4,1
+#COMMENT,$@p,@p->oa,@p->in.ib,@p->tail,f_struct_ptr@@
+,1,1,515,4,520
+mod,f_enum,one byte enum,1,1
+#COMMENT,@e,f_enum@@
+,0,1
+,100,0
+mod,f_static1,persistent static,0,3
+#COMMENT,f_static1@@,f_static1@cnt,f_static2@cnt
+,49603,49603,50116
+,49604,49604,50116
+mod,f_static2,block static,0,3
+#COMMENT,f_static2@@,f_static2@keep.ia,f_static2@nested
+,50117,198,202
+mod,f_locals,locals frame,1,1
+#COMMENT,@a,f_locals@@
+,256,262

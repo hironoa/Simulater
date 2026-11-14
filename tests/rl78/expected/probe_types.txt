@@ -1,0 +1,75 @@
+V FC0FB 1 s_file_uc unsigned char [probe.c]
+V FC0FC 2 s_file_ui unsigned int [probe.c]
+V FC0FE 6 s_file_in struct inner [probe.c]
+V FC054 1 s_file_bss unsigned char [probe.c]
+V FC108 2 f_static1@cnt unsigned int [probe.c]
+V FC064 4 f_static1@buf unsigned char [4] [probe.c]
+V FC10A 2 f_static2@cnt unsigned int [probe.c]
+V FC10C 6 f_static2@keep struct inner [probe.c]
+V FC112 1 f_static2@nested unsigned char [probe.c]
+V FC05E 6 L0027 struct inner [probe.c]
+V FC068 1 g_c char [probe.c]
+V FC069 1 g_sc char [probe.c]
+V FC06A 1 g_uc unsigned char [probe.c]
+V FC06C 2 g_s short [probe.c]
+V FC06E 2 g_us unsigned short [probe.c]
+V FC070 2 g_i int [probe.c]
+V FC072 2 g_ui unsigned int [probe.c]
+V FC074 4 g_l long [probe.c]
+V FC078 4 g_ul unsigned long [probe.c]
+V FC07C 4 g_f float [probe.c]
+V FC080 4 g_d double [probe.c]
+V FC084 1 g_se enum small_e [probe.c]
+V FC085 1 g_ne enum neg_e [probe.c]
+V FC086 2 g_be enum big_e [probe.c]
+V FC088 34 g_outer struct outer [probe.c]
+V FBFBA 68 g_outer_arr struct outer [2] [probe.c]
+V FC0AA 4 g_uni union uni [probe.c]
+V FC0AE 1 g_bits8 struct bits8 [probe.c]
+V FC0B0 4 g_bits16 struct bits16 [probe.c]
+V FC0B4 8 g_bitsm struct bits_mixed [probe.c]
+V FC0BC 6 g_mat2 unsigned char [2][3] [probe.c]
+V FBFFE 48 g_mat3 unsigned int [2][3][4] [probe.c]
+V FC0C2 10 g_iarr int [5] [probe.c]
+V FC0CC 2 g_p_uc unsigned char * [probe.c]
+V FC0CE 2 g_p_ui unsigned int * [probe.c]
+V FC0D0 2 g_p_outer struct outer * [probe.c]
+V FC0D2 2 g_p_inner struct inner * [probe.c]
+V FC0D4 2 g_pp_uc unsigned char ** [probe.c]
+V FC0D6 2 g_p_const unsigned char * [probe.c]
+V FC0D8 4 g_fp_uc unsigned char __far * [probe.c]
+V FC0DC 4 g_fp_outer struct outer __far * [probe.c]
+V FC0E0 6 g_parr unsigned char *[3] [probe.c]
+V FC0E6 2 g_p_arr unsigned char (*)[3] [probe.c]
+V FC0E8 1 g_td_u8 unsigned char [probe.c]
+V FC0EA 2 g_td_u16 unsigned int [probe.c]
+V FC0EC 4 g_td_u32 unsigned long [probe.c]
+V FC0F0 8 g_td_pt struct .1fake [probe.c]
+V FC0F8 2 g_td_pp struct .1fake * [probe.c]
+V 03000 4 c_tbl const unsigned char [4] [probe.c]
+V 03004 4 c_wtbl const unsigned int [2] [probe.c]
+V 03008 6 c_inner const struct inner [probe.c]
+V FC0FA 1 g_vol volatile unsigned char [probe.c]
+V FC02E 1 g_bss_uc unsigned char [probe.c]
+V FC030 2 g_bss_ui unsigned int [probe.c]
+V FC032 34 g_bss_outer struct outer [probe.c]
+V FC104 4 g_fn unsigned int (__far *)() [probe.c]
+V FC056 8 g_fn_tbl void (__far *[2])() [probe.c]
+F 00496 f_void void 0
+F 0049A f_u8 unsigned char 1 | a unsigned char 1
+F 004A3 add2 unsigned int 2 | a unsigned int 2 | b unsigned int 2
+F 004B0 f_u32 unsigned long 4 | a unsigned long 4
+F 004CF f_mix unsigned long 4 | a unsigned char 1 | b unsigned long 4 | c unsigned int 2 | d unsigned char 1
+F 00502 f_long2 long 4 | a long 4 | b long 4
+F 00520 f_float float 4 | a float 4 | b float 4
+F 0053E f_ptr unsigned int 2 | p unsigned char * 2 | n unsigned int 2
+F 0056C f_farptr unsigned char 1 | p unsigned char __far * 4
+F 00581 f_struct_ptr unsigned int 2 | p struct outer * 2
+F 0059A f_ret_struct struct inner 6 | a unsigned char 1
+F 005C6 f_enum enum small_e 1 | e enum small_e 1
+F 005D3 f_static1 unsigned int 2
+F 005DD f_static2 unsigned int 2
+F 005EA f_file_static unsigned char 1 | a unsigned char 1
+F 005FD f_locals unsigned int 2 | a unsigned int 2
+F 00637 main void 0
+variables 57 functions 17 warnings 0

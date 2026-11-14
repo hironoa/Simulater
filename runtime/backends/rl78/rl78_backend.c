@@ -492,7 +492,10 @@ static int b_call(sim_backend *b, const sim_func *f, const int64_t *args, int na
         sizes[i] = sz;
         if (z->ca78k0r) {
             onstack[i] = i != 0;
-            if (i == 0) rl78_set_reg(z->cpu, RL78_REG_AX, (uint32_t)args[i] & (sz == 1 ? 0xFFu : 0xFFFFu));
+            if (i == 0) {
+                rl78_set_reg(z->cpu, RL78_REG_AX, (uint32_t)args[i] & (sz == 1 ? 0xFFu : 0xFFFFu));
+                if (sz == 4) rl78_set_reg(z->cpu, RL78_REG_BC, ((uint32_t)((uint64_t)args[i] >> 16)) & 0xFFFFu);
+            }
         } else onstack[i] = !rl78_ccrl_arg(z->cpu, &g, sz > 4 ? 99 : sz, is_far_ptr(t), (uint64_t)args[i]);
         if (onstack[i]) stack_bytes += (sz + 1u) & ~1u;
     }
@@ -1003,7 +1006,14 @@ sim_backend *sim_backend_open(const sim_open_opts *o, char *err, size_t errlen)
         n = fread(magic, 1, 4, fp); fclose(fp);
         z->is_lmf = n >= 2 && magic[0] == 0x48 && magic[1] == 0x11;
         if (z->is_lmf) {
-            if (rl78_lmf_load(&z->elf, &z->st, &z->w, z->abs_path, err, errlen)) { be_free(z); return NULL; }
+            int char_unsigned = 0;
+            s = sim_cfg_get(&z->cfg, "char_unsigned");
+            if (s && strcmp(s, "on") && strcmp(s, "off")) {
+                snprintf(err, errlen, "sim.cfg: char_unsigned = %s は on / off にしてください", s);
+                be_free(z); return NULL;
+            }
+            char_unsigned = s && !strcmp(s, "on");
+            if (rl78_lmf_load(&z->elf, &z->st, &z->w, z->abs_path, char_unsigned, err, errlen)) { be_free(z); return NULL; }
         } else if (n == 4 && !memcmp(magic, "\x7f" "ELF", 4)) {
             if (rl78_elf_load(&z->elf, z->abs_path, err, errlen)) { be_free(z); return NULL; }
         } else {

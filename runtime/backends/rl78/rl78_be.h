@@ -127,7 +127,7 @@ void rl78_split_symname(rl78_symtab *t, const char *sym, const char **name, cons
 
 void rl78_sym_load(rl78_elf *e, rl78_symtab *t, rl78_warns *w, const char *path);
 int rl78_lmf_load(rl78_elf *e, rl78_symtab *t, rl78_warns *w,
-                  const char *path, char *err, size_t errlen);
+                  const char *path, int char_unsigned, char *err, size_t errlen);
 
 /* ---------------------------------------------------------------- .map */
 

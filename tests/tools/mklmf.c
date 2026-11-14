@@ -52,7 +52,7 @@ static void ptrfunc(const char *n,unsigned addr,int retptr)
 }
 int main(int argc,char **argv)
 {
-    FILE *f; size_t a; const char *mode;
+    FILE *f; size_t a, tag_aux, member_aux, agg_aux; unsigned tag_index; const char *mode;
     if(argc!=3) return 2;
     mode=argv[1];
     w16(0,0x1148); w16(2,2); w16(16,68); w16(18,3);
@@ -62,6 +62,15 @@ int main(int argc,char **argv)
     sy=pos=(192+sizeof LP_IMAGE+3)&~(size_t)3;
     a=sym(".file",0,-2,0x3F,0x67,0,1); memcpy(image+a,"lmf_test.c",10);
     sym("lmf_test",0,-2,0,0x77,0,0); sym("@@DATA",0xFE000,2,0,0x78,0,0);
+    tag_index=count;
+    tag_aux=sym("_pair",0,-2,8,10,0,1); w16(tag_aux+6,4);
+    member_aux=sym("_low",0,-1,12,0x12,0,1); w16(member_aux+6,3);
+    a=sym("_high",3,-1,12,0x12,0,1); w16(a+6,5);
+    sym("_word",2,-1,14,8,0,0);
+    a=sym(".eos",4,-1,0,0x66,0,1); w32(a,tag_index); w16(a+6,4);
+    w32(tag_aux+12,count);
+    agg_aux=sym("_agg",0xFE020,2,8,0x26,0,1); w32(agg_aux,tag_index); w16(agg_aux+6,4);
+    a=sym("_faragg",0xFE024,2,8,0x26,1,1); w32(a,tag_index); w16(a+6,4); w16(a+18,2);
     func("_main",LP_main,1,0,0);
     func("_echo8",LP_echo8,12,12,0); func("_echo16",LP_echo16,4,4,0);
     func("_second8",LP_second8,12,12,12); func("_second16",LP_second16,13,13,13);
@@ -92,6 +101,15 @@ int main(int argc,char **argv)
     else if(!strcmp(mode,"lines")) w32(88+36,0xFFFFFFF0u),w16(88+44,1);
     else if(!strcmp(mode,"magic")) w32(0,0x12345678);
     else if(!strcmp(mode,"nodbg")) { w32(8,0); w32(12,0); pos=sy; }
+    else if(!strcmp(mode,"tagref")) w32(agg_aux,0xFFFFFFFFu);
+    else if(!strcmp(mode,"tagaux")) w32(agg_aux,tag_index+1);
+    else if(!strcmp(mode,"tagmismatch")) w16(agg_aux-20+14,9);
+    else if(!strcmp(mode,"tagend")) w32(tag_aux+12,0xFFFFFFFFu);
+    else if(!strcmp(mode,"tagcycle")) {
+        w16(member_aux-20+14,8); image[member_aux-20+16]=8;
+        w32(member_aux,tag_index); w16(member_aux+6,4);
+    }
+    else if(!strcmp(mode,"tagwidth")) w16(member_aux+6,33);
     else if(strcmp(mode,"normal")) return 2;
     f=fopen(argv[2],"wb"); if(!f) return 1;
     if(fwrite(image,1,pos,f)!=pos) { fclose(f); return 1; }

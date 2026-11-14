@@ -17,6 +17,9 @@ typedef struct {
     uint16_t typ, x;
     uint8_t cls, naux;
     const uint8_t *aux;
+    uint32_t index;
+    sim_type *tag;
+    int state; /* 0=未読、1=復元中、2=正常、3=不正 */
 } lsymbol;
 
 /* 文字列は必ず表内の NUL まで。固定長名は別途複写する。 */
@@ -35,58 +38,199 @@ static const char *name_at(rl78_arena *ar, const uint8_t *p, size_t n,
 }
 static const char *cname(const char *s) { return s[0] == '_' ? s + 1 : s; }
 
-/* 基本型コードと派生型の検証を分け、実物で判明したコードを追加できるようにする。
- * 未観測の char/short/unsigned long コードも現段階では復元しない。 */
-static sim_type *lmf_type(rl78_symtab *t, const lsymbol *s, int function, rl78_warns *w)
+/* タグ番号は補助を含む生のエントリ番号。補助を参照してもタグにはならない。 */
+typedef struct {
+    rl78_symtab *t;
+    rl78_warns *w;
+    lsymbol *syms, **by_index;
+    uint32_t n, count;
+    int char_unsigned;
+} ltypes;
+
+static sim_type *lmf_type(ltypes *c, const lsymbol *s, int function, unsigned depth);
+
+static const char *type_name(rl78_arena *ar, const sim_type *t)
 {
-    static const struct { unsigned code, size; sim_kind kind; const char *name; } base[] = {
-        {1,0,SIM_T_VOID,"void"}, {4,2,SIM_T_INT,"int"}, {5,4,SIM_T_INT,"long"},
-        {12,1,SIM_T_UINT,"unsigned char"}, {13,2,SIM_T_UINT,"unsigned short"},
-        {14,2,SIM_T_UINT,"unsigned int"}
+    sim_buf decl, next, out;
+    int prev = 0;
+    sim_buf_init(&decl);
+    while (t && (t->kind == SIM_T_PTR || t->kind == SIM_T_ARRAY || t->kind == SIM_T_FUNC)) {
+        sim_buf_init(&next);
+        if (t->kind == SIM_T_PTR) {
+            sim_buf_adds(&next, t->size == 4 ? "__far *" : "*");
+            sim_buf_adds(&next, sim_buf_cstr(&decl));
+        } else {
+            if (prev == SIM_T_PTR) sim_buf_addc(&next, '(');
+            sim_buf_adds(&next, sim_buf_cstr(&decl));
+            if (prev == SIM_T_PTR) sim_buf_addc(&next, ')');
+            if (t->kind == SIM_T_ARRAY) sim_buf_printf(&next, "[%u]", t->count);
+            else sim_buf_adds(&next, "()");
+        }
+        prev = t->kind; t = t->target;
+        sim_buf_free(&decl); decl = next;
+    }
+    sim_buf_init(&out);
+    sim_buf_adds(&out, t && t->name ? t->name : "void");
+    if (decl.len) { sim_buf_addc(&out, ' '); sim_buf_adds(&out, sim_buf_cstr(&decl)); }
+    {
+        const char *name = ar_strdup(ar, sim_buf_cstr(&out));
+        sim_buf_free(&decl); sim_buf_free(&out); return name;
+    }
+}
+
+static sim_type *tag_type(ltypes *c, lsymbol *s, unsigned depth)
+{
+    sim_type *t;
+    sim_member *m;
+    uint32_t j, end, nm = 0, k = 0;
+    unsigned base = s->typ & 15u;
+    if (s->state == 2) return s->tag;
+    if (s->state || depth >= 64 || !s->aux || s->naux != 1 || s->x ||
+        s->typ != base || !((s->cls == 10 && base == 8) ||
+        (s->cls == 12 && base == 9) || (s->cls == 15 && base == 10))) return NULL;
+    s->state = 1;
+    end = u32(s->aux + 12);
+    if (end > c->count || end <= s->index + 3 ||
+        !c->by_index[end-2] || c->by_index[end-2]->cls != 0x66) goto bad;
+    {
+        lsymbol *eos = c->by_index[end-2];
+        if (eos->naux != 1 || u32(eos->aux) != s->index ||
+            eos->value != u16(s->aux+6) || u16(eos->aux+6) != eos->value) goto bad;
+    }
+    t = ar_alloc(&c->t->ar, sizeof *t);
+    t->kind = base == 8 ? SIM_T_STRUCT : base == 9 ? SIM_T_UNION : SIM_T_INT;
+    t->size = u16(s->aux+6);
+    if (!t->size || (base == 10 && t->size != 1 && t->size != 2)) goto bad;
+    {
+        sim_buf name;
+        sim_buf_init(&name);
+        sim_buf_printf(&name, "%s %s", base == 8 ? "struct" : base == 9 ? "union" : "enum", cname(s->name));
+        t->name = ar_strdup(&c->t->ar, sim_buf_cstr(&name)); sim_buf_free(&name);
+    }
+    for (j = s->index + 2; j < end-2;) {
+        lsymbol *v = c->by_index[j];
+        if (!v || v->index + 1u + v->naux > end-2) goto bad;
+        if (base == 10) {
+            if (v->cls != 0x10 || v->typ != 4 || v->x || v->naux) goto bad;
+        } else if (v->cls != (base == 8 ? 8 : 11) && v->cls != 0x12) goto bad;
+        nm++; j += 1u + v->naux;
+    }
+    if (base != 10) {
+        m = ar_alloc(&c->t->ar, nm * sizeof *m);
+        t->members = m; t->nmembers = (int)nm;
+        for (j = s->index + 2; j < end-2;) {
+            lsymbol *v = c->by_index[j];
+            const sim_type *mt = lmf_type(c, v, 0, depth+1);
+            m[k].name = cname(v->name); m[k].type = mt; m[k].bit_offset = -1;
+            if (mt->kind == SIM_T_UNKNOWN) goto bad;
+            if (v->cls == 0x12) {
+                unsigned width = v->aux ? u16(v->aux+6) : 0;
+                if (v->x || (mt->kind != SIM_T_UINT && mt->kind != SIM_T_INT) ||
+                    !width || width > mt->size*8u || v->value > t->size*8u ||
+                    width > t->size*8u-v->value) goto bad;
+                m[k].bit_offset = (int32_t)v->value; m[k].bit_size = width;
+            } else {
+                if (v->value > t->size || mt->size > t->size-v->value ||
+                    (base == 9 && v->value)) goto bad;
+                m[k].offset = v->value;
+            }
+            k++; j += 1u + v->naux;
+        }
+    }
+    s->tag = t; s->state = 2; return t;
+bad:
+    s->state = 3;
+    rl78_warn(c->w, "LMF: %s 不正または未対応のタグ定義（entry %u）", s->name, s->index);
+    return NULL;
+}
+
+static sim_type *lmf_type(ltypes *c, const lsymbol *s, int function, unsigned depth)
+{
+    static const struct { unsigned size; sim_kind kind; const char *name; } base[16] = {
+        {0,SIM_T_UNKNOWN,"?"}, {0,SIM_T_VOID,"void"}, {1,SIM_T_INT,"char"},
+        {2,SIM_T_INT,"short"}, {2,SIM_T_INT,"int"}, {4,SIM_T_INT,"long"},
+        {4,SIM_T_FLOAT,"float"}, {4,SIM_T_FLOAT,"double"}, {0,SIM_T_UNKNOWN,"?"},
+        {0,SIM_T_UNKNOWN,"?"}, {0,SIM_T_UNKNOWN,"?"}, {0,SIM_T_UNKNOWN,"?"},
+        {1,SIM_T_UINT,"unsigned char"}, {2,SIM_T_UINT,"unsigned short"},
+        {2,SIM_T_UINT,"unsigned int"}, {4,SIM_T_UINT,"unsigned long"}
     };
-    sim_type *b = ar_alloc(&t->ar, sizeof *b), *d;
-    unsigned i, x = function ? s->x >> 2 : s->x;
-    unsigned quals = s->typ & ~15u;
-    int ok = 0;
-    b->kind = SIM_T_UNKNOWN; b->name = "?";
-    if (!function && s->aux) b->size = u16(s->aux + 6);
-    if (!s->typ && !s->x && (s->cls == 3 || s->cls == 0x26)) return b;
-    for (i = 0; i < sizeof base / sizeof base[0]; i++) if ((s->typ & 15u) == base[i].code) {
-        b->kind = base[i].kind; b->name = base[i].name; b->size = base[i].size; ok = 1; break;
+    sim_type *t, *d;
+    unsigned b = s->typ & 15u, q = s->typ & ~15u;
+    unsigned x = function ? s->x >> 2 : s->x, levels[8], dims[8], pk[8];
+    unsigned n = 0, ai = 0, k, ptrbits = 0;
+    if (!s->typ && !s->x && (s->cls == 3 || s->cls == 0x26)) goto unknown_label;
+    if (depth >= 64 || s->naux > 1 || s->cls == 0x27 ||
+        (q != 0 && q != 0x100 && q != 0x1000 && q != 0x1100 && q != 0x5000 && q != 0x5100 &&
+         !(function && s->typ == 0xE001))) goto unknown;
+    if (b >= 8 && b <= 10) {
+        uint32_t ref = s->aux ? u32(s->aux) : c->count;
+        lsymbol *tag = ref < c->count ? c->by_index[ref] : NULL;
+        if (!tag || (tag->typ & 15u) != b || !(t = tag_type(c, tag, depth+1))) goto unknown;
+    } else {
+        if (base[b].kind == SIM_T_UNKNOWN) goto unknown;
+        t = ar_alloc(&c->t->ar, sizeof *t);
+        t->kind = base[b].kind; t->size = base[b].size; t->name = base[b].name;
+        if (b == 2 && c->char_unsigned) { t->kind = SIM_T_UINT; t->name = "unsigned char"; }
     }
-    if (quals != 0 && quals != 0x100 && quals != 0x1000 && quals != 0x1100 &&
-        !(x == 1 && (quals == 0x5000 || quals == 0x5100)) &&
-        !(function && s->typ == 0xE001)) ok = 0;
-    if (s->cls == 0x27 || s->naux > 1) ok = 0;
-    if (x) {
-        /* 派生型の鎖、多次元、far、関数ポインタは未確認。 */
-        if (!s->aux || function || (x != 1 && x != 3) || u32(s->aux)) ok = 0;
-        else if (x == 1 && (u16(s->aux + 6) != 2 || u16(s->aux + 18) != 1)) ok = 0;
-        else if (x == 3 && (!u16(s->aux + 8) || u16(s->aux + 10) || u16(s->aux + 12) || u16(s->aux + 14) ||
-                           (uint32_t)u16(s->aux + 8) * b->size != u16(s->aux + 6))) ok = 0;
+    /* 関数補助には寸法/ポインタ種別がない。派生した戻り値は推測しない。 */
+    if (function && x) goto unknown;
+    if (!function && s->aux) ptrbits = u16(s->aux+18);
+    while (x) {
+        unsigned lv = x & 3u;
+        if (!lv || !s->aux) goto unknown;
+        levels[n] = lv; dims[n] = 0; pk[n] = (ptrbits >> (2*n)) & 3u;
+        if (lv == 1) {
+            if (pk[n] != 1 && pk[n] != 2) goto unknown;
+        } else {
+            if (pk[n]) goto unknown;
+            if (lv == 3) {
+                if (ai == 4 || !(dims[n] = u16(s->aux+8+2*ai++))) goto unknown;
+            } else if (!n || levels[n-1] != 1) goto unknown;
+        }
+        n++; x >>= 2;
     }
-    if (!ok) {
-        b->kind = SIM_T_UNKNOWN; b->name = "?";
-        b->size = !function && s->aux ? u16(s->aux + 6) : 0;
-        rl78_warn(w, "LMF: %s 未対応の型コード 0x%04X 派生型 0x%04X / 記憶クラス 0x%02X", s->name, s->typ, s->x, s->cls);
-        return b;
+    if (ptrbits >> (2*n)) goto unknown;
+    if (!function && s->aux && s->cls != 0x12)
+        for (k = ai; k < 4; k++) if (u16(s->aux+8+2*k)) goto unknown;
+    for (k = n; k > 0;) {
+        unsigned lv = levels[--k];
+        d = ar_alloc(&c->t->ar, sizeof *d);
+        d->target = t;
+        if (lv == 1) { d->kind = SIM_T_PTR; d->size = pk[k] == 2 ? 4 : 2; }
+        else if (lv == 2) d->kind = SIM_T_FUNC;
+        else {
+            if (!t->size || t->size > UINT32_MAX/dims[k]) goto unknown;
+            d->kind = SIM_T_ARRAY; d->count = dims[k]; d->size = t->size*dims[k];
+        }
+        t = d;
     }
-    if (!x) return b;
-    d = ar_alloc(&t->ar, sizeof *d);
-    d->kind = x == 1 ? SIM_T_PTR : SIM_T_ARRAY;
-    d->name = x == 1 ? "near pointer" : "array";
-    d->target = b; d->size = u16(s->aux + 6);
-    if (x == 3) d->count = u16(s->aux + 8);
+    if (!function && s->aux && s->cls != 0x12 && t->size != u16(s->aux+6)) goto unknown;
+    /* タグの共有型に修飾名を書き込まない。 */
+    d = ar_alloc(&c->t->ar, sizeof *d); *d = *t;
+    d->name = type_name(&c->t->ar, t);
+    if (q == 0x5000 || q == 0x5100 || q == 0x1000 || q == 0x1100) {
+        sim_buf name;
+        sim_buf_init(&name);
+        sim_buf_printf(&name, "%s %s", (q & 0x5000) == 0x5000 ? "const" : "volatile", d->name);
+        d->name = ar_strdup(&c->t->ar, sim_buf_cstr(&name)); sim_buf_free(&name);
+    }
     return d;
+unknown:
+    rl78_warn(c->w, "LMF: %s 未対応または不正な型コード 0x%04X 派生型 0x%04X / 記憶クラス 0x%02X", s->name, s->typ, s->x, s->cls);
+unknown_label:
+    t = ar_alloc(&c->t->ar, sizeof *t); t->kind = SIM_T_UNKNOWN; t->name = "?";
+    t->size = !function && s->aux && s->cls != 0x12 ? u16(s->aux+6) : 0;
+    return t;
 }
 
 int rl78_lmf_load(rl78_elf *e, rl78_symtab *t, rl78_warns *w,
-                  const char *path, char *err, size_t errlen)
+                  const char *path, int char_unsigned, char *err, size_t errlen)
 {
     const uint8_t *d, *str;
     uint32_t symptr, count, slen, i, n = 0;
     uint64_t stroff, shoff;
-    lsymbol *syms = NULL;
+    lsymbol *syms = NULL, **by_index = NULL;
+    ltypes types;
     const char *file = "";
     size_t active = (size_t)-1;
     memset(e, 0, sizeof *e);
@@ -129,10 +273,12 @@ int rl78_lmf_load(rl78_elf *e, rl78_symtab *t, rl78_warns *w,
         }
     }
     syms = sim_xcalloc(count ? count : 1, sizeof *syms);
+    by_index = sim_xcalloc(count ? count : 1, sizeof *by_index);
     e->sym = sim_xcalloc(count ? count : 1, sizeof *e->sym);
     for (i = 0; i < count;) {
         const uint8_t *p = d + symptr + (size_t)i * 20;
         lsymbol *s = &syms[n++];
+        s->index = i; by_index[i] = s;
         s->name = name_at(&t->ar, p, 8, str, slen);
         if (!s->name) BAD("シンボル名の文字列が範囲外または未終端です");
         s->value = u32(p+8); s->sc = (int16_t)u16(p+12); s->typ = u16(p+14);
@@ -153,6 +299,8 @@ int rl78_lmf_load(rl78_elf *e, rl78_symtab *t, rl78_warns *w,
         }
         i += 1u + s->naux;
     }
+    types.t = t; types.w = w; types.syms = syms; types.by_index = by_index;
+    types.n = n; types.count = count; types.char_unsigned = char_unsigned;
     for (i = 0; i < n; i++) {
         lsymbol *s = &syms[i];
         int known = 1;
@@ -165,7 +313,7 @@ int rl78_lmf_load(rl78_elf *e, rl78_symtab *t, rl78_warns *w,
             const sim_type **pt;
             fi->f.name = cname(s->name); fi->f.file = s->file; fi->f.addr = s->value;
             fi->f.is_external = s->cls == 0x26;
-            fi->f.ret = lmf_type(t,s,1,w); fi->size = s->aux ? u32(s->aux+4) : 0;
+            fi->f.ret = lmf_type(&types,s,1,0); fi->size = s->aux ? u32(s->aux+4) : 0;
             for (j = i+1; j < n && syms[j].cls != 0x67; j++) {
                 if (syms[j].cls == 0x65 && !strcmp(syms[j].name,".ef")) break;
                 if ((syms[j].x & 3) == 2 && (syms[j].cls == 3 || syms[j].cls == 0x26)) break;
@@ -174,7 +322,7 @@ int rl78_lmf_load(rl78_elf *e, rl78_symtab *t, rl78_warns *w,
             pn = ar_alloc(&t->ar, (size_t)np*sizeof *pn); pt = ar_alloc(&t->ar, (size_t)np*sizeof *pt);
             fi->f.nparams = (int)np; fi->f.param_names = pn; fi->f.param_types = pt;
             for (j = i+1; k < np; j++) if (syms[j].cls == 9 || syms[j].cls == 0x11) {
-                pn[k] = cname(syms[j].name); pt[k++] = lmf_type(t,&syms[j],0,w);
+                pn[k] = cname(syms[j].name); pt[k++] = lmf_type(&types,&syms[j],0,0);
             }
             active = t->nfuncs-1; t->dwarf_ok = 1;
             continue;
@@ -188,6 +336,8 @@ int rl78_lmf_load(rl78_elf *e, rl78_symtab *t, rl78_warns *w,
             continue;
         }
         switch (s->cls) {
+        case 8: case 10: case 11: case 12: case 15: case 16: case 18: case 0x66:
+            continue;
         case 1: case 4: case 9: case 0x11: case 0x20: case 0x64: case 0x65: case 0x77: case 0x78: continue;
         case 3: case 0x26: case 0x27: break;
         default:
@@ -206,16 +356,16 @@ int rl78_lmf_load(rl78_elf *e, rl78_symtab *t, rl78_warns *w,
             v->name = cname(s->name); v->file = owner; v->addr = s->value;
             v->func = s->cls == 3 && active != (size_t)-1 ? t->funcs[active].f.name : NULL;
             v->is_external = s->cls == 0x26 || s->cls == 0x27;
-            v->is_const = !(sec->flags & RL78_SHF_WRITE) || ((s->typ & 0xF000) == 0x5000 && s->x == 1);
-            v->type = lmf_type(t,s,0,w);
+            v->is_const = !(sec->flags & RL78_SHF_WRITE) || ((s->typ & 0xF000) == 0x5000);
+            v->type = lmf_type(&types,s,0,0);
             if (!known) {
                 sim_type *u = ar_alloc(&t->ar,sizeof *u); u->kind = SIM_T_UNKNOWN; u->name = "?";
                 u->size = s->aux ? u16(s->aux+6) : 0; v->type = u;
             }
         }
     }
-    free(syms); return 0;
+    free(by_index); free(syms); return 0;
 fail:
-    free(syms); rl78_elf_free(e); return -1;
+    free(by_index); free(syms); rl78_elf_free(e); return -1;
 #undef BAD
 }

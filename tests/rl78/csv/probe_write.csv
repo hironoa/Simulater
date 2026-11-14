@@ -1,0 +1,6 @@
+mod,f_file_static,member writes,3,8
+#COMMENT,g_outer.in.ib,g_outer.ins[1].ic,g_uni.parts.w,g_outer.in.ib,g_outer.in.ia,g_outer.in.ic,g_outer.ins[1].ic,g_outer.ins[1].ib,g_uni.parts.lo,g_uni.parts.hi,g_uni.parts.w
+,4660,153,43981,4660,49,52,153,22103,100,99,43981
+mod,f_file_static,bitfield isolation,3,13
+#COMMENT,g_bits8.n2,g_bits16.f5,g_bitsm.w5,g_bits8.b0,g_bits8.b1,g_bits8.n2,g_bits8.n5,g_bits16.f1,g_bits16.f5,g_bits16.f12,g_bits16.g0,g_bitsm.head,g_bitsm.w0,g_bitsm.w5,g_bitsm.s0,g_bitsm.tail
+,3,42,291,1,0,3,2,9,42,3,426,113,21,291,13,114

@@ -1,0 +1,3 @@
+mod,cycle,generated struct and far pointer,4,4
+#COMMENT,agg.low,agg.high,agg.word,faragg,agg.low,agg.high,faragg->word,faragg->low
+,5,17,4660,0xFE020,5,17,4660,5

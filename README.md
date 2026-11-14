@@ -99,6 +99,7 @@ sim gui --abs DefaultBuild\project.abs --func <周期関数> --period-ms 5
 
 | キー | 内容 |
 |---|---|
+| `char_unsigned = on \| off` | LMFのchar/signed charをunsignedにする（既定off、-qu相当） |
 | `abi = auto \| ccrl \| ca78k0r` | 呼び出し規約。auto は ELF→CC-RL、LMF→CA78K0R |
 | `stub = 元の関数:スタブ関数` | 元の関数が呼ばれたらスタブへ飛ばす（WinAMS の「置換」）。複数書ける |
 | `skip = 関数名[:戻り値]` | 中身を実行せず通常の RET と同じように戻る。複数指定可 |
@@ -113,8 +114,14 @@ sim gui --abs DefaultBuild\project.abs --func <周期関数> --period-ms 5
 
 ## 制限
 
-- CA78K0R は第1段階。実測した整数型・1次元配列・nearデータポインタに限定する。構造体・enum・bit・far・関数ポインタ・浮動小数などの未確認型は型不明として登録し、`名前:バイト数` で使う。
-  4Bの第1引数はAX/BC順が未確認なのでエラー。同名 `.sym` は照合用、およびデバッグ情報が全くないLMFのアドレス補助として読む。HEX単独入力は未対応。詳細は設計書のCA78K0R節。
+- CA78K0R の LMF は基本型（float/doubleは4バイト）、構造体・共用体・enum・ビットフィールド、最大4次元配列、
+  near/far・多重ポインタ・関数ポインタ、static、関数の引数と戻り値の型を復元する。typedef名は展開される。
+  signed int のビットフィールドはunsignedと区別できずunsignedとして扱う。char/signed charも同じコードで、
+  既定はsigned、`char_unsigned = on`で両方unsignedに切り替える。
+  bit変数、5次元以上の配列、関数の派生型戻り値など不明な形は型不明として警告する。
+  構造体の値渡し・戻り値と浮動小数の引数は対応外。関数ポインタの引数型はLMFに残らない。
+  ミディアムモデルの4バイト第1引数（AX/BC）と4バイト戻り値（BC/DE）に対応。スモール/ラージモデルは未確認。
+  同名 `.sym` は照合用、およびデバッグ情報が全くないLMFのアドレス補助として読む。HEX単独入力は未対応。
 
 - 周辺機能（タイマ、シリアル、A/D など）は模擬しない。SFR は読み書きできるメモリとして扱う。
   割り込みは、テストドライバがハンドラ関数を直接呼ぶ前提

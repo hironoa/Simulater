@@ -105,7 +105,7 @@ set RC=%ERRORLEVEL%
 if "%RC%"=="0" (call :ok "LMF list") else (call :ng "LMF list")
 call :has "%WORK%\lmf.list" "arr" "LMF array symbol"
 call :run "LMF ABI startup driver unknown sizes 16 rows" 0 "OK 16" --abs "%WORK%\test.lmf" "%R%\csv\lmf_call.csv"
-call :run "LMF first long rejected" 1 "AX" --abs "%WORK%\test.lmf" "%R%\csv\lmf_first32.csv"
+call :run "LMF first long accepted" 0 "NO Check 1" --abs "%WORK%\test.lmf" "%R%\csv\lmf_first32.csv"
 > "%WORK%\abi.cfg" echo abi = ccrl
 "%RS%" info --abs "%WORK%\test.lmf" --cfg "%WORK%\abi.cfg" > "%WORK%\lmf.log" 2>&1
 set RC=%ERRORLEVEL%
@@ -144,6 +144,37 @@ if "%RC%"=="0" (call :ok "mklmf no debug") else (call :ng "mklmf no debug")
 >> "%WORK%\sym.csv" echo #COMMENT,ticks:2,init:2,ticks:2
 >> "%WORK%\sym.csv" echo ,4,0x1234,5
 call :run "LMF no debug SYM addresses" 0 "OK 1" --abs "%WORK%\nodbg.lmf" "%WORK%\sym.csv"
+
+echo == CA78K0R probe types and calls
+set "PROBE=%T%\ca78k0r_probe\DefaultBuild\ca78k0r_probe.lmf"
+set "B=%ROOT%\runtime\backends\rl78"
+"%CC%" -std=c11 -O2 -Wall -Wextra -D_DEFAULT_SOURCE -I"%B%" -I"%ROOT%\runtime\include" -I"%ROOT%\runtime\src" "%T%\tools\check_lmf_types.c" "%B%\rl78_lmf.c" "%B%\rl78_elf.c" "%B%\rl78_dwarf.c" "%B%\rl78_map.c" "%ROOT%\runtime\src\sim_util.c" -o "%WORK%\lmf_types.exe" > "%WORK%\types_build.log" 2>&1
+set RC=%ERRORLEVEL%
+if "%RC%"=="0" (call :ok "LMF type checker build") else (call :ng "LMF type checker build" & type "%WORK%\types_build.log")
+"%WORK%\lmf_types.exe" "%PROBE%" probe > "%WORK%\probe_types.txt" 2> "%WORK%\probe_warnings.txt"
+set RC=%ERRORLEVEL%
+if "%RC%"=="0" (call :ok "probe 57 variables 17 functions 0 warnings") else (call :ng "probe type counts and warnings")
+fc /b "%WORK%\probe_types.txt" "%R%\expected\probe_types.txt" >nul
+set RC=%ERRORLEVEL%
+if "%RC%"=="0" (call :ok "probe types sizes addresses signatures match reference") else (call :ng "probe types match reference")
+"%RS%" list --abs "%PROBE%" > "%WORK%\probe_list_raw.txt" 2> "%WORK%\probe_stderr.txt"
+set RC=%ERRORLEVEL%
+if "%RC%"=="0" (call :ok "probe sim list") else (call :ng "probe sim list")
+"%WORK%\lmf_types.exe" "%WORK%\probe_list_raw.txt" list > "%WORK%\probe_list.txt"
+set RC=%ERRORLEVEL%
+if "%RC%"=="0" (call :ok "probe list has 57 typed variables") else (call :ng "probe list has 57 typed variables")
+fc /b "%WORK%\probe_list.txt" "%R%\expected\probe_list.txt" >nul
+set RC=%ERRORLEVEL%
+if "%RC%"=="0" (call :ok "probe sim list matches lmfdump") else (call :ng "probe sim list matches lmfdump")
+call :run "probe initial values 50 rows" 0 "OK 50" --abs "%PROBE%" "%R%\csv\probe_init.csv"
+call :run "probe calls 17 rows" 0 "OK 17" --abs "%PROBE%" "%R%\csv\probe_call.csv"
+call :run "probe writes 2 rows" 0 "OK 2" --abs "%PROBE%" "%R%\csv\probe_write.csv"
+call :run "probe aggregate return rejected" 2 "f_ret_struct" --abs "%PROBE%" "%R%\csv\probe_ret_struct.csv"
+call :run "probe float argument rejected" 2 "f_float" --abs "%PROBE%" "%R%\csv\probe_float.csv"
+call :run "probe char unsigned" 0 "OK 1" --abs "%PROBE%" --cfg "%R%\cfg\probe_char.cfg" "%R%\csv\probe_char.csv"
+call :run "probe 32 bit skip" 0 "OK 1" --abs "%PROBE%" --cfg "%R%\cfg\probe_skip.cfg" "%R%\csv\probe_skip.csv"
+call :run "generated struct bitfields far pointer" 0 "OK 1" --abs "%WORK%\test.lmf" "%R%\csv\lmf_aggregate.csv"
+for %%M in (tagref tagaux tagmismatch tagend tagcycle tagwidth) do call :lmf_badtag %%M
 
 echo == real backend GUI call failures
 where curl >nul 2>nul
@@ -350,4 +381,13 @@ exit /b 0
 "%RS%" info --abs "%TP%" --cfg "%WORK%\bad_startup.cfg" > "%WORK%\trace.log" 2>&1
 set RC=%ERRORLEVEL%
 if "%RC%"=="2" (call :ok "bad startup setting rejected %~1") else (call :ng "bad startup setting rejected %~1")
+exit /b 0
+
+:lmf_badtag
+"%WORK%\mklmf.exe" %1 "%WORK%\badtag.lmf"
+set RC=%ERRORLEVEL%
+if "%RC%"=="0" (call :ok "mklmf %1") else (call :ng "mklmf %1")
+"%WORK%\lmf_types.exe" "%WORK%\badtag.lmf" bad > "%WORK%\tag.log" 2>&1
+set RC=%ERRORLEVEL%
+if "%RC%"=="0" (call :ok "malformed %1 becomes unknown") else (call :ng "malformed %1 becomes unknown")
 exit /b 0
