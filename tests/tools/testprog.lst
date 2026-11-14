@@ -1,5 +1,5 @@
 
-/var/folders/q0/zwcbvnzs6lsdfyq_6khy350h0000gn/T//testprog.73zTM7/t.elf:     file format elf32-rl78
+/var/folders/q0/zwcbvnzs6lsdfyq_6khy350h0000gn/T//testprog.V72UKD/t.elf:     file format elf32-rl78
 
 
 Disassembly of section .text:
@@ -279,7 +279,20 @@ Disassembly of section .text:
      2ac:	cf 13 e1 77                   	mov	!fe113 <g_out>, #119
      2b0:	d7                            	ret
 
-000002b1 <_code_end>:
+000002b1 <_trace_boot>:
+     2b1:	cb f8 20 fe                   	movw	sp, #0xfe20
+     2b5:	fc bf 02 00                   	call	!!2bf <_wait_sfr>
+     2b9:	fc 3d 01 00                   	call	!!13d <_main>
+     2bd:	ef f2                         	br	$2b1 <_trace_boot>
+
+000002bf <_wait_sfr>:
+     2bf:	8f a8 00                      	mov	a, !f00a8 <_const_end+0xee098>
+     2c2:	8f a2 ff                      	mov	a, !fffa2 <ADCR+0x84>
+     2c5:	4c 01                         	cmp	a, #1
+     2c7:	df f9                         	bnz	$2c2 <_wait_sfr+0x3>
+     2c9:	d7                            	ret
+
+000002ca <_code_end>:
 	...
 
 00001800 <_data_rom>:

@@ -700,6 +700,8 @@ static void write_map(const char *path)
 int main(int argc, char **argv)
 {
     const char *kind, *out;
+    int startup = 0;
+    unsigned char vector[2];
     int nodw = 0, i, sh_symtab, sh_strtab;
     FILE *f;
     buf file = {0};
@@ -708,14 +710,16 @@ int main(int argc, char **argv)
     if (argc != 3) { fprintf(stderr, "使い方: mkabs dwarf2|dwarf3|dwarf4|nodwarf 出力.abs\n"); return 2; }
     kind = argv[1];
     out = argv[2];
-    if (!strcmp(kind, "dwarf2")) V = 2;
+    if (!strcmp(kind, "startup")) { V = 2; startup = 1; }
+    else if (!strcmp(kind, "dwarf2")) V = 2;
     else if (!strcmp(kind, "dwarf3")) V = 3;
     else if (!strcmp(kind, "dwarf4")) V = 4;
     else if (!strcmp(kind, "nodwarf")) nodw = 1;
     else { fprintf(stderr, "mkabs: 種類 %s は分かりません\n", kind); return 2; }
 
     add_sect("", 0, 0, 0, NULL, 0);
-    add_sect(".vect", 1, 2, 0, TP_IMAGE, 2);
+    vector[0] = (unsigned char)TP_trace_boot; vector[1] = (unsigned char)(TP_trace_boot >> 8);
+    add_sect(".vect", 1, 2, 0, startup ? vector : TP_IMAGE, 2);
     add_sect(".text", 1, 6, 0x100, TP_IMAGE + 0x100, (unsigned)(TP_code_end - 0x100));
     add_sect(".data", 1, 2, 0x1800, TP_IMAGE + 0x1800, (unsigned)(TP_data_rom_end - TP_data_rom));
     add_sect(".sdata", 1, 2, 0x1840, TP_IMAGE + 0x1840, (unsigned)(TP_sdata_rom_end - TP_sdata_rom));
@@ -728,6 +732,7 @@ int main(int argc, char **argv)
     /* .symtab */
     putstr(&strtab, "");
     sym("", 0, 0, 0, 0, 0);
+    if (startup) { sym("_trace_boot", TP_trace_boot, TP_wait_sfr - TP_trace_boot, 1, 2, 2); sym("_wait_sfr", TP_wait_sfr, TP_code_end - TP_wait_sfr, 1, 2, 2); }
     sym("testprog.s", 0, 0, 0, 4, 0xfff1);                 /* STT_FILE */
     sym("_intr_tm00@1", TP_intr_tm00, fend(TP_intr_tm00) - TP_intr_tm00, 0, 2, 2);
     sym("_s_i@1", 0xFE13A, 2, 0, 1, 7);

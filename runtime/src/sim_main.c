@@ -31,7 +31,7 @@ static void usage(void)
             "  sim run --abs <X.abs> [--cfg sim.cfg] <テスト.csv>... [-o 出力フォルダ] [--expect-actual] [--fixed-time] [--quiet]\n"
             "  sim gui --abs <X.abs> [--cfg sim.cfg] [--port 8765] [--period-ms 5] [--func 関数名] [--speed 1] [--no-browser] [--record-max N]\n"
             "  sim list --abs <X.abs> [--cfg sim.cfg] [文字列]\n"
-            "  sim info --abs <X.abs> [--cfg sim.cfg]\n"
+            "  sim info --abs <X.abs> [--cfg sim.cfg] [--trace-startup] [--trace-head N] [--trace-tail N]\n"
             "  sim --version\n"
             "  共通: --verbose（-v）で読み込みの警告と詳細を出す。--abs を省くと設定ファイルの abs= を使う\n");
 }
@@ -49,6 +49,16 @@ static int take_common(int *argc, char **argv)
         }
         if (strcmp(argv[i], "--abs") == 0) g_open.abs_path = argv[++i];
         else if (strcmp(argv[i], "--cfg") == 0) g_open.cfg_path = argv[++i];
+        else if (strcmp(argv[i], "--trace-startup") == 0) g_open.trace_startup = 1;
+        else if (!strcmp(argv[i], "--trace-head") || !strcmp(argv[i], "--trace-tail")) {
+            uint64_t n;
+            int head = !strcmp(argv[i], "--trace-head");
+            if (i + 1 >= *argc || sim_parse_uint(argv[++i], 10000, &n) || !n) {
+                fprintf(stderr, "エラー: 診断の表示件数は 1〜10000 にしてください\n");
+                return -1;
+            }
+            if (head) g_open.trace_head = (unsigned)n; else g_open.trace_tail = (unsigned)n;
+        }
         else if (strcmp(argv[i], "--verbose") == 0 || strcmp(argv[i], "-v") == 0) g_open.verbose = 1;
         else argv[k++] = argv[i];
     }

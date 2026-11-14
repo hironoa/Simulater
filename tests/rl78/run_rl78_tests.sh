@@ -297,6 +297,44 @@ data: {"step":0,"names":["TEST_cycle_cnt","g_ms_tick","g_st.fb"],"values":[0,0,0
     GUI_PID=""
 fi
 
+
+echo "== スタートアップ診断と skip / poke"
+check "mkabs startup" "$WORK/mkabs" startup "$WORK/startup.abs"
+"$RS" info --abs "$WORK/startup.abs" --cfg "$R/cfg/startup_limit.cfg" --trace-startup --trace-head 1 --trace-tail 1 > "$WORK/trace.log" 2>&1
+RC=$?
+check "SFR待ち: 終了コード2" test "$RC" -eq 2
+check "SFR待ち: 呼び出し履歴" contains "$WORK/trace.log" "#1"
+check "SFR待ち: 停止した関数" contains "$WORK/trace.log" "wait_sfr+0x"
+check "SFR待ち: ループ範囲" contains "$WORK/trace.log" "ループ候補: 0x"
+check "SFR待ち: SFR番地" contains "$WORK/trace.log" "0xFFFA2 = 0x00"
+check "SFR待ち: 拡張SFR番地" contains "$WORK/trace.log" "0xF00A8 = 0x00"
+check "SFR待ち: バックトレース" contains "$WORK/trace.log" "trace_boot+0x"
+"$RS" info --abs "$WORK/startup.abs" --cfg "$R/cfg/startup_limit.cfg" > "$WORK/plain.log" 2>&1
+RC=$?
+check "診断なしの失敗: 終了コード2" test "$RC" -eq 2
+check "診断なしの失敗: 案内" contains "$WORK/plain.log" "--trace-startup"
+for setting in poke skip; do
+    "$RS" info --abs "$WORK/startup.abs" --cfg "$R/cfg/startup_$setting.cfg" --trace-startup > "$WORK/trace.log" 2>&1
+    RC=$?
+    check "$setting で起動成功" test "$RC" -eq 0
+    check "$setting 成功時も診断表示" contains "$WORK/trace.log" "スタートアップ診断: 成功"
+    check "$setting 設定一覧" contains "$WORK/trace.log" "$setting ="
+done
+rl78_run "CC-RL: nested/direct/byte/long skip and poke snapshot" 0 "総数 5, OK 5, NG 0" -- --abs "$TP" --cfg "$R/cfg/skip_ccrl.cfg" "$R/csv/skip_ccrl.csv"
+rl78_run "CA78K0R: byte/word/long skip" 0 "総数 3, OK 3, NG 0" -- --abs "$WORK/test.lmf" --cfg "$R/cfg/skip_ca.cfg" "$R/csv/skip_ca.csv"
+for setting in 'skip = missing_function' 'skip = read_io:garbage' 'skip = read_io:0x10000' 'skip = f_ll:1' 'poke = bad:1' 'poke = 0x100000:1' 'poke = 0xFFFA2:bad' 'poke = 0xFFFA2:256' 'poke = 0xFFFFF:1:2' 'poke = 0xFFFA2:1:0' 'poke = 0xFFFA2:1:5' 'poke = 0xFFFA2:1:1:2'; do
+    printf '%s\n' "$setting" > "$WORK/bad_startup.cfg"
+    "$RS" info --abs "$TP" --cfg "$WORK/bad_startup.cfg" > "$WORK/trace.log" 2>&1
+    RC=$?
+    check "設定エラー2: $setting" test "$RC" -eq 2
+done
+printf 'stub = read_io:AMSTB_read_io\nskip = read_io\n' > "$WORK/bad_startup.cfg"
+"$RS" info --abs "$TP" --cfg "$WORK/bad_startup.cfg" > "$WORK/trace.log" 2>&1
+RC=$?
+check "stub と skip の重複はエラー2" test "$RC" -eq 2
+# 診断のフックが内蔵SP/PSW/MDU動作を壊さないことは通常版と同じCSVで確かめる。
+rl78_run "診断モードでも既存CC-RL ABI/MDUの43行が同じ" 0 "総数 43, OK 43, NG 0" -- --abs "$TP" --trace-startup "$R/csv/synth_call.csv" "$R/csv/synth_types.csv"
+
 echo "== 性能の実測（本物のバックエンド）"
 N=${RL78_PERF_ROWS:-20000}
 awk -v n="$N" 'BEGIN { printf "mod,TEST_cycle,性能,0,1\n#COMMENT,TEST_cycle_cnt\n"; for (i = 1; i <= n / 10; i++) printf ",%d\n", i }' > "$WORK/perf_cycle.csv"

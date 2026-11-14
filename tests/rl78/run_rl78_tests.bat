@@ -193,6 +193,46 @@ echo == performance (real backend)
 for /l %%I in (1,1,2000) do >> "%WORK%\perf_cycle.csv" echo ,%%I
 call :run "TEST_cycle 2000 times" 0 "OK 2000, NG 0" --abs "%TP%" "%WORK%\perf_cycle.csv"
 type "%WORK%\r.log" | findstr /v /c:"mod " /c:"->"
+
+echo == startup diagnostics and skip poke
+"%WORK%\mkabs.exe" startup "%WORK%\startup.abs"
+set RC=%ERRORLEVEL%
+if "%RC%"=="0" (call :ok "mkabs startup") else (call :ng "mkabs startup")
+"%RS%" info --abs "%WORK%\startup.abs" --cfg "%R%\cfg\startup_limit.cfg" --trace-startup --trace-head 1 --trace-tail 1 > "%WORK%\trace.log" 2>&1
+set RC=%ERRORLEVEL%
+if "%RC%"=="2" (call :ok "SFR wait exits 2") else (call :ng "SFR wait exits 2")
+call :has "%WORK%\trace.log" "wait" "trace stopped function"
+call :has "%WORK%\trace.log" "boot" "trace call history and caller"
+call :has "%WORK%\trace.log" "0xFFFA2" "trace SFR address"
+call :has "%WORK%\trace.log" "0xF00A8" "trace extended SFR address"
+call :has "%WORK%\trace.log" "SP" "trace registers"
+"%RS%" info --abs "%WORK%\startup.abs" --cfg "%R%\cfg\startup_limit.cfg" > "%WORK%\plain.log" 2>&1
+set RC=%ERRORLEVEL%
+if "%RC%"=="2" (call :ok "plain startup failure exits 2") else (call :ng "plain startup failure exits 2")
+call :has "%WORK%\plain.log" "trace" "plain failure offers diagnostics"
+call :startup_ok poke
+call :startup_ok skip
+call :run "CCRL skip byte word long nested and poke snapshot" 0 "OK 5, NG 0" --abs "%TP%" --cfg "%R%\cfg\skip_ccrl.cfg" "%R%\csv\skip_ccrl.csv"
+call :run "CA78K0R skip byte word long" 0 "OK 3, NG 0" --abs "%WORK%\test.lmf" --cfg "%R%\cfg\skip_ca.cfg" "%R%\csv\skip_ca.csv"
+call :startup_bad "skip = missing_function"
+call :startup_bad "skip = read_io:garbage"
+call :startup_bad "skip = read_io:0x10000"
+call :startup_bad "skip = f_ll:1"
+call :startup_bad "poke = bad:1"
+call :startup_bad "poke = 0x100000:1"
+call :startup_bad "poke = 0xFFFA2:bad"
+call :startup_bad "poke = 0xFFFA2:256"
+call :startup_bad "poke = 0xFFFFF:1:2"
+call :startup_bad "poke = 0xFFFA2:1:0"
+call :startup_bad "poke = 0xFFFA2:1:5"
+call :startup_bad "poke = 0xFFFA2:1:1:2"
+> "%WORK%\bad_startup.cfg" echo stub = read_io:AMSTB_read_io
+>> "%WORK%\bad_startup.cfg" echo skip = read_io
+"%RS%" info --abs "%TP%" --cfg "%WORK%\bad_startup.cfg" > "%WORK%\trace.log" 2>&1
+set RC=%ERRORLEVEL%
+if "%RC%"=="2" (call :ok "stub skip conflict exits 2") else (call :ng "stub skip conflict exits 2")
+call :run "trace startup retains existing ABI 43 rows" 0 "OK 43, NG 0" --abs "%TP%" --trace-startup "%R%\csv\synth_call.csv" "%R%\csv\synth_types.csv"
+
 exit /b 0
 
 rem ---------------------------------------------------------------- subroutines
@@ -296,4 +336,18 @@ if "%RC%"=="0" (call :ok "mklmf %1") else (call :ng "mklmf %1")
 "%RS%" info --abs "%WORK%\bad.lmf" > "%WORK%\lmf.log" 2>&1
 set RC=%ERRORLEVEL%
 if "%RC%"=="2" (call :ok "LMF malformed %1 rejected") else (call :ng "LMF malformed %1 rejected")
+exit /b 0
+
+:startup_ok
+"%RS%" info --abs "%WORK%\startup.abs" --cfg "%R%\cfg\startup_%~1.cfg" --trace-startup > "%WORK%\trace.log" 2>&1
+set RC=%ERRORLEVEL%
+if "%RC%"=="0" (call :ok "%~1 allows startup") else (call :ng "%~1 allows startup")
+call :has "%WORK%\trace.log" "%~1" "%~1 settings shown"
+exit /b 0
+
+:startup_bad
+> "%WORK%\bad_startup.cfg" echo %~1
+"%RS%" info --abs "%TP%" --cfg "%WORK%\bad_startup.cfg" > "%WORK%\trace.log" 2>&1
+set RC=%ERRORLEVEL%
+if "%RC%"=="2" (call :ok "bad startup setting rejected %~1") else (call :ng "bad startup setting rejected %~1")
 exit /b 0

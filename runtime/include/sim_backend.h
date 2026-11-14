@@ -99,6 +99,8 @@ typedef struct {
     const char *exe_dir;     /* 実行ファイルのあるフォルダ */
     const char *abs_path;    /* ロードモジュール（.abs）。NULL なら設定ファイルの abs= */
     const char *cfg_path;    /* 設定ファイル。NULL なら .abs と同じフォルダの sim.cfg（あれば） */
+    int trace_startup;       /* スタートアップを単命令で診断 */
+    unsigned trace_head, trace_tail; /* 0 は既定（50 / 100） */
     int verbose;             /* 1 なら読み込み中の警告や詳細を標準エラーに出す */
 } sim_open_opts;
 

@@ -388,6 +388,19 @@ _f_halt:				; void f_halt(void) { HALT(); g_out = 0x77; }
 	halt
 	mov	!g_out, #0x77
 	ret
+; スタートアップ診断専用（mkabs startup のときだけリセットベクタを向ける）。
+_trace_boot:
+ movw sp, #0xFE20
+ call !!_wait_sfr
+ call !!_main
+ br $_trace_boot
+_wait_sfr:
+ mov a, !0x00A8
+.Lwait_sfr:
+ mov a, !0xFFA2
+ cmp a, #1
+ bnz $.Lwait_sfr
+ ret
 _code_end:
 
 ;---------------------------------------------------------------- ROM のデータ

@@ -32,6 +32,9 @@
 typedef struct {
     uint32_t orig, stub;
     const char *oname, *sname;
+    int skip, has_value;
+    uint64_t value;
+    const sim_type *ret;
     int patched;            /* ブレークポイントが足りず、元の関数の先頭を BR !!stub に書き換えた */
 } stub_t;
 
@@ -65,6 +68,8 @@ typedef struct {
 
     uint64_t max_insns, startup_max;
     uint64_t tot_insns, tot_clocks, ncalls, startup_insns, startup_clocks;
+
+    struct startup_trace *trace;
 
     int map_sect_ok, map_sect_ng, map_sym_ok, map_sym_ng;
 } be_t;
@@ -369,16 +374,37 @@ static const stub_t *stub_at(be_t *z, uint32_t pc)
     return NULL;
 }
 
+#include "rl78_startup.h"
+
 /* stop_at に着くまで実行する。成功 0 */
 static int run_to(be_t *z, uint32_t stop_at, uint64_t limit, const char *what, char *err, size_t errlen)
 {
     uint64_t remaining = limit;
     for (;;) {
         uint64_t i0 = rl78_insn_count(z->cpu), c0 = rl78_clock_count(z->cpu), di;
-        rl78_stop_reason r = rl78_run(z->cpu, remaining);
+        rl78_stop_reason r;
+        uint32_t entry = rl78_get_reg(z->cpu, RL78_REG_PC);
+        const stub_t *entry_stub;
+        if (entry == stop_at) return 0;
+        if (!remaining) {
+            char wh[300];
+            where(z, entry, wh, sizeof wh);
+            snprintf(err, errlen, "%s: 命令数の上限 %llu を超えました（%s）", what, (unsigned long long)limit, wh);
+            return -1;
+        }
+        if (z->trace) trace_before(z, entry);
+        entry_stub = stub_at(z, entry);
+        if (entry_stub) {
+            if (redirect(z, entry_stub, err, errlen)) return -1;
+            /* 置換だけの循環でも命令予算を消費し、無限にホストで回らない。 */
+            remaining--;
+            continue;
+        }
+        r = rl78_run(z->cpu, z->trace ? 1 : remaining);
         uint32_t pc;
         char wh[300];
         di = rl78_insn_count(z->cpu) - i0;
+        if (z->trace && di) z->trace->pcs[z->trace->steps++ % TRACE_WINDOW] = entry;
         z->tot_insns += di;
         z->tot_clocks += rl78_clock_count(z->cpu) - c0;
         remaining = di >= remaining ? 0 : remaining - di;
@@ -388,12 +414,14 @@ static int run_to(be_t *z, uint32_t stop_at, uint64_t limit, const char *what, c
             const stub_t *s;
             if (pc == stop_at) return 0;
             s = stub_at(z, pc);
-            if (s) { rl78_set_reg(z->cpu, RL78_REG_PC, s->stub); continue; }
+            if (s) { continue; }
             where(z, pc, wh, sizeof wh);
             snprintf(err, errlen, "%s: 予期しないブレークポイント（%s）", what, wh);
             return -1;
         }
         case RL78_STOP_LIMIT:
+            if (z->trace && remaining) continue;
+            if (pc == stop_at) return 0;
             where(z, pc, wh, sizeof wh);
             snprintf(err, errlen, "%s: 命令数の上限 %llu を超えました。無限ループか暴走の可能性があります（%s）。"
                      "周辺機能の待ちならスタブ（sim.cfg の stub =）で置き換えてください",
@@ -487,7 +515,7 @@ static int b_call(sim_backend *b, const sim_func *f, const int64_t *args, int na
     poke(z, base - 4u, blk, 4);
     rl78_set_reg(z->cpu, RL78_REG_SP, base - 4u);
     st = stub_at(z, (uint32_t)f->addr);
-    rl78_set_reg(z->cpu, RL78_REG_PC, st ? st->stub : (uint32_t)f->addr);
+    rl78_set_reg(z->cpu, RL78_REG_PC, st && !st->skip ? st->stub : (uint32_t)f->addr);
     snprintf(what, sizeof what, "関数 %s", f->name);
     if (run_to(z, z->sentinel, z->max_insns, what, err, errlen)) {
         /* 次の呼び出しに備えて、CPU を止まった場所から引き離す */
@@ -659,8 +687,9 @@ static void b_print_info(sim_backend *b, FILE *out)
     fprintf(out, "1 回の呼び出しの命令数の上限: %llu\n", (unsigned long long)z->max_insns);
     if (!z->nstubs) fprintf(out, "スタブ: なし\n");
     for (i = 0; i < z->nstubs; i++)
-        fprintf(out, "スタブ: %s（0x%05X）-> %s（0x%05X）%s\n", z->stubs[i].oname, z->stubs[i].orig, z->stubs[i].sname,
+        if (!z->stubs[i].skip) fprintf(out, "スタブ: %s（0x%05X）-> %s（0x%05X）%s\n", z->stubs[i].oname, z->stubs[i].orig, z->stubs[i].sname,
                 z->stubs[i].stub, z->stubs[i].patched ? "（先頭を BR !! に書き換え）" : "");
+    print_startup_settings(z, out);
     if (z->have_map)
         fprintf(out, "リンクマップ: %s（セクション %d 件一致 / %d 件不一致、シンボル %d 件一致 / %d 件不一致）\n", z->map_path,
                 z->map_sect_ok, z->map_sect_ng, z->map_sym_ok, z->map_sym_ng);
@@ -929,7 +958,7 @@ static void check_map(be_t *z)
 
 static const char *const KNOWN_KEYS[] = {
     "abs", "abi", "map", "core", "mdu", "mirror", "rom_size", "ram", "heap", "sentinel", "call_sp", "init_end", "func",
-    "stub", "stub_auto", "cpu_hz", "max_insns", "startup_max_insns", "halt", "stop", "ram_fill", "bitfield_order", NULL
+    "skip", "poke", "stub", "stub_auto", "cpu_hz", "max_insns", "startup_max_insns", "halt", "stop", "ram_fill", "bitfield_order", NULL
 };
 
 sim_backend *sim_backend_open(const sim_open_opts *o, char *err, size_t errlen)
@@ -1063,7 +1092,7 @@ sim_backend *sim_backend_open(const sim_open_opts *o, char *err, size_t errlen)
         return NULL;
     }
 
-    if (setup_stubs(z, err, errlen)) { be_free(z); return NULL; }
+    if (setup_stubs(z, err, errlen) || setup_startup_settings(z, err, errlen)) { be_free(z); return NULL; }
     /* 初期設定終了アドレス */
     s = sim_cfg_get(&z->cfg, "init_end");
     if ((i = resolve_code(z, s ? s : "main", &z->init_end, &z->init_end_name))) {
@@ -1080,9 +1109,13 @@ sim_backend *sim_backend_open(const sim_open_opts *o, char *err, size_t errlen)
     {
         char what[300];
         snprintf(what, sizeof what, "スタートアップ（リセットから %s まで）", z->init_end_name);
-        if (run_to(z, z->init_end, z->startup_max, what, err, errlen)) {
+        int rc;
+        if (o->trace_startup) trace_begin(z, o);
+        rc = run_to(z, z->init_end, z->startup_max, what, err, errlen);
+        if (z->trace) trace_end(z, rc);
+        if (rc) {
             size_t n = strlen(err);
-            snprintf(err + n, errlen - n, "。sim.cfg の init_end で止める場所を変えられます");
+            snprintf(err + n, errlen - n, "。sim info --abs … --trace-startup で呼び出し履歴と読み出した SFR を表示できます。sim.cfg の init_end で止める場所を変えられます");
             be_free(z);
             return NULL;
         }

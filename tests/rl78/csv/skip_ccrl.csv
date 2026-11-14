@@ -1,0 +1,15 @@
+mod,use_io,nested skip,0,1
+#COMMENT,use_io@@
+,0x1235
+mod,read_io,direct skip,0,1
+#COMMENT,read_io@@
+,0x1234
+mod,f_long,long return,0,1
+#COMMENT,f_long@@
+,0x12345678
+mod,f_neg,byte return,0,1
+#COMMENT,f_neg@@
+,-3
+mod,f_neg,snapshot poke,0,1
+#COMMENT,0xF00A8:2
+,0x1234

@@ -1,0 +1,9 @@
+mod,echo16,word return,0,1
+#COMMENT,echo16@@
+,0x1234
+mod,ret32,long return,0,1
+#COMMENT,ret32@@
+,0x12345678
+mod,echo8,byte return,0,1
+#COMMENT,echo8@@
+,253
