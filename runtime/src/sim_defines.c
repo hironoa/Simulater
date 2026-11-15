@@ -68,7 +68,7 @@ typedef struct {
     definition *macros, *types;
     size_t nmacros, ntypes, macros_alloc, types_alloc;
     size_t *macro_index, *type_index, macro_cap, type_cap;
-    int recursive, guess, char_unsigned, verbose, error, cond;
+    int recursive, guess, char_unsigned, verbose, error, cond, compiler, packing;
     uint64_t near_base;
     unsigned variables, bits, arrays, guessed, unresolved, duplicates, pointers, explicit_vars;
     char *err; size_t cap;
@@ -116,7 +116,7 @@ static lexer lex(const char *s) { lexer l; memset(&l, 0, sizeof l); l.p = s; nex
 static char *owned_string(defs *d, const char *s)
 { char *p = sim_ctx_alloc(d->ctx, strlen(s)+1); strcpy(p,s); return p; }
 static int qualifier(const char *s)
-{ return !strcmp(s,"volatile") || !strcmp(s,"const") || !strcmp(s,"__near") || !strcmp(s,"__far") || !strcmp(s,"__sreg"); }
+{ return !strcmp(s,"volatile") || !strcmp(s,"const") || !strcmp(s,"__near") || !strcmp(s,"__far") || !strcmp(s,"__sreg") || !strcmp(s,"__saddr"); }
 static int onoff(defs *d, const char *key, int def)
 {
     const char *s = sim_cfg_get(&d->cfg,key);
@@ -404,6 +404,7 @@ static void load_source(defs *d, source *s)
     s->text = clean_source(raw, n, &s->line_no, &s->len);
     free(raw);
     d->bytes += n;
+    if (strstr(s->text,"__packed") || strstr(s->text,"__attribute__")) d->packing=1;
     s->has_types = strstr(s->text, "typedef") || strstr(s->text, "struct") || strstr(s->text, "union");
     for (k = 0, s->nlines = 1; k < s->len; k++) if (s->text[k] == '\n') s->nlines++;
     s->line_off = sim_xmalloc(s->nlines * sizeof *s->line_off);
@@ -415,6 +416,7 @@ static void load_source(defs *d, source *s)
         lexer m;
         if (*q != '#') continue;
         m = lex(q + 1);
+        if (!strcmp(m.tok,"pragma")) { lexer x=m; next(&x); if (!strcmp(x.tok,"pack")) d->packing=1; }
         memset(&x, 0, sizeof x);
         x.line = (uint32_t)li; x.next = UINT32_MAX; x.target = -2; x.arg = "";
         if (!strcmp(m.tok, "define") || !strcmp(m.tok, "undef")) {
@@ -550,45 +552,108 @@ static size_t line_of_offset(const source *s, size_t off)
     return lo;
 }
 
-/* 有効な行にある typedef / struct / union の定義を集める。ranges[base..) は読まない行の範囲 */
+/* 宣言指定子だけを読み飛ばす。宣言子の * / [] / () は別に保存する。 */
+static int builtin_word(const char *s)
+{
+    return !strcmp(s,"unsigned") || !strcmp(s,"signed") || !strcmp(s,"char") ||
+        !strcmp(s,"short") || !strcmp(s,"int") || !strcmp(s,"long") ||
+        !strcmp(s,"float") || !strcmp(s,"double") || !strcmp(s,"void") ||
+        !strcmp(s,"_Bool") || !strcmp(s,"bool");
+}
+/* 未対応の配置指定も宣言の収集時には飛ばし、別名を見失わない。 */
+static void skip_layout(lexer *l)
+{
+    while (!strcmp(l->tok,"__packed") || !strcmp(l->tok,"__attribute__")) {
+        int attr=!strcmp(l->tok,"__attribute__"),depth=0;
+        next(l);
+        if (attr && !strcmp(l->tok,"(")) do {
+            if (!strcmp(l->tok,"(")) depth++;
+            if (!strcmp(l->tok,")")) depth--;
+            next(l);
+        } while (l->tok[0] && depth);
+    }
+}
+static void skip_spec(lexer *l)
+{
+    int seen=0;
+    while (qualifier(l->tok) || !strcmp(l->tok,"__packed") || !strcmp(l->tok,"__attribute__")) {
+        if (qualifier(l->tok)) next(l); else skip_layout(l);
+    }
+    if (!strcmp(l->tok,"struct") || !strcmp(l->tok,"union") || !strcmp(l->tok,"enum")) {
+        int depth=0;
+        next(l); skip_layout(l);
+        if (sim_is_ident_start((unsigned char)l->tok[0])) next(l);
+        skip_layout(l);
+        if (!strcmp(l->tok,"{")) do {
+            if (!strcmp(l->tok,"{")) depth++;
+            if (!strcmp(l->tok,"}")) depth--;
+            next(l);
+        } while (l->tok[0] && depth);
+    } else {
+        while (builtin_word(l->tok) || qualifier(l->tok)) { seen=1; next(l); }
+        if (!seen && sim_is_ident_start((unsigned char)l->tok[0])) next(l);
+    }
+    while (qualifier(l->tok)) next(l);
+}
+
+/* 配置指定はincludeをまたぐので、走査対象にあれば全レコードを保守的に拒否する。 */
 static void scan_types(defs *d, const source *s, size_t base)
 {
-    char *t = sim_xmalloc(s->len + 1);
-    size_t li, r = base;
+    char *t=sim_xmalloc(s->len+1);
+    size_t li,r=base;
+    int packed=d->packing;
     lexer l;
-    memcpy(t, s->text, s->len + 1);
-    for (li = 0; li < s->nlines; li++) {
-        size_t b = s->line_off[li], e = li + 1 < s->nlines ? s->line_off[li + 1] - 1 : s->len;
-        while (r < d->nranges && d->ranges[r + 1] <= li) r += 2;
-        if ((r < d->nranges && li >= d->ranges[r]) || *skip_blank(t + b) == '#') memset(t + b, ' ', e - b);
-        if (li + 1 < s->nlines) t[e] = '\n';
+    memcpy(t,s->text,s->len+1);
+    for (li=0;li<s->nlines;li++) {
+        size_t b=s->line_off[li],e=li+1<s->nlines?s->line_off[li+1]-1:s->len;
+        const char *q=skip_blank(t+b);
+        while (r<d->nranges && d->ranges[r+1]<=li) r+=2;
+        if ((r<d->nranges && li>=d->ranges[r]) || *q=='#') memset(t+b,' ',e-b);
+        if (li+1<s->nlines) t[e]='\n';
     }
-    l = lex(t);
+    l=lex(t);
     while (l.tok[0]) {
-        int td = !strcmp(l.tok, "typedef"), tagged = !strcmp(l.tok, "struct") || !strcmp(l.tok, "union");
-        if (td || tagged) {
-            const char *begin = l.start, *body, *last = NULL;
-            char last_name[128] = "", tag[128] = "";
-            int depth = 0, braces = 0;
-            unsigned line = s->line_no[line_of_offset(s, (size_t)(begin - t))];
+        int td=!strcmp(l.tok,"typedef");
+        if (td || !strcmp(l.tok,"struct") || !strcmp(l.tok,"union")) {
+            const char *body,*end;
+            lexer spec,taglex;
+            char tag[128]="";
+            unsigned line=s->line_no[line_of_offset(s,(size_t)(l.start-t))];
+            int record;
             if (td) next(&l);
-            body = l.start;
-            if (!strcmp(l.tok, "struct") || !strcmp(l.tok, "union")) {
-                lexer u = l; next(&u);
-                if (sim_is_ident_start((unsigned char)u.tok[0])) snprintf(tag, sizeof tag, "%s", u.tok);
+            body=l.start; taglex=l;
+            while (qualifier(taglex.tok)) next(&taglex);
+            skip_layout(&taglex);
+            record=!strcmp(taglex.tok,"struct") || !strcmp(taglex.tok,"union");
+            if (record) { next(&taglex); skip_layout(&taglex); if (sim_is_ident_start((unsigned char)taglex.tok[0])) snprintf(tag,sizeof tag,"%s",taglex.tok); }
+            skip_spec(&l); spec=l; end=l.start;
+            if (record && tag[0] && memchr(body,'{',(size_t)(end-body))) {
+                char *text=sim_xstrndup(body,(size_t)(end-body));
+                add_definition(d,1,tag,packed?"__unsupported_packed":text,s->path,line); free(text);
             }
-            while (l.tok[0]) {
-                if (!strcmp(l.tok, "{")) { depth++; braces = 1; }
-                if (!strcmp(l.tok, "}")) depth--;
-                if (!depth && !strcmp(l.tok, ";")) break;
-                if (!depth && sim_is_ident_start((unsigned char)l.tok[0])) { last = l.start; snprintf(last_name, sizeof last_name, "%s", l.tok); }
+            if (td) do {
+                const char *begin=l.start,*name_at=NULL,*name_end=NULL;
+                char name[128]="";
+                int depth=0;
+                while (l.tok[0] && (depth || (strcmp(l.tok,",") && strcmp(l.tok,";")))) {
+                    if (!name_at && sim_is_ident_start((unsigned char)l.tok[0]) && !qualifier(l.tok)) {
+                        name_at=l.start; name_end=l.p; snprintf(name,sizeof name,"%s",l.tok);
+                    }
+                    if (!strcmp(l.tok,"(") || !strcmp(l.tok,"[")) depth++;
+                    if (!strcmp(l.tok,")") || !strcmp(l.tok,"]")) depth--;
+                    next(&l);
+                }
+                if (name_at) {
+                    sim_buf text; sim_buf_init(&text);
+                    sim_buf_printf(&text,"%.*s %.*s %.*s",(int)(spec.start-body),body,
+                        (int)(name_at-begin),begin,(int)(l.start-name_end),name_end);
+                    add_definition(d,1,name,packed && record?"__unsupported_packed":text.p,s->path,line);
+                    sim_buf_free(&text);
+                }
+                if (strcmp(l.tok,",")) break;
                 next(&l);
-            }
-            if (l.tok[0] && (td || braces)) {
-                if (td && last) { char *text = sim_xstrndup(body, (size_t)(last - body)); add_definition(d, 1, last_name, text, s->path, line); free(text); }
-                if (braces && tag[0]) { char *text = sim_xstrndup(body, (size_t)((td && last ? last : l.start) - body)); add_definition(d, 1, tag, text, s->path, line); free(text); }
-            }
-            if (l.start == begin) next(&l);
+            } while (l.tok[0]);
+            else if (!strcmp(l.tok,";")) { next(&l); continue; }
         }
         if (l.tok[0]) next(&l);
     }
@@ -922,7 +987,8 @@ static const sim_type basic[] = {
     {SIM_T_UINT,"u8",1,NULL,0,NULL,0},{SIM_T_INT,"s8",1,NULL,0,NULL,0},
     {SIM_T_UINT,"u16",2,NULL,0,NULL,0},{SIM_T_INT,"s16",2,NULL,0,NULL,0},
     {SIM_T_UINT,"u32",4,NULL,0,NULL,0},{SIM_T_INT,"s32",4,NULL,0,NULL,0},
-    {SIM_T_FLOAT,"f32",4,NULL,0,NULL,0}
+    {SIM_T_FLOAT,"f32",4,NULL,0,NULL,0},
+    {SIM_T_UINT,"u64",8,NULL,0,NULL,0},{SIM_T_INT,"s64",8,NULL,0,NULL,0}
 };
 static const sim_type *resolve_name(defs *,const char *,unsigned);
 static const sim_type *external_type(defs *,const char *,unsigned);
@@ -934,7 +1000,7 @@ static uint64_t atom(defs *d,lexer *l,unsigned depth,int *ok)
     size_t n;
     if (depth>16) { *ok=0; return 0; }
     if (!strcmp(l->tok,"(")) { next(l); v=expression(d,l,depth+1,ok); if (strcmp(l->tok,")")) *ok=0; else next(l); return v; }
-    if (!strcmp(l->tok,"+") || !strcmp(l->tok,"-")) { int neg=l->tok[0]=='-'; next(l); v=atom(d,l,depth+1,ok); return neg?0-v:v; }
+    if (!strcmp(l->tok,"+") || !strcmp(l->tok,"-")) { int neg=l->tok[0]=='-'; next(l); v=atom(d,l,depth+1,ok); if (neg && v) *ok=0; return neg?0-v:v; }
     n=strlen(l->tok);
     if (isdigit((unsigned char)l->tok[0])) {
         while (n && (l->tok[n-1]=='U' || l->tok[n-1]=='u' || l->tok[n-1]=='L' || l->tok[n-1]=='l')) n--;
@@ -946,10 +1012,21 @@ static uint64_t atom(defs *d,lexer *l,unsigned depth,int *ok)
     } }
     *ok=0; if (l->tok[0]) next(l); return 0;
 }
-static uint64_t sum_expr(defs *d,lexer *l,unsigned depth,int *ok)
+static uint64_t product_expr(defs *d,lexer *l,unsigned depth,int *ok)
 {
     uint64_t v=atom(d,l,depth,ok);
-    while (!strcmp(l->tok,"+") || !strcmp(l->tok,"-")) { int add=l->tok[0]=='+'; uint64_t r; next(l); r=atom(d,l,depth,ok); if (add ? v>UINT64_MAX-r : v<r) *ok=0; v=add?v+r:v-r; }
+    while (!strcmp(l->tok,"*") || !strcmp(l->tok,"/") || !strcmp(l->tok,"%")) {
+        int op=l->tok[0]; uint64_t r; next(l); r=atom(d,l,depth,ok);
+        if (op=='*') { if (r && v>UINT64_MAX/r) *ok=0; else v*=r; }
+        else if (!r) *ok=0;
+        else v=op=='/'?v/r:v%r;
+    }
+    return v;
+}
+static uint64_t sum_expr(defs *d,lexer *l,unsigned depth,int *ok)
+{
+    uint64_t v=product_expr(d,l,depth,ok);
+    while (!strcmp(l->tok,"+") || !strcmp(l->tok,"-")) { int add=l->tok[0]=='+'; uint64_t r; next(l); r=product_expr(d,l,depth,ok); if (add ? v>UINT64_MAX-r : v<r) *ok=0; v=add?v+r:v-r; }
     return v;
 }
 static uint64_t shift_expr(defs *d,lexer *l,unsigned depth,int *ok)
@@ -968,11 +1045,25 @@ static unsigned align_up(unsigned n,unsigned a) { return (n+a-1)/a*a; }
 static unsigned type_alignment(const sim_type *t,unsigned depth)
 {
     unsigned a=1; int i;
+    while (t && t->kind==SIM_T_ARRAY) t=t->target;
     if (!t || depth>32) return 1;
-    if (t->kind==SIM_T_ARRAY) return type_alignment(t->target,depth+1);
     if (t->kind!=SIM_T_STRUCT && t->kind!=SIM_T_UNION) return t->size==1?1:2;
     for (i=0;i<t->nmembers;i++) if (type_alignment(t->members[i].type,depth+1)>a) a=2;
     return a;
+}
+/* 配列は右端が最内側。上限と再帰深さを検査してからサイズを掛ける。 */
+static const sim_type *array_suffix(defs *d,lexer *l,const sim_type *t,unsigned depth)
+{
+    uint64_t n; int ok=1;
+    sim_type *a;
+    if (strcmp(l->tok,"[")) return t;
+    if (!t || !t->size || depth>32) return NULL;
+    next(l); n=expression(d,l,0,&ok);
+    if (!ok || !n || strcmp(l->tok,"]")) return NULL;
+    next(l); t=array_suffix(d,l,t,depth+1);
+    if (!t || n>0x100000/t->size) return NULL;
+    a=sim_ctx_alloc(d->ctx,sizeof *a); a->kind=SIM_T_ARRAY; a->target=t;
+    a->count=(uint32_t)n; a->size=(uint32_t)n*t->size; return a;
 }
 static const sim_type *record_type(defs *d,lexer *l,int un,unsigned depth)
 {
@@ -993,30 +1084,34 @@ static const sim_type *record_type(defs *d,lexer *l,int un,unsigned depth)
             int bit=0,ok=1;
             if (sim_is_ident_start((unsigned char)l->tok[0])) { snprintf(name,sizeof name,"%s",l->tok); next(l); }
             if (!strcmp(l->tok,"[")) {
-                uint64_t n; next(l); n=expression(d,l,0,&ok);
-                if (!ok || !n || (!mt->size || n>UINT32_MAX/mt->size) || strcmp(l->tok,"]")) { free(members); return NULL; }
-                count=(unsigned)n; next(l);
-                { sim_type *a=sim_ctx_alloc(d->ctx,sizeof *a); a->kind=SIM_T_ARRAY; a->target=mt; a->count=count; a->size=count*mt->size; a->name=mt->name; field=a; }
+                field=array_suffix(d,l,mt,0); count=1;
+                if (!field) { free(members); return NULL; }
             }
+            /* ポインタ・関数宣言子等はレコード全体を拒否する。 */
+            if (!name[0] && strcmp(l->tok,":") &&
+                !(mt->kind==SIM_T_STRUCT || mt->kind==SIM_T_UNION)) { free(members); return NULL; }
             if (!strcmp(l->tok,":")) {
                 uint64_t n; bit=1; next(l); n=expression(d,l,0,&ok);
-                if (!ok || n>mt->size*8 || mt->kind==SIM_T_FLOAT || count) { free(members); return NULL; }
+                if (!ok || n>mt->size*8 || (mt->kind!=SIM_T_INT && mt->kind!=SIM_T_UINT) || count || (!n && name[0])) { free(members); return NULL; }
                 width=(unsigned)n;
             }
             { unsigned a=type_alignment(field,0); if (a>alignment) alignment=a;
               if (bit) {
-                  if (!width) { unit_type=NULL; used=0; }
+                  if (!width) { size=align_up(size,a); unit_type=NULL; used=0; unit=0; }
                   else if (un) { off=0; unit=0; used=0; if (size<mt->size) size=mt->size; }
                   else if (unit_type!=mt || used+width>mt->size*8) { unit=align_up(size,a); size=unit+mt->size; used=0; unit_type=mt; }
                   off=unit;
-              } else { unit_type=NULL; used=0; off=un?0:align_up(size,a); if (size<off+field->size) size=off+field->size; }
+              } else { unit_type=NULL; used=0; off=un?0:align_up(size,a);
+                  if (off>0x100000 || field->size>0x100000-off) { free(members); return NULL; }
+                  if (size<off+field->size) size=off+field->size; }
             }
-            if (!bit || width) {
+            /* 名前のない詰め物も、親レコードの整列を復元するため型を残す。 */
+            if (!bit || width || !name[0]) {
                 members=sim_xrealloc(members,(nm+1)*sizeof *members);
                 members[nm].name=owned_string(d,name); members[nm].type=field; members[nm].offset=off;
                 members[nm].bit_offset=bit?(int32_t)(off*8+used):-1; members[nm].bit_size=width; nm++;
-                if (bit) used+=width;
             }
+            if (bit) used+=width;
             if (strcmp(l->tok,",")) break;
             next(l);
         } while (l->tok[0]);
@@ -1036,24 +1131,33 @@ static const sim_type *parse_type(defs *d,lexer *l,unsigned depth)
     if (!strcmp(l->tok,"struct") || !strcmp(l->tok,"union")) {
         int un=!strcmp(l->tok,"union"); char tag[128]=""; next(l);
         if (sim_is_ident_start((unsigned char)l->tok[0])) { snprintf(tag,sizeof tag,"%s",l->tok); next(l); }
-        if (!strcmp(l->tok,"{")) return record_type(d,l,un,depth);
+        if (!strcmp(l->tok,"{")) { t=record_type(d,l,un,depth); return d->packing?NULL:t; }
         return tag[0]?resolve_name(d,tag,depth+1):NULL;
     }
     {
-        int uns=0,sgn=0,chr=0,lng=0,flt=0,seen=0;
+        int uns=0,sgn=0,chr=0,lng=0,flt=0,dbl=0,shrt=0,ints=0,seen=0;
         for (;;) {
             if (qualifier(l->tok)) { next(l); continue; }
-            if (!strcmp(l->tok,"unsigned")) uns=seen=1;
-            else if (!strcmp(l->tok,"signed")) sgn=seen=1;
-            else if (!strcmp(l->tok,"char")) chr=seen=1;
-            else if (!strcmp(l->tok,"short") || !strcmp(l->tok,"int")) seen=1;
-            else if (!strcmp(l->tok,"long")) lng=seen=1;
-            else if (!strcmp(l->tok,"float") || !strcmp(l->tok,"double")) flt=seen=1;
+            if (!strcmp(l->tok,"unsigned")) uns++;
+            else if (!strcmp(l->tok,"signed")) sgn++;
+            else if (!strcmp(l->tok,"char")) chr++;
+            else if (!strcmp(l->tok,"short")) shrt++;
+            else if (!strcmp(l->tok,"int")) ints++;
+            else if (!strcmp(l->tok,"long")) lng++;
+            else if (!strcmp(l->tok,"float")) flt++;
+            else if (!strcmp(l->tok,"double")) dbl++;
             else break;
-            next(l);
+            seen=1; next(l);
         }
-        if (seen) return &basic[flt?6:chr?(uns || (!sgn && d->char_unsigned)?0:1):lng?(uns?4:5):(uns?2:3)];
+        if (seen) {
+            if (uns>1 || sgn>1 || uns+sgn>1 || chr>1 || shrt>1 || ints>1 || lng>2 ||
+                flt+dbl>1 || (chr && (shrt || ints || lng || flt || dbl)) ||
+                (shrt && (lng || flt || dbl)) || ((flt || dbl) && (uns || sgn || ints || lng))) return NULL;
+            if (lng==2) return d->compiler==1?NULL:&basic[uns?7:8];
+            return &basic[(flt || dbl)?6:chr?(uns || (!sgn && d->char_unsigned)?0:1):lng?(uns?4:5):(uns?2:3)];
+        }
     }
+    if (!strcmp(l->tok,"void") || !strcmp(l->tok,"_Bool") || !strcmp(l->tok,"bool") || !strcmp(l->tok,"enum")) { skip_spec(l); return NULL; }
     t=resolve_name(d,l->tok,depth+1); if (l->tok[0]) next(l);
     while (qualifier(l->tok)) next(l);
     return t;
@@ -1063,17 +1167,18 @@ static const sim_type *resolve_name(defs *d,const char *name,unsigned depth)
     size_t i;
     static const char *stdnames[]={"uint8_t","int8_t","uint16_t","int16_t","uint32_t","int32_t",NULL};
     if (depth>32) return NULL;
-    for (i=0;i<7;i++) if (!strcmp(name,basic[i].name)) return &basic[i];
+    for (i=0;i<9;i++) if (!strcmp(name,basic[i].name)) return &basic[i];
     for (i=0;stdnames[i];i++) if (!strcmp(name,stdnames[i])) return &basic[i];
     { definition *v=lookup(d,1,name); if (v) {
         if (v->state==2) return v->type;
         if (v->state==1) return NULL;
         if (!v->state) {
         v->state=1;
-        { lexer l=lex(v->body); const sim_type *t=parse_type(d,&l,depth+1); v->type=(!l.tok[0] || !strcmp(l.tok,";"))?t:NULL; }
+        { lexer l=lex(v->body); const sim_type *t=parse_type(d,&l,depth+1); t=array_suffix(d,&l,t,0); v->type=(!l.tok[0] || !strcmp(l.tok,";"))?t:NULL; }
         v->state=v->type?2:3;
         if (v->type) return v->type;
         }
+        return NULL;
     } }
     /* ここから先（ロードモジュールの同名の型と ctype）は全変数をたどるので、名前ごとに結果を覚える。
        マクロの本体の「(」ごとに型かどうかを試すため、型でない名前で何度も呼ばれる */
@@ -1139,33 +1244,40 @@ static void resolve_macro(defs *d,definition *v)
     lexer l=lex(v->body), after={0};
     const sim_type *t=NULL;
     uint64_t addr;
-    int deref=0,ok=1,bit=-1;
+    int deref=0,ok=1,bit=-1,reject_guess=0,candidate=0;
     unsigned bits=0;
     /* A cast must have one pointer star immediately before its closing ). */
     while (l.tok[0]) {
         if (!strcmp(l.tok,"*")) deref=1;
         if (!strcmp(l.tok,"(")) {
-            lexer cast=l; next(&cast);
+            lexer cast=l, named; int record_cast; next(&cast); named=cast;
+            while (qualifier(named.tok)) next(&named);
+            record_cast=!strcmp(named.tok,"struct") || !strcmp(named.tok,"union");
+            while (qualifier(named.tok) || !strcmp(named.tok,"struct") || !strcmp(named.tok,"union")) next(&named);
+            reject_guess=record_cast || lookup(d,1,named.tok)!=NULL || builtin_word(named.tok) || !strcmp(named.tok,"enum");
             t=parse_type(d,&cast,0);
+            if ((t || reject_guess) && !strcmp(cast.tok,"(")) candidate=1;
             if (!strcmp(cast.tok,"*")) {
-                next(&cast); while (qualifier(cast.tok)) next(&cast);
+                candidate=1; next(&cast); while (qualifier(cast.tok)) next(&cast);
                 if (!strcmp(cast.tok,")")) { next(&cast); after=cast; break; }
             }
         }
         next(&l);
     }
-    if (!after.p) return; /* Ordinary constants/function macros are not lvalues. */
+    if (!after.p) { if (candidate) goto unresolved; return; } /* Ordinary constants/function macros are not lvalues. */
     l=after; addr=expression(d,&l,0,&ok);
     if (!ok) goto unresolved;
     while (!strcmp(l.tok,")")) next(&l);
+    if (!strcmp(l.tok,"[")) goto unresolved;
     if (!deref && strcmp(l.tok,"->") && strcmp(l.tok,".")) { d->pointers++; return; }
-    if (addr>0xFFFFF) { snprintf(d->err,d->cap,"defines: %s:%u %s の番地が20ビット範囲外です",v->file,v->line,v->name); d->error=1; return; }
+    if (addr>0xFFFFF) goto unresolved;
     if (addr<=0xFFFF && d->near_base) { addr+=d->near_base; if (d->verbose) fprintf(stderr,"defines: %s near -> 0x%05llX\n",v->name,(unsigned long long)addr); }
     while (!strcmp(l.tok,"->") || !strcmp(l.tok,".")) {
         const sim_member *m; uint32_t parent=0;
         next(&l);
         if (!t || (t->name && (!strcmp(t->name,"bits8") || !strcmp(t->name,"bits16")))) {
             int guessed=t==NULL;
+            if (guessed && reject_guess) goto unresolved;
             int b=bit_number(l.tok,t?t->size*8:8);
             if (b<0 || (guessed && !d->guess)) goto unresolved;
             bit=b; bits=1; t=&basic[t && t->size==2?2:0];
@@ -1179,7 +1291,7 @@ static void resolve_macro(defs *d,definition *v)
         next(&l); while (!strcmp(l.tok,")")) next(&l);
     }
     if (l.tok[0] || !t || !t->size) goto unresolved;
-    if (addr>0xFFFFF || t->size>0x100000-addr) { snprintf(d->err,d->cap,"defines: %s:%u %s の番地またはサイズが20ビット範囲外です",v->file,v->line,v->name); d->error=1; return; }
+    if (addr>0xFFFFF || t->size>0x100000-addr) goto unresolved;
     {
         int added=sim_ctx_define_at(d->ctx,v->name,t,addr,bit,bits,v->file,v->line,0);
         if (!added) { if (d->verbose) fprintf(stderr,"defines: %s はロードモジュールの同名シンボルを優先\n",v->name); return; }
@@ -1270,7 +1382,7 @@ int sim_defines_load(sim_ctx *c,const sim_open_opts *o,char *err,size_t cap)
     d.cond=onoff(&d,"defines_cond",1);
     { const char *s=sim_cfg_get(&d.cfg,"defines_near_base"); if (s && (sim_parse_uint(s,0xF0000,&d.near_base) || (d.near_base && d.near_base!=0xF0000))) { snprintf(err,cap,"defines_near_base は 0xF0000 / 0 です"); d.error=1; } }
     /* 定義マクロ: 暗黙 -> mtpj の定義・定義解除 -> sim.cfg の cdef -> --cdef -> cundef の順に適用する */
-    kind=d.error?0:compiler_kind(&d,o);
+    kind=d.error?0:compiler_kind(&d,o); d.compiler=kind;
     if (!d.error) add_implicit(&d,kind);
     if (!d.error) {
         const char *s=sim_cfg_get(&d.cfg,"mtpj"), *mode=sim_cfg_get(&d.cfg,"mtpj_mode");

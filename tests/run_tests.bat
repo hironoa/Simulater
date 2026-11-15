@@ -906,6 +906,29 @@ if errorlevel 1 (call :ng "header list mock") else (call :ok "header list mock")
 set RC=%ERRORLEVEL%
 if "%RC%"=="0" (call :ok "var and varfile mock") else (call :ng "var and varfile mock")
 
+echo == defines: declarators mock
+call :decl_run declarators declarators
+call :decl_run declarator_supported declarator_supported
+call :decl_run declarator_members declarator_supported
+"%SIM%" list --cfg "%T%\defines\declarators.cfg" > "%WORK%\decl_list.log" 2>&1
+call :decl_type WIDE u64
+"%SIM%" list --cfg "%T%\defines\declarator_supported.cfg" > "%WORK%\decl_list.log" 2>&1
+for /f "usebackq tokens=1,2" %%A in ("%T%\defines\declarator_types.txt") do call :decl_type %%A %%B
+"%SIM%" info -v --cfg "%T%\defines\declarator_rejected.cfg" > "%WORK%\decl_info.log" 2>&1
+set RC=%ERRORLEVEL%
+if "%RC%"=="0" (call :ok "unsupported types do not abort loading") else (call :ng "unsupported types do not abort loading")
+rem Each unresolved name is checked in verbose info and rejected by CSV below.
+"%SIM%" list --cfg "%T%\defines\declarator_rejected.cfg" > "%WORK%\decl_list.log" 2>&1
+for /f "usebackq" %%A in ("%T%\defines\declarator_rejected.txt") do call :decl_reject %%A declarator_rejected
+"%SIM%" list --cfg "%T%\defines\declarator_packed.cfg" > "%WORK%\decl_list.log" 2>&1
+"%SIM%" info -v --cfg "%T%\defines\declarator_packed.cfg" > "%WORK%\decl_info.log" 2>&1
+call :decl_reject DECLPACKED declarator_packed
+call :decl_reject DECLEXPLICITPACKED declarator_packed
+"%SIM%" list --cfg "%T%\defines\declarator_lmf.cfg" > "%WORK%\decl_list.log" 2>&1
+"%SIM%" info -v --cfg "%T%\defines\declarator_lmf.cfg" > "%WORK%\decl_info.log" 2>&1
+call :decl_reject WIDE declarator_lmf
+call :decl_reject SIGNEDWIDE declarator_lmf
+
 echo == defines: compile switches (mock)
 rem findstr patterns are plain substrings (letters, digits, spaces, underscores). Macro values such as
 rem PRODUCT=2 go into the cfg file, not onto a call line, because cmd splits arguments at "=".
@@ -1089,4 +1112,36 @@ exit /b 0
 :cond_info_lacks
 findstr /l /c:"%~1" "%WORK%\cond_info.log" >nul
 if errorlevel 1 (call :ok "%~2") else (call :ng "%~2")
+exit /b 0
+
+:decl_run
+"%SIM%" run "%T%\defines\%~1.csv" --cfg "%T%\defines\%~2.cfg" -o "%WORK%\decl" > "%WORK%\decl.log" 2>&1
+set RC=%ERRORLEVEL%
+if not "%RC%"=="0" (call :ng "%~1 typed CSV" & type "%WORK%\decl.log" & exit /b 0)
+findstr /l /c:"OK 1" "%WORK%\decl.log" >nul
+set RC=%ERRORLEVEL%
+if "%RC%"=="0" (call :ok "%~1 typed CSV") else (call :ng "%~1 typed CSV")
+exit /b 0
+
+:decl_type
+set "DECLPAD=%~1                                        "
+set DECLPAD=%DECLPAD:~0,40%
+findstr /l /c:"%DECLPAD% %~2 " "%WORK%\decl_list.log" >nul
+set RC=%ERRORLEVEL%
+if "%RC%"=="0" (call :ok "%~1 type %~2") else (call :ng "%~1 type %~2")
+exit /b 0
+
+:decl_reject
+findstr /l /c:" %~1 " "%WORK%\decl_list.log" >nul
+set RC=%ERRORLEVEL%
+if "%RC%"=="0" (call :ng "%~1 must not be registered" & exit /b 0)
+findstr /l /c:" %~1 " "%WORK%\decl_info.log" >nul
+set RC=%ERRORLEVEL%
+if not "%RC%"=="0" (call :ng "%~1 must be counted as unresolved" & exit /b 0)
+> "%WORK%\decl_bad.csv" echo mod,intr_tm00,rejected,1,0
+>> "%WORK%\decl_bad.csv" echo #COMMENT,%~1
+>> "%WORK%\decl_bad.csv" echo ,1
+"%SIM%" run "%WORK%\decl_bad.csv" --cfg "%T%\defines\%~2.cfg" -o "%WORK%\decl_bad" > "%WORK%\decl_bad.log" 2>&1
+set RC=%ERRORLEVEL%
+if "%RC%"=="2" (call :ok "%~1 counted and unusable") else (call :ng "%~1 counted and unusable")
 exit /b 0

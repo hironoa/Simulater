@@ -164,6 +164,47 @@ if [ "$RC" -ne 0 ]; then cat "$WORK/header_mock.log"; fi
 "$SIM" list --cfg "$T/defines/mock.cfg" > "$WORK/header_list.log" 2>&1
 check "header names in list mock" contains "$WORK/header_list.log" "df_unit"
 check "unsupported macro postfix is not silently truncated" sh -c '! grep -F -q unsupported_index "$1"' sh "$WORK/header_list.log"
+echo "== defines: declarators (mock)"
+for decl_csv in declarators declarator_supported declarator_members; do
+    if [ "$decl_csv" = declarators ]; then decl_cfg=declarators; else decl_cfg=declarator_supported; fi
+    "$SIM" run "$T/defines/$decl_csv.csv" --cfg "$T/defines/$decl_cfg.cfg" -o "$WORK/decl" > "$WORK/decl.log" 2>&1
+    RC=$?
+    check "$decl_csv CSV typed read write and physical offsets" sh -c '[ "$1" -eq 0 ] && grep -F -q "総数 1, OK 1, NG 0" "$2"' sh "$RC" "$WORK/decl.log"
+    if [ "$RC" -ne 0 ]; then cat "$WORK/decl.log"; fi
+done
+"$SIM" list --cfg "$T/defines/declarators.cfg" > "$WORK/decl_list.log" 2>&1
+check "long long is u64" grep -E -q 'WIDE +u64 ' "$WORK/decl_list.log"
+"$SIM" list --cfg "$T/defines/declarator_supported.cfg" > "$WORK/decl_list.log" 2>&1
+while read -r decl_name decl_type; do
+    check "$decl_name type $decl_type" grep -E -q " $decl_name +$decl_type " "$WORK/decl_list.log"
+done < "$T/defines/declarator_types.txt"
+"$SIM" info -v --cfg "$T/defines/declarator_rejected.cfg" > "$WORK/decl_info.log" 2>&1
+RC=$?
+check "unsupported declarations are unresolved not load errors" test "$RC" -eq 0
+check "all 51 unsupported declarations counted" contains "$WORK/decl_info.log" "unresolved=51 "
+check "void pointer constant is skipped as a pointer" contains "$WORK/decl_info.log" "pointer-skipped=1 "
+"$SIM" list --cfg "$T/defines/declarator_rejected.cfg" > "$WORK/decl_list.log" 2>&1
+decl_reject() {
+    lacks "$WORK/decl_list.log" " $1 " && contains "$WORK/decl_info.log" "定義 $1 (" || return 1
+    printf 'mod,intr_tm00,rejected,1,0\n#COMMENT,%s\n,1\n' "$1" > "$WORK/decl_bad.csv"
+    "$SIM" run "$WORK/decl_bad.csv" --cfg "$T/defines/declarator_rejected.cfg" -o "$WORK/decl_bad" > "$WORK/decl_bad.log" 2>&1
+    _decl_rc=$?
+    [ "$_decl_rc" -eq 2 ]
+}
+while read -r decl_name; do check "$decl_name counted and unusable" decl_reject "$decl_name"; done < "$T/defines/declarator_rejected.txt"
+for decl_mode in packed lmf; do
+    "$SIM" info -v --cfg "$T/defines/declarator_$decl_mode.cfg" > "$WORK/decl_info.log" 2>&1
+    RC=$?
+    check "$decl_mode unsupported types counted without load errors" sh -c '[ "$1" -eq 0 ] && grep -F -q "unresolved=2 " "$2"' sh "$RC" "$WORK/decl_info.log"
+    "$SIM" list --cfg "$T/defines/declarator_$decl_mode.cfg" > "$WORK/decl_list.log" 2>&1
+    if [ "$decl_mode" = packed ]; then decl_names="DECLPACKED DECLEXPLICITPACKED"; else decl_names="WIDE SIGNEDWIDE"; fi
+    for decl_name in $decl_names; do
+        printf 'mod,intr_tm00,rejected,1,0\n#COMMENT,%s\n,1\n' "$decl_name" > "$WORK/decl_bad.csv"
+        "$SIM" run "$WORK/decl_bad.csv" --cfg "$T/defines/declarator_$decl_mode.cfg" -o "$WORK/decl_bad" > "$WORK/decl_bad.log" 2>&1
+        RC=$?
+        check "$decl_mode $decl_name unusable" sh -c '[ "$1" -eq 2 ] && ! grep -F -q " $2 " "$3"' sh "$RC" "$decl_name" "$WORK/decl_list.log"
+    done
+done
 echo "== defines: #if の式の評価器（単体テスト）"
 check "build check_ppexpr" "${CC:-clang}" -std=c11 -O2 -Wall -Wextra -I"$ROOT/runtime/src" "$T/tools/check_ppexpr.c" "$ROOT/runtime/src/sim_ppexpr.c" -o "$WORK/check_ppexpr"
 "$WORK/check_ppexpr" > "$WORK/ppexpr.log" 2>&1
