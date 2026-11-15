@@ -1,0 +1,150 @@
+mod,f_file_static,initial g_c,0,1
+#COMMENT,g_c
+,17
+mod,f_file_static,initial g_sc,0,1
+#COMMENT,g_sc
+,-18
+mod,f_file_static,initial g_uc,0,1
+#COMMENT,g_uc
+,19
+mod,f_file_static,initial g_s,0,1
+#COMMENT,g_s
+,5141
+mod,f_file_static,initial g_us,0,1
+#COMMENT,g_us
+,5655
+mod,f_file_static,initial g_i,0,1
+#COMMENT,g_i
+,6169
+mod,f_file_static,initial g_ui,0,1
+#COMMENT,g_ui
+,6683
+mod,f_file_static,initial g_l,0,1
+#COMMENT,g_l
+,471670303
+mod,f_file_static,initial g_ul,0,1
+#COMMENT,g_ul
+,539042339
+mod,f_file_static,initial g_f,0,1
+#COMMENT,g_f
+,1.5
+mod,f_file_static,initial g_d,0,1
+#COMMENT,g_d
+,2.25
+mod,f_file_static,initial g_outer.in.ib,0,1
+#COMMENT,g_outer.in.ib
+,12851
+mod,f_file_static,initial g_outer.ins[1].ic,0,1
+#COMMENT,g_outer.ins[1].ic
+,88
+mod,f_file_static,initial g_outer.warr[1],0,1
+#COMMENT,g_outer.warr[1]
+,19276
+mod,f_file_static,initial g_uni.uc[2],0,1
+#COMMENT,g_uni.uc[2]
+,98
+mod,f_file_static,initial g_uni.parts.w,0,1
+#COMMENT,g_uni.parts.w
+,24930
+mod,f_file_static,initial g_bits8.n2,0,1
+#COMMENT,g_bits8.n2
+,5
+mod,f_file_static,initial g_bits16.f5,0,1
+#COMMENT,g_bits16.f5
+,85
+mod,f_file_static,initial g_bitsm.w5,0,1
+#COMMENT,g_bitsm.w5
+,1023
+mod,f_file_static,initial g_bitsm.s0,0,1
+#COMMENT,g_bitsm.s0
+,13
+mod,f_file_static,initial g_se,0,1
+#COMMENT,g_se
+,100
+mod,f_file_static,initial g_ne,0,1
+#COMMENT,g_ne
+,-3
+mod,f_file_static,initial g_be,0,1
+#COMMENT,g_be
+,1000
+mod,f_file_static,initial g_mat2[1][2],0,1
+#COMMENT,g_mat2[1][2]
+,134
+mod,f_file_static,initial g_mat3[1][2][3],0,1
+#COMMENT,g_mat3[1][2][3]
+,0
+mod,f_file_static,initial g_p_outer->tail,0,1
+#COMMENT,g_p_outer->tail
+,77
+mod,f_file_static,initial g_fp_outer->oa,0,1
+#COMMENT,g_fp_outer->oa
+,65
+mod,f_file_static,initial g_fp_uc[0],0,1
+#COMMENT,g_fp_uc[0]
+,19
+mod,f_file_static,initial g_pp_uc[0][0],0,1
+#COMMENT,g_pp_uc[0][0]
+,19
+mod,f_file_static,initial g_p_arr[0][1],0,1
+#COMMENT,g_p_arr[0][1]
+,133
+mod,f_file_static,initial g_parr[2][0],0,1
+#COMMENT,g_parr[2][0]
+,19
+mod,f_file_static,initial g_td_u8,0,1
+#COMMENT,g_td_u8
+,145
+mod,f_file_static,initial g_td_u16,0,1
+#COMMENT,g_td_u16
+,37523
+mod,f_file_static,initial g_td_u32,0,1
+#COMMENT,g_td_u32
+,2492831383
+mod,f_file_static,initial g_td_pt.y,0,1
+#COMMENT,g_td_pt.y
+,39322
+mod,f_file_static,initial g_td_pp->z,0,1
+#COMMENT,g_td_pp->z
+,2610732446
+mod,f_file_static,initial c_tbl[3],0,1
+#COMMENT,c_tbl[3]
+,164
+mod,f_file_static,initial c_inner.ib,0,1
+#COMMENT,c_inner.ib
+,43691
+mod,f_file_static,initial probe.c/s_file_ui,0,1
+#COMMENT,probe.c/s_file_ui
+,45747
+mod,f_file_static,initial probe.c/s_file_in.ib,0,1
+#COMMENT,probe.c/s_file_in.ib
+,46518
+mod,f_file_static,initial f_static1@cnt,0,1
+#COMMENT,f_static1@cnt
+,49602
+mod,f_file_static,initial f_static2@cnt,0,1
+#COMMENT,f_static2@cnt
+,50116
+mod,f_file_static,initial f_static2@keep.ib,0,1
+#COMMENT,f_static2@keep.ib
+,50887
+mod,f_file_static,initial f_static2@nested,0,1
+#COMMENT,f_static2@nested
+,201
+mod,f_file_static,initial probe.c/f_static2@nested,0,1
+#COMMENT,probe.c/f_static2@nested
+,201
+mod,f_file_static,initial g_outer_arr[1].tail,0,1
+#COMMENT,g_outer_arr[1].tail
+,0
+mod,f_file_static,initial g_bss_uc,0,1
+#COMMENT,g_bss_uc
+,0
+mod,f_file_static,initial g_bss_ui,0,1
+#COMMENT,g_bss_ui
+,0
+mod,f_file_static,initial g_bss_outer.oa,0,1
+#COMMENT,g_bss_outer.oa
+,0
+mod,f_file_static,initial g_vol,0,1
+#COMMENT,g_vol
+,173

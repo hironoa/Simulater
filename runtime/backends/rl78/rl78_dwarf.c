@@ -5,7 +5,7 @@
  * form の大きさが分からない場合だけは、その CU の残りを読めないので CU ごと飛ばす。
  *
  * 型の扱い:
- *   - typedef は「名前だけ違う写し」を作る（表示名を残すため）。const/volatile/restrict は剥がす
+ *   - typedef は「名前だけ違う写し」を作る（表示名を残すため）。const は型に保持し、volatile/restrict は剥がす
  *   - ポインタの大きさは DW_AT_byte_size、なければ DW_AT_address_class（CC-RL は near データポインタに 4 を付ける）
  *   - ビットフィールドは「構造体先頭からのビット位置」（リトルエンディアン、LSB = 0）に換算する
  *       DWARF4 の DW_AT_data_bit_offset はそのまま
@@ -525,7 +525,7 @@ static const sim_type *ty_ref(dctx *x, int di, int depth)
     return ty(x, r, depth + 1);
 }
 
-/* 型の DIE が const 修飾の連なりなら 1（typedef は通り抜けない） */
+/* 型の DIE が const 修飾の連なりなら 1（typedef・配列要素もたどる） */
 static int is_const_chain(dctx *x, int di)
 {
     int guard = 0;
@@ -603,6 +603,10 @@ static const sim_type *ty(dctx *x, int di, int depth)
         const sim_type *u;
         x->state[di] = 1;
         u = ty_ref(x, di, depth);
+        if (u && tag==TAG_const) {
+            sim_type *q=new_type(x,u->kind,u->name,u->size);
+            *q=*u; q->is_const=1; u=q;
+        }
         x->memo[di] = (sim_type *)u;
         x->state[di] = 2;
         return u;
@@ -877,7 +881,7 @@ static int enclosing_subprogram(const dctx *x, int di)
     return -1;
 }
 
-static const sim_type g_unknown_param = {SIM_T_UNKNOWN, "?", 0, NULL, 0, NULL, 0};
+static const sim_type g_unknown_param = {SIM_T_UNKNOWN, "?", 0, NULL, 0, NULL, 0,0};
 
 static void add_func(dctx *x, int di)
 {
@@ -931,6 +935,12 @@ static void add_func(dctx *x, int di)
                 int td = type_die_of(x, c);
                 pt[k] = td >= 0 ? ty(x, td, 0) : &g_unknown_param;
                 if (!pt[k]) pt[k] = &g_unknown_param;
+                /* 関数の引数値は呼び出し前に初期化する。最上位のconstは
+                   関数型には含めない（指す先のconstは保持する）。 */
+                if (pt[k]->is_const) {
+                    sim_type *arg=new_type(x,pt[k]->kind,pt[k]->name,pt[k]->size);
+                    *arg=*pt[k]; arg->is_const=0; pt[k]=arg;
+                }
             }
             k++;
         }

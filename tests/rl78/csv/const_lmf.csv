@@ -1,0 +1,15 @@
+mod,constptr,const pointer argument,3,1
+#COMMENT,arr[0],@a,@a[0],constptr@@
+,17,0xE004,171,171
+mod,constptr,allocated const pointer argument,2,1
+#COMMENT,$@a,@a[0],constptr@@
+,1,231,231
+mod,constbyte,const byte value and return,1,1
+#COMMENT,@a,constbyte@@
+,255,255
+mod,constword,const word value and return,1,2
+#COMMENT,@a,constword@@,constant
+,54321,54321,0
+mod,cycle,const static read,0,1
+#COMMENT,cycle@constant
+,0

@@ -27,6 +27,21 @@ typedef struct sim_ref sim_ref;
 sim_ctx *sim_ctx_new(sim_backend *b);
 void sim_ctx_free(sim_ctx *c);
 sim_backend *sim_ctx_backend(sim_ctx *c);
+void *sim_ctx_alloc(sim_ctx *c, size_t n);
+int sim_ctx_define(sim_ctx *c, const char *name, const sim_type *type, uint64_t addr,
+                   int bit_offset, unsigned bit_size, const char *file, int priority);
+/* 定義元の行番号つき（line = 0 は不明）。sim list --where で表示する */
+int sim_ctx_define_at(sim_ctx *c, const char *name, const sim_type *type, uint64_t addr,
+                      int bit_offset, unsigned bit_size, const char *file, unsigned line, int priority);
+/* i 番目のシンボル（sim_ctx_sym_*）が sim_ctx_define_at で登録した変数なら、定義元の行番号。それ以外は 0 */
+unsigned sim_ctx_sym_line(sim_ctx *c, size_t i);
+/* Set const only on a registered definition, before refreshing symbols. */
+void sim_ctx_definition_const(sim_ctx *c, const char *name, int readonly);
+void sim_ctx_refresh_symbols(sim_ctx *c);
+const sim_var *sim_ctx_sym_var(sim_ctx *c, size_t i);
+const sim_type *sim_ctx_named_type(sim_ctx *c, const char *name);
+void sim_ctx_set_definition_info(sim_ctx *c, const char *info);
+void sim_ctx_print_definition_info(sim_ctx *c, FILE *out);
 
 /* 関数を名前（"func" または "file.c/func"）で探す。見つからなければ NULL と err */
 const sim_func *sim_ctx_find_func(sim_ctx *c, const char *name, char *err, size_t errlen);

@@ -82,3 +82,25 @@ _third32:
  movw de, ax
  pop hl
  ret
+
+; ROM checksum through the mirror; range includes init_end, stub and skip.
+; Independent expected sum of the unchanged instruction bytes, modulo 256.
+_rom_check:
+ movw hl, #(_main + 0x8000)
+ mov b, #0
+.Lrom_sum:
+ mov a, [hl]
+ add a, b
+ mov b, a
+ incw hl
+ movw ax, hl
+ cmpw ax, #(_third32 + 0x8000)
+ bnz $.Lrom_sum
+ mov a, b
+ cmp a, #0x47
+ bz $.Lrom_ok
+_rom_reset:
+ .byte 0xFF
+ br $_rom_reset
+.Lrom_ok:
+ br !!_start

@@ -17,6 +17,12 @@ typedef struct {
     int is_const;
 } sym_entry;
 
+typedef struct {
+    sim_var var;
+    int bit_offset, priority;
+    unsigned bit_size, line;
+} defined_var;
+
 struct sim_ctx {
     sim_backend *b;
     const sim_var **vars;
@@ -28,6 +34,16 @@ struct sim_ctx {
     const sim_func *func;
     int64_t args[SIM_MAX_ARGS];
     uint64_t ret_raw;
+    void **owned;
+    size_t nowned;
+    defined_var **defined;
+    size_t ndefined;
+    char *definition_info;
+    /* sim_ctx_define 用: vars と同じ並びの登録情報（バックエンドの変数は NULL）と、
+       関数に属さない変数の名前から最初の位置を引くハッシュ表（位置 + 1。0 は空き） */
+    defined_var **var_def;
+    size_t *name_index, name_cap, name_count;
+    size_t owned_cap, defined_cap, vars_cap;    /* 1 件ずつ伸ばさない（定義が数万件あると遅くなる） */
 };
 
 static int streq(const char *a, const char *b) { return a && b && strcmp(a, b) == 0; }
@@ -84,8 +100,148 @@ void sim_ctx_free(sim_ctx *c)
     free(c->syms);
     free(c->vars);
     free(c->funcs);
+    for (i = 0; i < c->nowned; i++) free(c->owned[i]);
+    free(c->owned); free(c->defined); free(c->definition_info);
+    free(c->var_def); free(c->name_index);
     free(c);
 }
+
+void *sim_ctx_alloc(sim_ctx *c, size_t n)
+{
+    void *p = sim_xcalloc(n ? n : 1, 1);
+    if (c->nowned == c->owned_cap) {
+        c->owned_cap = c->owned_cap ? c->owned_cap * 2 : 64;
+        c->owned = sim_xrealloc(c->owned, c->owned_cap * sizeof *c->owned);
+    }
+    c->owned[c->nowned++] = p;
+    return p;
+}
+static char *ctx_string(sim_ctx *c, const char *s)
+{
+    char *p = sim_ctx_alloc(c, strlen(s) + 1);
+    strcpy(p, s); return p;
+}
+void sim_ctx_refresh_symbols(sim_ctx *c)
+{
+    size_t i;
+    for (i = 0; i < c->nsyms; i++) free(c->syms[i].name);
+    free(c->syms); c->syms = NULL; c->nsyms = 0;
+    build_syms(c);
+}
+int sim_ctx_define(sim_ctx *c, const char *name, const sim_type *type, uint64_t addr,
+                   int bit_offset, unsigned bit_size, const char *file, int priority)
+{ return sim_ctx_define_at(c, name, type, addr, bit_offset, bit_size, file, 0, priority); }
+unsigned sim_ctx_sym_line(sim_ctx *c, size_t i)
+{ return i < c->nvars && c->var_def && c->var_def[i] ? c->var_def[i]->line : 0; }
+
+/* 関数に属さない変数のうち、名前が name の最初のものの位置。なければ nvars。
+   定義が数万件あっても遅くならないよう、ハッシュ表で引く */
+static size_t name_slot(const sim_ctx *c, const char *name)
+{
+    uint32_t h = 2166136261u;
+    const char *p;
+    for (p = name; *p; p++) { h ^= (unsigned char)*p; h *= 16777619u; }
+    return h & (c->name_cap - 1);
+}
+static void name_insert(sim_ctx *c, size_t i)
+{
+    size_t slot = name_slot(c, c->vars[i]->name);
+    while (c->name_index[slot]) {
+        if (!strcmp(c->vars[c->name_index[slot] - 1]->name, c->vars[i]->name)) return;   /* 最初のものを残す */
+        slot = (slot + 1) & (c->name_cap - 1);
+    }
+    c->name_index[slot] = i + 1; c->name_count++;
+}
+static size_t find_global(sim_ctx *c, const char *name)
+{
+    size_t i, slot;
+    if (!c->name_cap || (c->name_count + 1) * 2 > c->name_cap) {
+        c->name_cap = c->name_cap ? c->name_cap * 2 : 1024;
+        while (c->name_cap < (c->nvars + 1) * 2) c->name_cap *= 2;
+        free(c->name_index); c->name_index = sim_xcalloc(c->name_cap, sizeof *c->name_index); c->name_count = 0;
+        for (i = 0; i < c->nvars; i++) if (!c->vars[i]->func) name_insert(c, i);
+    }
+    slot = name_slot(c, name);
+    while (c->name_index[slot]) {
+        if (!strcmp(c->vars[c->name_index[slot] - 1]->name, name)) return c->name_index[slot] - 1;
+        slot = (slot + 1) & (c->name_cap - 1);
+    }
+    return c->nvars;
+}
+
+int sim_ctx_define_at(sim_ctx *c, const char *name, const sim_type *type, uint64_t addr,
+                      int bit_offset, unsigned bit_size, const char *file, unsigned line, int priority)
+{
+    size_t slot;
+    defined_var *d;
+    int replaced;
+    if (!c->var_def) c->var_def = sim_xcalloc(c->nvars + 1, sizeof *c->var_def);
+    slot = find_global(c, name);
+    if (slot < c->nvars) {
+        int old_priority = c->var_def[slot] ? c->var_def[slot]->priority : 1;
+        if (old_priority > priority) return 0;
+    }
+    replaced = slot < c->nvars;
+    d = sim_ctx_alloc(c, sizeof *d);
+    d->var.name = ctx_string(c, name); d->var.file = ctx_string(c, file ? file : "");
+    d->var.addr = addr; d->var.type = type; d->var.is_external = 1;
+    d->bit_offset = bit_offset; d->bit_size = bit_size; d->priority = priority; d->line = line;
+    if (c->ndefined == c->defined_cap) {
+        c->defined_cap = c->defined_cap ? c->defined_cap * 2 : 64;
+        c->defined = sim_xrealloc(c->defined, c->defined_cap * sizeof *c->defined);
+    }
+    c->defined[c->ndefined++] = d;
+    if (slot == c->nvars) {
+        if (c->nvars + 1 > c->vars_cap) {
+            c->vars_cap = c->vars_cap ? c->vars_cap * 2 : (c->nvars + 1) * 2;
+            c->vars = sim_xrealloc(c->vars, c->vars_cap * sizeof *c->vars);
+            c->var_def = sim_xrealloc(c->var_def, c->vars_cap * sizeof *c->var_def);
+        }
+        c->nvars++;
+        c->vars[slot] = &d->var; c->var_def[slot] = d;
+        name_insert(c, slot);
+    } else { c->vars[slot] = &d->var; c->var_def[slot] = d; }
+    return replaced ? 2 : 1;
+}
+void sim_ctx_definition_const(sim_ctx *c, const char *name, int readonly)
+{
+    size_t slot=find_global(c,name);
+    if (slot<c->nvars && c->var_def && c->var_def[slot]) c->var_def[slot]->var.is_const=readonly;
+}
+const sim_var *sim_ctx_sym_var(sim_ctx *c, size_t i) { return i < c->nvars ? c->vars[i] : NULL; }
+static const sim_type *named_type(const sim_type *t,const char *name,const sim_type **path,unsigned depth)
+{
+    const sim_type *found;
+    int i;
+    unsigned k;
+    if (!t || depth>=32) return NULL;
+    for (k=0;k<depth;k++) if (path[k]==t) return NULL;
+    path[depth]=t;
+    if (t->name && (!strcmp(t->name,name) ||
+        ((!strncmp(name,"struct ",7) || !strncmp(name,"union ",6)) &&
+         !strncmp(t->name,"const ",6) && !strcmp(t->name+6,name)))) return t;
+    found=named_type(t->target,name,path,depth+1);
+    if (found) return found;
+    for (i=0;i<t->nmembers;i++) {
+        found=named_type(t->members[i].type,name,path,depth+1);
+        if (found) return found;
+    }
+    return NULL;
+}
+const sim_type *sim_ctx_named_type(sim_ctx *c, const char *name)
+{
+    size_t i;
+    for (i=0;i<c->nvars;i++) {
+        const sim_type *path[32];
+        const sim_type *t=named_type(c->vars[i]->type,name,path,0);
+        if (t) return t;
+    }
+    return NULL;
+}
+void sim_ctx_set_definition_info(sim_ctx *c, const char *info)
+{ free(c->definition_info); c->definition_info = sim_xstrdup(info); }
+void sim_ctx_print_definition_info(sim_ctx *c, FILE *out)
+{ if (c->definition_info) fputs(c->definition_info, out); }
 
 sim_backend *sim_ctx_backend(sim_ctx *c) { return c->b; }
 size_t sim_ctx_sym_count(sim_ctx *c) { return c->nsyms; }
@@ -233,6 +389,13 @@ void sim_type_display(const sim_type *t, char *buf, size_t n)
 {
     char in[256];
     if (!t) { snprintf(buf, n, "void"); return; }
+    if (t->is_const && (!t->name || strncmp(t->name,"const ",6))) {
+        sim_type plain=*t; plain.is_const=0;
+        sim_type_display(&plain,in,sizeof in);
+        snprintf(buf,n,"%s%s",plain.kind==SIM_T_PTR?"":"const ",in);
+        if (plain.kind==SIM_T_PTR) { size_t k=strlen(buf); if (k<n) snprintf(buf+k,n-k," const"); }
+        return;
+    }
     if (t->name && t->name[0]) { snprintf(buf, n, "%s", t->name); return; }
     switch (t->kind) {
     case SIM_T_PTR: sim_type_display(t->target, in, sizeof in); snprintf(buf, n, "%s *", in); break;
@@ -285,6 +448,18 @@ int sim_ref_prefix(const sim_ref *r) { return r->prefix; }
 int sim_ref_is_multi(const sim_ref *r) { return r->multi; }
 int sim_ref_is_return(const sim_ref *r) { return r->base == RB_RET && r->nsteps == 0; }
 const sim_type *sim_ref_type(const sim_ref *r) { return r->multi ? r->elem : r->type; }
+
+/* 配列自身の修飾と、要素型の修飾は同じオブジェクトの制限になる。 */
+static int object_const(const sim_type *t)
+{
+    unsigned depth=0;
+    while (t && depth++<32) {
+        if (t->is_const) return 1;
+        if (t->kind!=SIM_T_ARRAY) break;
+        t=t->target;
+    }
+    return 0;
+}
 
 int sim_ref_writable(const sim_ref *r)
 {
@@ -400,12 +575,13 @@ static int param_index(const sim_func *f, const char *name)
 }
 
 /* 匿名メンバを含めてメンバを探す。見つかれば 1 と累積オフセット */
-static int find_member(const sim_type *t, const char *name, uint32_t base, const sim_member **out, uint32_t *off)
+static int find_member(const sim_type *t, const char *name, uint32_t base, const sim_member **out, uint32_t *off, int *readonly)
 {
     int i;
     for (i = 0; i < t->nmembers; i++) {
         const sim_member *m = &t->members[i];
         if (m->name && m->name[0] && strcmp(m->name, name) == 0) {
+            *readonly |= t->is_const || (m->type && m->type->is_const);
             *out = m;
             *off = base + m->offset;
             return 1;
@@ -414,7 +590,7 @@ static int find_member(const sim_type *t, const char *name, uint32_t base, const
     for (i = 0; i < t->nmembers; i++) {
         const sim_member *m = &t->members[i];
         if ((!m->name || !m->name[0]) && m->type && (m->type->kind == SIM_T_STRUCT || m->type->kind == SIM_T_UNION))
-            if (find_member(m->type, name, base + m->offset, out, off)) return 1;
+            if (find_member(m->type, name, base + m->offset, out, off, readonly)) { *readonly |= t->is_const; return 1; }
     }
     return 0;
 }
@@ -441,10 +617,10 @@ static int add_step(sim_ref *r, int op, int64_t v, char *err, size_t errlen)
 
 /* `:バイト数` で使う大きさだけの符号なし整数型 */
 static const sim_type g_sized_types[8] = {
-    {SIM_T_UINT, "1 バイト", 1, NULL, 0, NULL, 0}, {SIM_T_UINT, "2 バイト", 2, NULL, 0, NULL, 0},
-    {SIM_T_UINT, "3 バイト", 3, NULL, 0, NULL, 0}, {SIM_T_UINT, "4 バイト", 4, NULL, 0, NULL, 0},
-    {SIM_T_UINT, "5 バイト", 5, NULL, 0, NULL, 0}, {SIM_T_UINT, "6 バイト", 6, NULL, 0, NULL, 0},
-    {SIM_T_UINT, "7 バイト", 7, NULL, 0, NULL, 0}, {SIM_T_UINT, "8 バイト", 8, NULL, 0, NULL, 0},
+    {SIM_T_UINT, "1 バイト", 1, NULL, 0, NULL, 0,0}, {SIM_T_UINT, "2 バイト", 2, NULL, 0, NULL, 0,0},
+    {SIM_T_UINT, "3 バイト", 3, NULL, 0, NULL, 0,0}, {SIM_T_UINT, "4 バイト", 4, NULL, 0, NULL, 0,0},
+    {SIM_T_UINT, "5 バイト", 5, NULL, 0, NULL, 0,0}, {SIM_T_UINT, "6 バイト", 6, NULL, 0, NULL, 0,0},
+    {SIM_T_UINT, "7 バイト", 7, NULL, 0, NULL, 0,0}, {SIM_T_UINT, "8 バイト", 8, NULL, 0, NULL, 0,0},
 };
 
 /* 末尾の ":数字" を取り除いてバイト数を返す。なければ 0、範囲外なら -1 */
@@ -590,6 +766,16 @@ static sim_ref *ref_parse(sim_ctx *c, const char *text, char *err, size_t errlen
     }
 
     /* 後置 */
+    if (r->base == RB_MEM) {
+        size_t i;
+        for (i = 0; i < c->ndefined; i++) {
+            const defined_var *d = c->defined[i];
+            if (d->var.addr == r->addr && d->var.type == r->type && !strcmp(d->var.name, id1)) {
+                r->bit_off = d->bit_offset; r->bit_size = d->bit_size;
+            }
+        }
+    }
+    if (r->type) r->is_const |= object_const(r->type);
     for (;;) {
         while (*p == ' ') p++;
         if (!*p) break;
@@ -609,12 +795,14 @@ static sim_ref *ref_parse(sim_ctx *c, const char *text, char *err, size_t errlen
                 if (!st || st->kind != SIM_T_PTR) FAIL("'%s': '->' の左がポインタではありません", buf);
                 if (add_step_t(r, ST_DEREF, 0, st, err, errlen)) { sim_ref_free(r); return NULL; }
                 st = st->target;
+                /* ポインタの先の const は、指す先の型だけで決まる（ポインタ自身の const は引き継がない） */
+                r->is_const = st ? object_const(st) : 0;
             } else if (at_slot(r)) {
                 FAIL("'%s': 構造体の値渡しの引数/戻り値のメンバには対応していません", buf);
             }
             if (!st || (st->kind != SIM_T_STRUCT && st->kind != SIM_T_UNION))
                 FAIL("'%s': メンバ '%s' の左が構造体/共用体ではありません", buf, mn);
-            if (!find_member(st, mn, 0, &m, &off)) {
+            if (!find_member(st, mn, 0, &m, &off, &r->is_const)) {
                 sim_buf b;
                 int i;
                 sim_buf_init(&b);
@@ -672,12 +860,14 @@ static sim_ref *ref_parse(sim_ctx *c, const char *text, char *err, size_t errlen
                 if (add_step_t(r, ST_DEREF, 0, t, err, errlen)) { sim_ref_free(r); return NULL; }
                 if (idx && add_step(r, ST_ADD, (int64_t)(idx * t->target->size), err, errlen)) { sim_ref_free(r); return NULL; }
                 r->type = t->target;
+                r->is_const = object_const(r->type);
             } else {
                 FAIL("'%s': 添字の左が配列でもポインタでもありません", buf);
             }
         } else {
             FAIL("'%s': '%s' の部分が読めません", buf, p);
         }
+        if (r->type) r->is_const |= object_const(r->type);
     }
 
     /* ":バイト数" で型を上書きする（型の分からないシンボルや、型と違う幅で読みたいとき） */
@@ -707,6 +897,7 @@ static sim_ref *ref_parse(sim_ctx *c, const char *text, char *err, size_t errlen
         if (add_step_t(r, ST_DEREF, 0, r->type, err, errlen)) { sim_ref_free(r); return NULL; }
         r->multi = 1;
         r->elem = r->type->target;
+        r->is_const = r->elem->is_const;
         r->count = 0;
         break;
     default:
@@ -722,6 +913,14 @@ static sim_ref *ref_parse(sim_ctx *c, const char *text, char *err, size_t errlen
             FAIL("'%s': 値として読めない型です", buf);
         }
     }
+    if (r->multi) {
+        const sim_type *e=r->elem;
+        while (e) {
+            r->is_const |= e->is_const;
+            if (e->kind!=SIM_T_ARRAY) break;
+            e=e->target;
+        }
+    }
     if (r->multi && !describe) {
         if (!r->elem) FAIL("'%s': 要素の型が分かりません", buf);
         if (r->elem->kind == SIM_T_ARRAY) {
@@ -734,6 +933,9 @@ static sim_ref *ref_parse(sim_ctx *c, const char *text, char *err, size_t errlen
         }
         if (!scalar_kind(r->elem)) FAIL("'%s': 要素が構造体などです。要素を 1 つずつ指定してください（例: %s[0].メンバ）", buf, buf);
     }
+    /* 引数を起点とする参照は、関数へ渡す入力データの準備に使う。
+       型のconstは残したまま、呼び出し側のスロットとその先は設定可能にする。 */
+    if (r->base == RB_ARG) r->is_const = 0;
 #undef FAIL
     return r;
 }
@@ -1153,7 +1355,7 @@ int sim_parse_cell(const char *text, size_t len, sim_cellval *out, char *err, si
 
 /* ================================================================ 書き込みと比較 */
 
-static const sim_type g_byte_type = {SIM_T_UINT, "unsigned char", 1, NULL, 0, NULL, 0};
+static const sim_type g_byte_type = {SIM_T_UINT, "unsigned char", 1, NULL, 0, NULL, 0,0};
 
 /* 値が書き込める形か（const・戻り値・'$' の値・要素数・型に収まるか）をメモリに触れずに確かめる。
  * ポインタの先（NULL など）のようにその時のメモリで決まるものは確かめない */

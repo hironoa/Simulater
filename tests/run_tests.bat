@@ -10,6 +10,7 @@ rem Prints the number of checks run and failed at the end; exits 1 when any chec
 rem Messages are ASCII only so that cmd.exe parses this file the same on any code page.
 rem Japanese error messages are checked through their ASCII parts.
 setlocal EnableExtensions
+if not defined CC set "CC=clang"
 
 set "ROOT=%~dp0.."
 for %%I in ("%ROOT%") do set "ROOT=%%~fI"
@@ -221,7 +222,7 @@ set /a PORT=20000 + %RANDOM% %% 20000
 set "U=http://127.0.0.1:%PORT%"
 mkdir "%WORK%\gui"
 copy /y "%SIM%" "%WORK%\gui\sim_guitest.exe" >nul
-start "" /b "%WORK%\gui\sim_guitest.exe" gui --no-browser --port %PORT% --period-ms 2 > "%WORK%\gui.log" 2>&1
+start "" /b "%WORK%\gui\sim_guitest.exe" gui --no-browser --cfg "%T%\defines\type_contract.cfg" --port %PORT% --period-ms 2 > "%WORK%\gui.log" 2>&1
 set TRIES=0
 :wait_up
 curl -s "%U%/api/info" > "%WORK%\info.json" 2>nul
@@ -231,6 +232,7 @@ if %TRIES% geq 20 goto up
 ping -n 2 127.0.0.1 >nul
 goto wait_up
 :up
+for /f "usebackq delims=" %%N in ("%T%\defines\type_contract_ro.txt") do call :const_api "%%N"
 findstr /l /c:"\"func\":\"TEST_cycle\",\"functions\":[" "%WORK%\info.json" >nul
 if errorlevel 1 (call :ng "/api/info") else (call :ok "/api/info")
 curl -s "%U%/api/symbols?q=flag.fan&limit=10" > "%WORK%\sym.json"
@@ -873,6 +875,177 @@ curl -s --max-time 2 -X POST --data-binary "@%T%\gui\reset.json" "%U%/api/contro
 taskkill /f /im sim_guitest.exe >nul 2>nul
 
 :after_gui
+"%CC%" -std=c11 -O2 -Wall -Wextra -D_DEFAULT_SOURCE -I"%ROOT%\runtime\include" -I"%ROOT%\runtime\src" "%T%\tools\check_csv_table.c" "%ROOT%\runtime\src\sim_csv.c" "%ROOT%\runtime\src\sim_expr.c" "%ROOT%\runtime\src\sim_util.c" "%ROOT%\runtime\src\sim_platform.c" "%ROOT%\runtime\src\sim_cfg.c" "%ROOT%\runtime\backends\mock\mock_backend.c" -o "%WORK%\csv_table.exe" -lws2_32
+set RC=%ERRORLEVEL%
+if "%RC%"=="0" (call :ok "build GUI CSV table checks") else (call :ng "build GUI CSV table checks")
+"%WORK%\csv_table.exe"
+set RC=%ERRORLEVEL%
+if "%RC%"=="0" (call :ok "GUI CSV initialization expansion") else (call :ng "GUI CSV initialization expansion")
+"%CC%" -std=c11 -O2 -Wall -Wextra -D_DEFAULT_SOURCE -I"%ROOT%\runtime\include" -I"%ROOT%\runtime\src" "%T%\tools\check_const_refs.c" "%ROOT%\runtime\src\sim_expr.c" "%ROOT%\runtime\src\sim_util.c" "%ROOT%\runtime\src\sim_platform.c" "%ROOT%\runtime\src\sim_cfg.c" "%ROOT%\runtime\backends\mock\mock_backend.c" -o "%WORK%\const_refs.exe" -lws2_32
+set RC=%ERRORLEVEL%
+if "%RC%"=="0" (call :ok "build const argument checks") else (call :ng "build const argument checks")
+"%WORK%\const_refs.exe"
+set RC=%ERRORLEVEL%
+if "%RC%"=="0" (call :ok "mock const argument preparation and symbol writable") else (call :ng "mock const argument preparation and symbol writable")
+for /f "usebackq delims=" %%N in ("%T%\defines\type_contract_ro.txt") do call :const_csv "%%N"
+echo == definition text contracts
+"%CC%" -std=c11 -O2 -Wall -Wextra -D_DEFAULT_SOURCE -I"%ROOT%\runtime\include" -I"%ROOT%\runtime\src" "%T%\tools\check_defines_text.c" "%ROOT%\runtime\src\sim_defines.c" "%ROOT%\runtime\src\sim_ppexpr.c" "%ROOT%\runtime\src\sim_mtpj.c" "%ROOT%\runtime\src\sim_expr.c" "%ROOT%\runtime\src\sim_cfg.c" "%ROOT%\runtime\src\sim_util.c" "%ROOT%\runtime\src\sim_platform.c" "%ROOT%\runtime\backends\mock\mock_backend.c" -o "%WORK%\check_defines_text.exe" -lws2_32
+set RC=%ERRORLEVEL%
+if "%RC%"=="0" (call :ok "build defines text checks") else (call :ng "build defines text checks")
+"%WORK%\check_defines_text.exe" "%T%" "%WORK%" > "%WORK%\defines_text.log" 2>&1
+set RC=%ERRORLEVEL%
+if "%RC%"=="0" (call :ok "definition addresses counts and malformed inputs") else (call :ng "definition addresses counts and malformed inputs" & type "%WORK%\defines_text.log")
+findstr /l /c:"200 malformed inputs" "%WORK%\defines_text.log" >nul
+set RC=%ERRORLEVEL%
+if "%RC%"=="0" (call :ok "definition text ran nonzero checks") else (call :ng "definition text ran nonzero checks")
+
+echo == modi and configured definitions
+call :run_cmp modi_every.csv 0
+call :run_cmp modi_auto_once.csv 0
+"%SIM%" run "%T%\csv\modi_once.csv" --csv-init=once -o "%WORK%\modi_once" --fixed-time > "%WORK%\modi.log" 2>&1
+set RC=%ERRORLEVEL%
+if "%RC%"=="0" (call :ok "modi once") else (call :ng "modi once")
+fc /b "%WORK%\modi_once\modi_once.csv" "%T%\expected\modi_once.csv" >nul
+set RC=%ERRORLEVEL%
+if "%RC%"=="0" (call :ok "modi preserves metadata bytes") else (call :ng "modi preserves metadata bytes")
+"%SIM%" run "%WORK%\modi_once\modi_once.csv" --csv-init=once -o "%WORK%\modi_reread" > "%WORK%\modi.log" 2>&1
+set RC=%ERRORLEVEL%
+if "%RC%"=="0" (call :ok "modi result reread") else (call :ng "modi result reread")
+> "%WORK%\csv_init.cfg" echo csv_init = once
+"%SIM%" run "%T%\csv\modi_every.csv" --cfg "%WORK%\csv_init.cfg" --csv-init=every -o "%WORK%\modi_override" > "%WORK%\modi.log" 2>&1
+set RC=%ERRORLEVEL%
+if "%RC%"=="0" (call :ok "csv init CLI overrides cfg") else (call :ng "csv init CLI overrides cfg")
+"%SIM%" run "%T%\defines\mock.csv" --cfg "%T%\defines\mock.cfg" -o "%WORK%\header_mock" > "%WORK%\header.log" 2>&1
+set RC=%ERRORLEVEL%
+if "%RC%"=="0" (call :ok "header names and modi mock") else (call :ng "header names and modi mock")
+"%SIM%" list --cfg "%T%\defines\mock.cfg" > "%WORK%\header_list.log" 2>&1
+findstr /l /c:"df" "%WORK%\header_list.log" >nul
+if errorlevel 1 (call :ng "header list mock") else (call :ok "header list mock")
+"%SIM%" run "%T%\defines\var_mock.csv" --cfg "%T%\defines\var_mock.cfg" -o "%WORK%\var_mock" > "%WORK%\var.log" 2>&1
+set RC=%ERRORLEVEL%
+if "%RC%"=="0" (call :ok "var and varfile mock") else (call :ng "var and varfile mock")
+
+echo == defines: value expressions mock
+"%SIM%" run "%T%\defines\value_forms.csv" --cfg "%T%\defines\value_forms.cfg" -o "%WORK%\value_good" > "%WORK%\value_good.log" 2>&1
+set RC=%ERRORLEVEL%
+if "%RC%"=="0" (call :ok "direct lvalues typed CSV and physical offsets") else (call :ng "direct lvalues typed CSV and physical offsets")
+
+"%SIM%" info -v --cfg "%T%\defines\value_forms.cfg" > "%WORK%\value_info.log" 2>&1
+set RC=%ERRORLEVEL%
+if "%RC%"=="0" (call :ok "value forms load") else (call :ng "value forms load")
+for /f "usebackq" %%A in ("%T%\defines\value_rejected.txt") do call :value_reject %%A
+
+echo == defines: declarators mock
+call :decl_run declarators declarators
+call :decl_run declarator_supported declarator_supported
+call :decl_run declarator_members declarator_supported
+"%SIM%" list --cfg "%T%\defines\declarators.cfg" > "%WORK%\decl_list.log" 2>&1
+call :decl_type WIDE u64
+"%SIM%" list --cfg "%T%\defines\declarator_supported.cfg" > "%WORK%\decl_list.log" 2>&1
+for /f "usebackq tokens=1,2" %%A in ("%T%\defines\declarator_types.txt") do call :decl_type %%A %%B
+"%SIM%" info -v --cfg "%T%\defines\declarator_rejected.cfg" > "%WORK%\decl_info.log" 2>&1
+set RC=%ERRORLEVEL%
+if "%RC%"=="0" (call :ok "unsupported types do not abort loading") else (call :ng "unsupported types do not abort loading")
+rem Each unresolved name is checked in verbose info and rejected by CSV below.
+"%SIM%" list --cfg "%T%\defines\declarator_rejected.cfg" > "%WORK%\decl_list.log" 2>&1
+for /f "usebackq" %%A in ("%T%\defines\declarator_rejected.txt") do call :decl_reject %%A declarator_rejected
+"%SIM%" list --cfg "%T%\defines\declarator_packed.cfg" > "%WORK%\decl_list.log" 2>&1
+"%SIM%" info -v --cfg "%T%\defines\declarator_packed.cfg" > "%WORK%\decl_info.log" 2>&1
+call :decl_reject DECLPACKED declarator_packed
+call :decl_reject DECLEXPLICITPACKED declarator_packed
+"%SIM%" list --cfg "%T%\defines\declarator_lmf.cfg" > "%WORK%\decl_list.log" 2>&1
+"%SIM%" info -v --cfg "%T%\defines\declarator_lmf.cfg" > "%WORK%\decl_info.log" 2>&1
+call :decl_reject WIDE declarator_lmf
+call :decl_reject SIGNEDWIDE declarator_lmf
+
+echo == defines: compile switches (mock)
+rem findstr patterns are plain substrings (letters, digits, spaces, underscores). Macro values such as
+rem PRODUCT=2 go into the cfg file, not onto a call line, because cmd splits arguments at "=".
+"%CC%" -std=c11 -O2 -Wall -Wextra -I"%ROOT%\runtime\src" "%T%\tools\check_ppexpr.c" "%ROOT%\runtime\src\sim_ppexpr.c" -o "%WORK%\check_ppexpr.exe" > "%WORK%\ppexpr_build.log" 2>&1
+set RC=%ERRORLEVEL%
+if "%RC%"=="0" (call :ok "build check_ppexpr") else (call :ng "build check_ppexpr" & type "%WORK%\ppexpr_build.log")
+"%WORK%\check_ppexpr.exe" > "%WORK%\ppexpr.log" 2>&1
+set RC=%ERRORLEVEL%
+if "%RC%"=="0" (call :ok "preprocessor expression evaluator boundary cases") else (call :ng "preprocessor expression evaluator boundary cases" & type "%WORK%\ppexpr.log")
+findstr /l /c:"cases, 0 failed" "%WORK%\ppexpr.log" >nul
+if errorlevel 1 (call :ng "preprocessor expression evaluator ran its cases") else (call :ok "preprocessor expression evaluator ran its cases")
+
+call :cond_cfg
+call :cond_list
+call :cond_has "0x0F964 COND_REG" "cond: no switch takes the else branch"
+call :cond_has "0x0F967 COND_SIM" "cond: ifdef SIM undefined"
+call :cond_has "0x0F96F COND_INC" "cond: switch from an included header"
+call :cond_has "0x0F977 COND_SHORT" "cond: short circuit"
+call :cond_has "0x0F978 COND_NEAR_OK" "cond: nearest same-named header"
+call :cond_has "0x0F97F COND_K0R" "cond: no implicit macros on mock"
+call :cond_info_has "if-indeterminate" "cond: info shows the condition counts"
+call :cond_info_has "COND_UNSET_SWITCH" "cond: undefined identifier listed"
+call :cond_info_lacks "COND_PRODUCT_H" "cond: include guard not listed"
+call :cond_info_has "defines time" "cond: info shows the time breakdown"
+
+call :cond_cfg
+>> "%WORK%\cond.cfg" echo cdef = PRODUCT=2
+>> "%WORK%\cond.cfg" echo cdef = SIM
+>> "%WORK%\cond.cfg" echo cdef = COND_A
+call :cond_list
+call :cond_has "0x0F962 COND_REG" "cond: cdef PRODUCT 2 selects the elif branch"
+call :cond_has "0x0F966 COND_SIM" "cond: ifdef SIM defined"
+call :cond_has "0x0F968 COND_AB" "cond: defined A and not defined B"
+call :cond_has "0x0F96B COND_NEST" "cond: nested conditions"
+call :cond_has "0x0F96E COND_INC" "cond: included header sees SIM"
+"%SIM%" list --cfg "%WORK%\cond.cfg" --where COND_REG > "%WORK%\cond_list.log" 2>&1
+call :cond_has "cond_product.h:15" "cond: list where shows file and line"
+"%SIM%" run "%T%\defines\cond_mock.csv" --cfg "%WORK%\cond.cfg" -o "%WORK%\cond_out" > "%WORK%\cond_run.log" 2>&1
+set RC=%ERRORLEVEL%
+if "%RC%"=="0" (call :ok "cond: 16-bit typedef and struct member with PRODUCT 2") else (call :ng "cond: 16-bit typedef and struct member with PRODUCT 2")
+
+call :cond_cfg
+>> "%WORK%\cond.cfg" echo cdef = PRODUCT=1
+call :cond_list
+call :cond_has "0x0F960 COND_REG" "cond: cdef PRODUCT 1 selects the if branch"
+"%SIM%" run "%T%\defines\cond_mock.csv" --cfg "%WORK%\cond.cfg" -o "%WORK%\cond_out" > "%WORK%\cond_run.log" 2>&1
+set RC=%ERRORLEVEL%
+if "%RC%"=="2" (call :ok "cond: PRODUCT 1 has no 16-bit register or member") else (call :ng "cond: PRODUCT 1 has no 16-bit register or member")
+
+call :cond_cfg
+>> "%WORK%\cond.cfg" echo cdef = SIM
+>> "%WORK%\cond.cfg" echo cundef = SIM
+call :cond_list
+call :cond_has "0x0F967 COND_SIM" "cond: cundef removes a cdef"
+
+call :cond_cfg
+>> "%WORK%\cond.cfg" echo cdef = PRODUCT=2
+>> "%WORK%\cond.cfg" echo defines_cond = off
+call :cond_list
+call :cond_has "0x0F960 COND_REG" "cond: defines_cond off reads every branch"
+
+call :cond_cfg
+>> "%WORK%\cond.cfg" echo mtpj = %T%\defines\cond\cond_test.mtpj
+call :cond_list
+call :cond_has "0x0F960 COND_REG" "cond: mtpj macro definitions"
+call :cond_has "0x0F966 COND_SIM" "cond: mtpj macro without a value"
+call :cond_has "0x0F969 COND_AB" "cond: mtpj macro undefinition"
+call :cond_has "0x0F982 COND_ESC" "cond: mtpj value with XML escapes"
+call :cond_info_has "MTPJ_ONLY" "cond: info lists the mtpj macros"
+call :cond_info_has "DefaultBuild" "cond: info shows the build mode"
+call :cond_info_lacks "ASM_ONLY" "cond: assembler macros not used"
+>> "%WORK%\cond.cfg" echo mtpj_mode = ProductB
+call :cond_list
+call :cond_has "0x0F962 COND_REG" "cond: mtpj_mode selects another build mode"
+call :cond_info_has "9BAD LINE" "cond: unreadable mtpj line reported"
+
+call :cond_cfg
+>> "%WORK%\cond.cfg" echo cdef = 1BAD
+"%SIM%" info --cfg "%WORK%\cond.cfg" > "%WORK%\cond_info.log" 2>&1
+set RC=%ERRORLEVEL%
+if "%RC%"=="2" (call :ok "cond: bad cdef rejected") else (call :ng "cond: bad cdef rejected")
+call :cond_cfg
+>> "%WORK%\cond.cfg" echo mtpj = %T%\defines\cond\cond_test.mtpj
+>> "%WORK%\cond.cfg" echo mtpj_mode = NoSuchMode
+"%SIM%" info --cfg "%WORK%\cond.cfg" > "%WORK%\cond_info.log" 2>&1
+set RC=%ERRORLEVEL%
+if "%RC%"=="2" (call :ok "cond: unknown build mode rejected") else (call :ng "cond: unknown build mode rejected")
+
 set /a MOCK_TOTAL=PASS+FAIL
 set /a MOCK_FAIL=FAIL
 call "%T%\rl78\run_rl78_tests.bat"
@@ -944,3 +1117,99 @@ if exist "%WORK%\collision\out_%1" (call :ng "output collision %1 creates nothin
 findstr /l /c:"out_%1" "%WORK%\collision.log" >nul
 if errorlevel 1 (call :ng "output collision %1 names the output folder") else (call :ok "output collision %1 names the output folder")
 exit /b 0
+
+:cond_cfg
+> "%WORK%\cond.cfg" echo defines = %T%\defines\cond
+>> "%WORK%\cond.cfg" echo defines_near_base = 0
+exit /b 0
+
+:cond_list
+"%SIM%" list --cfg "%WORK%\cond.cfg" COND_ > "%WORK%\cond_list.log" 2>&1
+"%SIM%" info --cfg "%WORK%\cond.cfg" > "%WORK%\cond_info.log" 2>&1
+exit /b 0
+
+:cond_has
+findstr /l /c:"%~1" "%WORK%\cond_list.log" >nul
+if errorlevel 1 (call :ng "%~2") else (call :ok "%~2")
+exit /b 0
+
+:cond_info_has
+findstr /l /c:"%~1" "%WORK%\cond_info.log" >nul
+if errorlevel 1 (call :ng "%~2") else (call :ok "%~2")
+exit /b 0
+
+:cond_info_lacks
+findstr /l /c:"%~1" "%WORK%\cond_info.log" >nul
+if errorlevel 1 (call :ok "%~2") else (call :ng "%~2")
+exit /b 0
+
+:decl_run
+"%SIM%" run "%T%\defines\%~1.csv" --cfg "%T%\defines\%~2.cfg" -o "%WORK%\decl" > "%WORK%\decl.log" 2>&1
+set RC=%ERRORLEVEL%
+if not "%RC%"=="0" (call :ng "%~1 typed CSV" & type "%WORK%\decl.log" & exit /b 0)
+findstr /l /c:"OK 1" "%WORK%\decl.log" >nul
+set RC=%ERRORLEVEL%
+if "%RC%"=="0" (call :ok "%~1 typed CSV") else (call :ng "%~1 typed CSV")
+exit /b 0
+
+:decl_type
+set "DECLPAD=%~1                                        "
+set DECLPAD=%DECLPAD:~0,40%
+findstr /l /c:"%DECLPAD% %~2 " "%WORK%\decl_list.log" >nul
+set RC=%ERRORLEVEL%
+if "%RC%"=="0" (call :ok "%~1 type %~2") else (call :ng "%~1 type %~2")
+exit /b 0
+
+:decl_reject
+findstr /l /c:" %~1 " "%WORK%\decl_list.log" >nul
+set RC=%ERRORLEVEL%
+if "%RC%"=="0" (call :ng "%~1 must not be registered" & exit /b 0)
+findstr /l /c:" %~1 " "%WORK%\decl_info.log" >nul
+set RC=%ERRORLEVEL%
+if not "%RC%"=="0" (call :ng "%~1 must be counted as unresolved" & exit /b 0)
+> "%WORK%\decl_bad.csv" echo mod,intr_tm00,rejected,1,0
+>> "%WORK%\decl_bad.csv" echo #COMMENT,%~1
+>> "%WORK%\decl_bad.csv" echo ,1
+"%SIM%" run "%WORK%\decl_bad.csv" --cfg "%T%\defines\%~2.cfg" -o "%WORK%\decl_bad" > "%WORK%\decl_bad.log" 2>&1
+set RC=%ERRORLEVEL%
+if "%RC%"=="2" (call :ok "%~1 counted and unusable") else (call :ng "%~1 counted and unusable")
+exit /b 0
+
+:value_reject
+for /f "tokens=1 delims=_" %%A in ("%~1") do set "VALUEFIND=%%A"
+findstr /l /c:" %VALUEFIND%" "%WORK%\value_info.log" >nul
+set RC=%ERRORLEVEL%
+if not "%RC%"=="0" (call :ng "%~1 verbose source" & exit /b 0)
+> "%WORK%\value_bad.csv" echo mod,intr_tm00,rejected,1,0
+>> "%WORK%\value_bad.csv" echo #COMMENT,%~1
+>> "%WORK%\value_bad.csv" echo ,1
+"%SIM%" run "%WORK%\value_bad.csv" --cfg "%T%\defines\value_forms.cfg" -o "%WORK%\value_bad" > "%WORK%\value_bad.log" 2>&1
+set RC=%ERRORLEVEL%
+if "%RC%"=="2" (call :ok "%~1 counted and unusable") else (call :ng "%~1 counted and unusable")
+exit /b 0
+
+:const_csv
+> "%WORK%\const_path.csv" echo mod,TEST_cycle,const path,1,0
+>> "%WORK%\const_path.csv" echo #COMMENT,%~1
+>> "%WORK%\const_path.csv" echo ,123
+"%SIM%" run "%WORK%\const_path.csv" --cfg "%T%\defines\type_contract.cfg" -o "%WORK%\const_path" > "%WORK%\const_path.log" 2>&1
+set RC=%ERRORLEVEL%
+if "%RC%"=="2" (call :ok "const CSV %~1") else (call :ng "const CSV %~1")
+exit /b
+
+:const_api
+curl -s -G --data-urlencode "q=%~1" "%U%/api/symbols" > "%WORK%\const_symbol.json"
+set RC=%ERRORLEVEL%
+if not "%RC%"=="0" (call :ng "const symbols HTTP %~1" & exit /b)
+rem The shared symbols helper also checks exact writable metadata and members.
+findstr /l /c:"false" "%WORK%\const_symbol.json" >nul
+set RC=%ERRORLEVEL%
+if "%RC%"=="0" (call :ok "const symbol %~1 readonly") else (call :ng "const symbol %~1 readonly")
+> "%WORK%\const_write.json" echo {"name":"%~1","value":"123"}
+curl -s -o "%WORK%\const_write.out" -w "%%{http_code}" -X POST --data-binary "@%WORK%\const_write.json" "%U%/api/write" > "%WORK%\const_status.txt"
+set RC=%ERRORLEVEL%
+if not "%RC%"=="0" (call :ng "const write HTTP %~1" & exit /b)
+findstr /l /c:"400" "%WORK%\const_status.txt" >nul
+set RC=%ERRORLEVEL%
+if "%RC%"=="0" (call :ok "const API rejects %~1") else (call :ng "const API rejects %~1")
+exit /b

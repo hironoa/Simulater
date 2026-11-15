@@ -21,6 +21,19 @@ for k in dwarf2 dwarf3 dwarf4 nodwarf; do
     check "mkabs $k" "$WORK/mkabs" "$k" "$WORK/tp_$k.abs"
 done
 TP="$WORK/tp_dwarf2.abs"
+for version in dwarf2 dwarf3 dwarf4; do
+    for const_name in g_const_mixed.ro 'g_const_elements[0]' g_const_record.w; do
+        printf 'mod,f_bits,const path,1,0\n#COMMENT,%s\n,1\n' "$const_name" > "$WORK/dwarf_const.csv"
+        "$RS" run --abs "$WORK/tp_$version.abs" "$WORK/dwarf_const.csv" -o "$WORK/dwarf_const" > "$WORK/dwarf_const.log" 2>&1
+        rc=$?
+        check "$version const input $const_name rejected" test "$rc" -eq 2
+    done
+    printf 'mod,f_bits,const path,1,1\n#COMMENT,g_const_mixed.rw,g_const_mixed.rw\n,123,123\n' > "$WORK/dwarf_mutable.csv"
+    "$RS" run --abs "$WORK/tp_$version.abs" "$WORK/dwarf_mutable.csv" -o "$WORK/dwarf_mutable" > "$WORK/dwarf_const.log" 2>&1
+    rc=$?
+    check "$version mutable sibling writable" test "$rc" -eq 0
+done
+
 
 # 結果の合計行を確かめる: rl78_run 名前 期待する終了コード 期待する合計 -- sim run の引数...
 rl78_run() {
@@ -157,6 +170,39 @@ rl78_run "sim.cfg の abs = で .abs を指定（--abs なし）" 0 "合計: 総
 echo "== LMF: CA78K0R"
 check "mklmf build" "$CC" -std=c11 -O2 -Wall -Wextra -o "$WORK/mklmf" "$T/tools/mklmf.c"
 check "mklmf normal" "$WORK/mklmf" normal "$WORK/test.lmf"
+# 引数constは呼び出し側の準備を妨げず、通常の変数constは保護する。
+rl78_run "LMF const arguments and returns (5 rows)" 0 "総数 5, OK 5, NG 0" -- --abs "$WORK/test.lmf" "$R/csv/const_lmf.csv"
+for version in dwarf2 dwarf3 dwarf4; do
+    rl78_run "$version const arguments and returns (10 rows)" 0 "総数 10, OK 10, NG 0" -- --abs "$WORK/tp_$version.abs" "$R/csv/const_dwarf.csv"
+    for const_name in g_const_pointer 'g_const_target[0]' 'f_bits@constant' 'f_bits@local_const'; do
+        printf 'mod,f_bits,const protection,3,0\n#COMMENT,0xFE190:2,0xFE192:2,%s\n,0xE11A,0xE11A,1\n' "$const_name" > "$WORK/const_reject.csv"
+        "$RS" run --abs "$WORK/tp_$version.abs" "$WORK/const_reject.csv" -o "$WORK/const_out" > "$WORK/const.log" 2>&1
+        rc=$?
+        check "$version protects $const_name" test "$rc" -eq 2
+    done
+    # ポインタ自身が const でも、指す先（const でない型）には書ける
+    printf 'mod,f_bits,const pointer target,3,0\n#COMMENT,0xFE190:2,0xFE192:2,g_const_pointer[0]\n,0xE11A,0xE11A,1\n' > "$WORK/const_ok.csv"
+    "$RS" run --abs "$WORK/tp_$version.abs" "$WORK/const_ok.csv" -o "$WORK/const_out" > "$WORK/const.log" 2>&1
+    rc=$?
+    check "$version allows g_const_pointer[0]" test "$rc" -eq 0
+    printf 'skip = constret:231\n' > "$WORK/const_skip.cfg"
+    printf 'mod,constret,const skip,0,1\n#COMMENT,constret@@\n,231\n' > "$WORK/const_skip.csv"
+    rl78_run "$version const return skip" 0 "総数 1, OK 1, NG 0" -- --abs "$WORK/tp_$version.abs" --cfg "$WORK/const_skip.cfg" "$WORK/const_skip.csv"
+done
+for const_name in constant const_pointer 'cycle@constant'; do
+    printf 'mod,cycle,const protection,2,0\n#COMMENT,0xFE03E:2,%s\n,0xE004,1\n' "$const_name" > "$WORK/const_reject.csv"
+    "$RS" run --abs "$WORK/test.lmf" "$WORK/const_reject.csv" -o "$WORK/const_out" > "$WORK/const.log" 2>&1
+    rc=$?
+    check "LMF protects $const_name" test "$rc" -eq 2
+done
+printf 'mod,cycle,const pointer target,2,0\n#COMMENT,0xFE03E:2,const_pointer[0]\n,0xE004,1\n' > "$WORK/const_ok.csv"
+"$RS" run --abs "$WORK/test.lmf" "$WORK/const_ok.csv" -o "$WORK/const_out" > "$WORK/const.log" 2>&1
+rc=$?
+check "LMF allows const_pointer[0]" test "$rc" -eq 0
+printf 'skip = constbyte:231\n' > "$WORK/const_skip.cfg"
+printf 'mod,constbyte,const skip,0,1\n#COMMENT,constbyte@@\n,231\n' > "$WORK/const_skip.csv"
+rl78_run "LMF const return skip" 0 "総数 1, OK 1, NG 0" -- --abs "$WORK/test.lmf" --cfg "$WORK/const_skip.cfg" "$WORK/const_skip.csv"
+
 "$RS" info --abs "$WORK/test.lmf" -v > "$WORK/lmf.log" 2>&1
 check "LMF info" test $? -eq 0
 check "LMF ABI auto" contains "$WORK/lmf.log" "ABI: ca78k0r"
@@ -166,7 +212,7 @@ check "LMF unknown storage warning" contains "$WORK/lmf.log" "0x55"
 check "LMF list" test $? -eq 0
 check "LMF array symbol" contains "$WORK/lmf.list" "arr"
 rl78_run "LMF ABI/startup/driver/unknown size (16 rows)" 0 "総数 16, OK 16, NG 0" -- --abs "$WORK/test.lmf" "$R/csv/lmf_call.csv"
-rl78_run "LMF first long rejected" 1 "AX/BC" -- --abs "$WORK/test.lmf" "$R/csv/lmf_first32.csv"
+rl78_run "LMF first long accepted" 0 "総数 1, OK 0, NG 0, NO Check 1" -- --abs "$WORK/test.lmf" "$R/csv/lmf_first32.csv"
 printf 'abi = ccrl\n' > "$WORK/abi.cfg"
 "$RS" info --abs "$WORK/test.lmf" --cfg "$WORK/abi.cfg" > "$WORK/lmf.log" 2>&1
 check "ABI override" contains "$WORK/lmf.log" "ABI: ccrl"
@@ -192,6 +238,47 @@ check "mklmf no debug" "$WORK/mklmf" nodbg "$WORK/nodbg.lmf"
 printf '#05\n;FF PUBLIC\n010010E_main\n0100141_cycle\n02FE000_init\n02FE002_ticks\n=\n' > "$WORK/nodbg.sym"
 printf 'mod,cycle,SYM fallback,1,2\n#COMMENT,ticks:2,init:2,ticks:2\n,4,0x1234,5\n' > "$WORK/sym.csv"
 rl78_run "LMF without debug uses SYM addresses" 0 "総数 1, OK 1, NG 0" -- --abs "$WORK/nodbg.lmf" "$WORK/sym.csv"
+
+echo "== CA78K0R probe: 型・サイズ・初期値・呼び出し"
+PROBE="$T/ca78k0r_probe/DefaultBuild/ca78k0r_probe.lmf"
+B="$ROOT/runtime/backends/rl78"
+check "LMF type checker build" "$CC" -std=c11 -O2 -Wall -Wextra -D_DEFAULT_SOURCE -I"$B" -I"$ROOT/runtime/include" -I"$ROOT/runtime/src" \
+    "$T/tools/check_lmf_types.c" "$B/rl78_lmf.c" "$B/rl78_elf.c" "$B/rl78_dwarf.c" "$B/rl78_map.c" "$ROOT/runtime/src/sim_util.c" -o "$WORK/lmf_types"
+check "LMF argument top const removed and variable return const retained" "$WORK/lmf_types" "$WORK/test.lmf" constargs
+"$WORK/lmf_types" "$PROBE" probe > "$WORK/probe_types.txt" 2> "$WORK/probe_warnings.txt"
+check "probe: 57 variables / 17 functions / 0 LMF warnings" test $? -eq 0
+check "probe: reference types, addresses, sizes and function signatures" cmp -s "$WORK/probe_types.txt" "$R/expected/probe_types.txt"
+if ! cmp -s "$WORK/probe_types.txt" "$R/expected/probe_types.txt"; then diff -u "$R/expected/probe_types.txt" "$WORK/probe_types.txt"; fi
+"$RS" list --abs "$PROBE" > "$WORK/probe_list_raw.txt" 2> "$WORK/probe_stderr.txt"
+check "probe: sim list exit 0" test $? -eq 0
+"$WORK/lmf_types" "$WORK/probe_list_raw.txt" list > "$WORK/probe_list.txt"
+check "probe: sim list has 57 typed variables" test $? -eq 0
+check "probe: sim list matches lmfdump declarations / addresses" cmp -s "$WORK/probe_list.txt" "$R/expected/probe_list.txt"
+"$RS" info --abs "$PROBE" -v > "$WORK/probe_info.txt" 2>&1
+check "probe: startup reaches main" contains "$WORK/probe_info.txt" "main（0x00637）"
+check "probe: no loader or SYM warnings" sh -c '! grep -E "LMF:|SYM:.*(食い違い|一致しません)|読み込みの警告" "$1"' sh "$WORK/probe_info.txt"
+grep -E "^LMF 型診断:|^型情報なし" "$WORK/probe_info.txt"
+rl78_run "probe initial values (50 rows)" 0 "総数 50, OK 50, NG 0" -- --abs "$PROBE" "$R/csv/probe_init.csv"
+rl78_run "probe calls (17 rows)" 0 "総数 17, OK 17, NG 0" -- --abs "$PROBE" "$R/csv/probe_call.csv"
+rl78_run "probe member / bitfield writes (2 rows)" 0 "総数 2, OK 2, NG 0" -- --abs "$PROBE" "$R/csv/probe_write.csv"
+rl78_run "probe struct return rejected" 2 "戻り値は構造体" -- --abs "$PROBE" "$R/csv/probe_ret_struct.csv"
+rl78_run "probe float argument rejected" 2 "浮動小数の引数には対応していません" -- --abs "$PROBE" "$R/csv/probe_float.csv"
+rl78_run "probe char_unsigned" 0 "総数 1, OK 1, NG 0" -- --abs "$PROBE" --cfg "$R/cfg/probe_char.cfg" "$R/csv/probe_char.csv"
+rl78_run "generated struct, bitfields and far pointer" 0 "総数 1, OK 1, NG 0" -- --abs "$WORK/test.lmf" "$R/csv/lmf_aggregate.csv"
+for mode in tagref tagaux tagmismatch tagend tagcycle tagwidth; do
+    check "mklmf $mode" "$WORK/mklmf" "$mode" "$WORK/badtag.lmf"
+    "$WORK/lmf_types" "$WORK/badtag.lmf" bad > "$WORK/tag.log" 2>&1
+    check "malformed $mode becomes unknown without recursion or crash" test $? -eq 0
+done
+# 型を解決できない引数（struct 型・不正なタグ参照・補助サイズ 2）を整数の規約で呼ばない。変数は従来どおり生の整数。
+check "mklmf badarg" "$WORK/mklmf" badarg "$WORK/badarg.lmf"
+rl78_run "unresolved LMF argument type is rejected instead of called as integer" 2 "関数 'badarg' の引数 'a'" -- --abs "$WORK/badarg.lmf" "$R/csv/lmf_badarg.csv"
+check "unresolved LMF argument: no call was made" contains "$WORK/r.log" "総数 0, OK 0, NG 0, NO Check 0, エラー 1"
+rl78_run "unresolved LMF variable still falls back to raw integer" 0 "総数 1, OK 1, NG 0" -- --abs "$WORK/badarg.lmf" "$R/csv/lmf_badvar.csv"
+"$RS" list --abs "$WORK/badarg.lmf" bad > "$WORK/badarg.list" 2>/dev/null
+check "unresolved LMF argument listed as unknown type" contains "$WORK/badarg.list" "badarg(? a)"
+check "unresolved LMF variable listed as uint16" grep -q "badvar  *uint16" "$WORK/badarg.list"
+rl78_run "probe 32-bit skip result" 0 "総数 1, OK 1, NG 0" -- --abs "$PROBE" --cfg "$R/cfg/probe_skip.cfg" "$R/csv/probe_skip.csv"
 
 echo "== 本物のバックエンドの GUI サーバ"
 if command -v curl > /dev/null 2>&1; then
@@ -297,6 +384,44 @@ data: {"step":0,"names":["TEST_cycle_cnt","g_ms_tick","g_st.fb"],"values":[0,0,0
     GUI_PID=""
 fi
 
+
+echo "== スタートアップ診断と skip / poke"
+check "mkabs startup" "$WORK/mkabs" startup "$WORK/startup.abs"
+"$RS" info --abs "$WORK/startup.abs" --cfg "$R/cfg/startup_limit.cfg" --trace-startup --trace-head 1 --trace-tail 1 > "$WORK/trace.log" 2>&1
+RC=$?
+check "SFR待ち: 終了コード2" test "$RC" -eq 2
+check "SFR待ち: 呼び出し履歴" contains "$WORK/trace.log" "#1"
+check "SFR待ち: 停止した関数" contains "$WORK/trace.log" "wait_sfr+0x"
+check "SFR待ち: ループ範囲" contains "$WORK/trace.log" "ループ候補: 0x"
+check "SFR待ち: SFR番地" contains "$WORK/trace.log" "0xFFFA2 = 0x00"
+check "SFR待ち: 拡張SFR番地" contains "$WORK/trace.log" "0xF00A8 = 0x00"
+check "SFR待ち: バックトレース" contains "$WORK/trace.log" "trace_boot+0x"
+"$RS" info --abs "$WORK/startup.abs" --cfg "$R/cfg/startup_limit.cfg" > "$WORK/plain.log" 2>&1
+RC=$?
+check "診断なしの失敗: 終了コード2" test "$RC" -eq 2
+check "診断なしの失敗: 案内" contains "$WORK/plain.log" "--trace-startup"
+for setting in poke skip; do
+    "$RS" info --abs "$WORK/startup.abs" --cfg "$R/cfg/startup_$setting.cfg" --trace-startup > "$WORK/trace.log" 2>&1
+    RC=$?
+    check "$setting で起動成功" test "$RC" -eq 0
+    check "$setting 成功時も診断表示" contains "$WORK/trace.log" "スタートアップ診断: 成功"
+    check "$setting 設定一覧" contains "$WORK/trace.log" "$setting ="
+done
+rl78_run "CC-RL: nested/direct/byte/long skip and poke snapshot" 0 "総数 5, OK 5, NG 0" -- --abs "$TP" --cfg "$R/cfg/skip_ccrl.cfg" "$R/csv/skip_ccrl.csv"
+rl78_run "CA78K0R: byte/word/long skip" 0 "総数 3, OK 3, NG 0" -- --abs "$WORK/test.lmf" --cfg "$R/cfg/skip_ca.cfg" "$R/csv/skip_ca.csv"
+for setting in 'skip = missing_function' 'skip = read_io:garbage' 'skip = read_io:0x10000' 'skip = f_ll:1' 'poke = bad:1' 'poke = 0x100000:1' 'poke = 0xFFFA2:bad' 'poke = 0xFFFA2:256' 'poke = 0xFFFFF:1:2' 'poke = 0xFFFA2:1:0' 'poke = 0xFFFA2:1:5' 'poke = 0xFFFA2:1:1:2'; do
+    printf '%s\n' "$setting" > "$WORK/bad_startup.cfg"
+    "$RS" info --abs "$TP" --cfg "$WORK/bad_startup.cfg" > "$WORK/trace.log" 2>&1
+    RC=$?
+    check "設定エラー2: $setting" test "$RC" -eq 2
+done
+printf 'stub = read_io:AMSTB_read_io\nskip = read_io\n' > "$WORK/bad_startup.cfg"
+"$RS" info --abs "$TP" --cfg "$WORK/bad_startup.cfg" > "$WORK/trace.log" 2>&1
+RC=$?
+check "stub と skip の重複はエラー2" test "$RC" -eq 2
+# 診断のフックが内蔵SP/PSW/MDU動作を壊さないことは通常版と同じCSVで確かめる。
+rl78_run "診断モードでも既存CC-RL ABI/MDUの43行が同じ" 0 "総数 43, OK 43, NG 0" -- --abs "$TP" --trace-startup "$R/csv/synth_call.csv" "$R/csv/synth_types.csv"
+
 echo "== 性能の実測（本物のバックエンド）"
 N=${RL78_PERF_ROWS:-20000}
 awk -v n="$N" 'BEGIN { printf "mod,TEST_cycle,性能,0,1\n#COMMENT,TEST_cycle_cnt\n"; for (i = 1; i <= n / 10; i++) printf ",%d\n", i }' > "$WORK/perf_cycle.csv"
@@ -320,3 +445,133 @@ perf "f_neg（2 命令）を $N 回（1 呼び出しあたりのオーバーヘ�
 OVH=$(awk '/^実行時間/ { gsub(/[^0-9.]/, " "); split($0, a, " "); print a[2] }' "$WORK/perf.log")
 [ -n "$OVH" ] && echo "        1 呼び出しあたり: $(awk -v s="$OVH" -v n="$N" 'BEGIN { printf "%.2f us", s / n * 1e6 }')（対象関数の呼び出しにかかった時間 / 回数。CSV の処理は含まない）"
 perf "G23 の get_fclk_freq_hz を $N 回" --abs "$G23" "$WORK/perf_g23.csv"
+
+# Both execution paths must reach main with checksummed breakpoint bytes.
+check "mkabs checksum" "$WORK/mkabs" checksum "$WORK/checksum.abs"
+check "mklmf checksum" "$WORK/mklmf" checksum "$WORK/checksum.lmf"
+for image in ccrl ca; do
+    if [ "$image" = ccrl ]; then rom_image="$WORK/checksum.abs"; else rom_image="$WORK/checksum.lmf"; fi
+    for mode in plain trace; do
+        trace_opt=""
+        if [ "$mode" = trace ]; then trace_opt="--trace-startup"; fi
+        "$RS" info --abs "$rom_image" --cfg "$R/cfg/rom_check_$image.cfg" $trace_opt > "$WORK/rom_$image.$mode.log" 2>&1
+        RC=$?
+        check "ROM checksum $image $mode reaches main" test "$RC" -eq 0
+        check "ROM checksum $image $mode init_end" contains "$WORK/rom_$image.$mode.log" "初期設定終了: main"
+        grep "初期設定終了:" "$WORK/rom_$image.$mode.log" > "$WORK/count_$image.$mode"
+        cat "$R/cfg/rom_check_$image.cfg" > "$WORK/corrupt.cfg"
+        if [ "$image" = ccrl ]; then echo "poke = 0x13D:0"; else echo "poke = 0x10E:0"; fi >> "$WORK/corrupt.cfg"
+        "$RS" info --abs "$rom_image" --cfg "$WORK/corrupt.cfg" $trace_opt > "$WORK/reset_$image.$mode.log" 2>&1
+        RC=$?
+        check "ROM checksum $image $mode rejects corruption" test "$RC" -eq 2
+        check "ROM checksum $image $mode FFH diagnostic" contains "$WORK/reset_$image.$mode.log" "命令コード FFH を実行しました"
+        check "ROM checksum $image $mode original bytes" contains "$WORK/reset_$image.$mode.log" "original bytes=FF"
+        check "ROM checksum $image $mode genuine FF has no breakpoint" contains "$WORK/reset_$image.$mode.log" "breakpoint=none"
+        if [ "$mode" = trace ]; then
+            check "ROM checksum $image trace branch history" contains "$WORK/reset_$image.$mode.log" "FFH 経路:"
+            check "ROM checksum $image trace memory observations" contains "$WORK/reset_$image.$mode.log" "last read:"
+        fi
+
+    done
+    check "ROM checksum $image equal instruction and clock counts" cmp -s "$WORK/count_$image.plain" "$WORK/count_$image.trace"
+done
+
+# PSW slow-path immediately before init_end must not resume past the trap.
+check "mklmf diagnostics" "$WORK/mklmf" diagnostics "$WORK/diag.lmf"
+"$RS" info --abs "$WORK/diag.lmf" > "$WORK/diag.log" 2>&1
+RC=$?
+check "LMF diagnostic symbols load" test "$RC" -eq 0
+check "LMF summary groups repeated combinations" contains "$WORK/diag.log" "0x55 0xDEAD 0x0000 normal 2"
+check "LMF summary distinguishes absolute section" contains "$WORK/diag.log" "0x55 0xDEAD 0x0000 absolute 1"
+check "LMF summary hides names" sh -c '! grep -F -q diag_unknown_a "$1"' sh "$WORK/diag.log"
+"$RS" info --abs "$WORK/diag.lmf" -v -v > "$WORK/diag_names.log" 2>&1
+check "LMF double verbose reveals examples" contains "$WORK/diag_names.log" "diag_unknown_a"
+printf 'mod,cycle,t,3,3\n#COMMENT,abs_reg:1,diag_unknown_a:2,asm_data:2,abs_reg:1,diag_unknown_a:2,asm_data:2\n,0xAB,0x1234,0x5678,0xAB,0x1234,0x5678\n' > "$WORK/diag.csv"
+rl78_run "LMF absolute and unknown names remain writable" 0 "総数 1, OK 1, NG 0" -- --abs "$WORK/diag.lmf" "$WORK/diag.csv"
+
+check "mkabs boundary" "$WORK/mkabs" boundary "$WORK/boundary.abs"
+printf 'init_end = boundary_end\nstub = boundary_end:boundary_short\nskip = boundary_short\n' > "$WORK/boundary.cfg"
+for mode in plain trace; do
+    trace_opt=""
+    [ "$mode" = trace ] && trace_opt="--trace-startup"
+    "$RS" info --abs "$WORK/boundary.abs" --cfg "$WORK/boundary.cfg" $trace_opt > "$WORK/boundary.$mode.log" 2>&1
+    RC=$?
+    check "boundary $mode stops at init_end FFH" test "$RC" -eq 0
+    if [ "$mode" = trace ]; then
+        check "trace compares both startup paths" contains "$WORK/boundary.$mode.log" "startup compare: MATCH"
+        check "trace identifies normal result" contains "$WORK/boundary.$mode.log" "normal: OK"
+        check "trace identifies diagnostic result" contains "$WORK/boundary.$mode.log" "diagnostic: OK"
+    fi
+    printf 'mod,boundary_end,overlap,0,0\n#COMMENT\nstep 1\nstep 2\nmod,boundary_end,reset,0,0\n#COMMENT\nstep 1\n' > "$WORK/boundary.csv"
+    rl78_run "boundary $mode stub skip overlap and snapshot reset" 0 "総数 3, OK 0, NG 0, NO Check 3" -- --abs "$WORK/boundary.abs" --cfg "$WORK/boundary.cfg" $trace_opt "$WORK/boundary.csv"
+done
+
+rl78_run "header names and modi initializers real" 0 "総数 2, OK 2, NG 0" -- --abs "$WORK/test.lmf" --cfg "$T/defines/real.cfg" "$T/defines/real.csv"
+"$RS" info --abs "$WORK/test.lmf" --cfg "$T/defines/real.cfg" > "$WORK/header_info.log" 2>&1
+RC=$?
+check "header definitions info" test "$RC" -eq 0
+check "recursive header file count" contains "$WORK/header_info.log" "defines files=4"
+"$RS" list --abs "$WORK/test.lmf" --cfg "$T/defines/real.cfg" > "$WORK/header_list.log" 2>&1
+check "header names in list real" contains "$WORK/header_list.log" "df_unit"
+check "macros in C files" contains "$WORK/header_list.log" "MORE"
+
+rl78_run "var and varfile real" 0 "総数 1, OK 1, NG 0" -- --abs "$WORK/test.lmf" --cfg "$T/defines/var_real.cfg" "$T/defines/var_real.csv"
+
+rl78_run "header arrays nested union and mixed bit storage real" 0 "総数 1, OK 1, NG 0" -- --abs "$WORK/test.lmf" --cfg "$T/defines/real.cfg" "$T/defines/types_real.csv"
+
+echo "== defines: コンパイルスイッチ（本物）"
+cond_suite "cond real" "$RS" FF9 "$T/defines/cond_real.csv" "--abs $WORK/test.lmf"
+# コンパイラが暗黙に定義するマクロ: lmf なら CA78K0R、ELF なら CC-RL。cundef で外せる
+cond_cfg
+cond_list -v
+check "cond real: LMF defines the CA78K0R implicit macros" sh -c 'grep -q -E "^var  0xFF97E COND_K0R +u8 " "$1" && grep -q -F "implicit: __K0R__=1, __CA78K0R__=1" "$2"' sh "$WORK/cond_list.log" "$WORK/cond_info.log"
+check "cond real: implicit macro is not reported as undefined" sh -c '! grep -q "^  __K0R__ (" "$1"' sh "$WORK/cond_info.log"
+cond_cfg 'cundef = __K0R__' 'char_unsigned = on'
+cond_list -v
+check "cond real: cundef removes an implicit macro" cond_at 7F COND_K0R u8
+check "cond real: char_unsigned = on adds __CHAR_UNSIGNED__" contains "$WORK/cond_info.log" "implicit: __CA78K0R__=1, __CHAR_UNSIGNED__=1"
+COND_ARGS="--abs $TP"
+cond_cfg
+cond_list -v
+check "cond real: ELF defines the CC-RL implicit macros" sh -c 'grep -q -E "^var  0xFF97F COND_K0R +u8 " "$1" && grep -q -F "implicit: __CCRL__=1, __CCRL=1, __RL78__=1, __RENESAS__=1" "$2"' sh "$WORK/cond_list.log" "$WORK/cond_info.log"
+# probe の lmf と、その CS+ プロジェクトファイル（定義マクロは空）の組み合わせ
+"$RS" info --abs "$PROBE" --mtpj "$T/ca78k0r_probe/ca78k0r_probe.mtpj" --defines "$COND" --cdef PRODUCT=2 > "$WORK/cond_probe.log" 2>&1
+check "cond real: probe lmf with its own project file" sh -c '[ "$1" -eq 0 ] && grep -q -F "mtpj macro definitions (0): なし" "$2" && grep -q "cdef implicit=2 mtpj=0 cfg=0 cli=1 cundef=0" "$2"' sh "$?" "$WORK/cond_probe.log"
+
+# Socket-dependent integration. Keep explicit failure rather than reporting
+# zero checks as success when this sandbox cannot listen.
+PORT=31329
+U="http://127.0.0.1:$PORT"
+printf 'defines = %s/defines/types\ndefines = %s/defines/device/regs.h\nvar = NAMED_P1 : u8 @ 0xFFF01\n' "$T" "$T" >> "$WORK/boundary.cfg"
+"$RS" gui --abs "$WORK/boundary.abs" --cfg "$WORK/boundary.cfg" --func boundary_end --no-browser --port "$PORT" > "$WORK/boundary_gui.log" 2>&1 &
+GUI_PID=$!
+i=0
+while [ $i -lt 50 ]; do
+    curl -s "$U/api/info" > "$WORK/boundary_info.json" 2>/dev/null && break
+    kill -0 "$GUI_PID" 2>/dev/null || break
+    i=$((i+1)); sleep 0.1
+done
+if curl -s "$U/api/info" > "$WORK/boundary_info.json" 2>/dev/null; then
+    ok "boundary GUI listens"
+    for body in '{"cmd":"step"}' '{"cmd":"reset"}' '{"func":"boundary_short","cmd":"step"}' '{"func":"boundary_end","cmd":"step"}'; do
+        CODE=$(curl -s -o "$WORK/boundary_ctl.json" -w '%{http_code}' -X POST -d "$body" "$U/api/control")
+        check "GUI breakpoint roles after reset or function change" test "$CODE" = 200
+        check "GUI breakpoint role call has no error" contains "$WORK/boundary_ctl.json" '"error":""'
+    done
+    curl -s "$U/api/symbols?q=df_unit" > "$WORK/boundary_search.json"
+    check "GUI searches header definition" contains "$WORK/boundary_search.json" "df_unit"
+    CODE=$(curl -s -o "$WORK/boundary_watch.json" -w '%{http_code}' -X POST -d '{"names":["df_unit","NAMED_P1"]}' "$U/api/watch")
+    check "GUI watches header and named address" test "$CODE" = 200
+    CODE=$(curl -s -o "$WORK/boundary_write.json" -w '%{http_code}' -X POST -d '{"name":"NAMED_P1","value":"0xAB"}' "$U/api/write")
+    check "GUI writes named address" test "$CODE" = 200
+    printf 'modi,boundary_end,t,1,1\n#InitWheneverCall,df_unit\n0,5\n#COMMENT,Fs_ckc_css,df_unit\n,1,5\n,0,5\n' > "$WORK/boundary_play.csv"
+    CODE=$(curl -s -o "$WORK/boundary_load.json" -w '%{http_code}' -X POST --data-binary "@$WORK/boundary_play.csv" "$U/api/load-csv")
+    check "GUI modi playback load" test "$CODE" = 200
+    sleep 0.1
+    curl -s "$U/api/export.csv" > "$WORK/boundary_export.csv"
+    rl78_run "GUI modi recording reruns with initialization" 0 "NG 0" -- --abs "$WORK/boundary.abs" --cfg "$WORK/boundary.cfg" "$WORK/boundary_export.csv"
+else
+    ng "GUI boundary and header integration unavailable" "$(head -2 "$WORK/boundary_gui.log")"
+fi
+kill "$GUI_PID" 2>/dev/null; wait "$GUI_PID" 2>/dev/null
+GUI_PID=""

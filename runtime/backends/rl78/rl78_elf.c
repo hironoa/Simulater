@@ -79,6 +79,9 @@ void rl78_warns_free(rl78_warns *w)
     int i;
     for (i = 0; i < w->n; i++) free(w->msg[i]);
     free(w->msg);
+    for (size_t j=0; j<w->nlmf_groups; j++)
+        for (unsigned k=0; k<w->lmf_groups[j].nnames; k++) free(w->lmf_groups[j].names[k]);
+    free(w->lmf_groups); w->lmf_groups = NULL; w->nlmf_groups = 0;
     w->msg = NULL;
     w->n = w->cap = 0;
 }

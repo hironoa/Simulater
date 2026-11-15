@@ -152,6 +152,13 @@ int main(int argc, char **argv)
     visit(exact(all, "g_cal.hi"), 0);
     sj_free(all);
     if (strcmp(argv[3], "mock") == 0) {
+        expect_symbol("CONST_ARRAY[0]", "const u8", 1, 0);
+        expect_symbol("MIXED.field", "const u8", 1, 0);
+        expect_symbol("DIRECT_FIELD", "const u8", 1, 0);
+        expect_symbol("CONST_STRUCT.mutable", "u8", 1, 0);
+        expect_symbol("CONST_STRUCT.data[0]", "u8", 1, 0);
+        expect_symbol("DIRECT_NEST", "u8", 1, 0);
+        expect_symbol("MIXED.mutable", "u8", 1, 1);
         expect_symbol("g_cal_const.lo", "uint8", 1, 0);
         expect_symbol("g_cal_array[1].lo", "uint8", 1, 1);
         expect_symbol("gp_cal->lo", "uint8", 1, 1);
@@ -164,6 +171,20 @@ int main(int argc, char **argv)
         require(all->type == SJ_ARR && all->nchild > 0 && all->nchild < 5000, "all symbols, no truncation");
         for (e = all->child; e; e = e->next) visit(e, 0);
         sj_free(all);
+    }
+    if (strcmp(argv[3], "mock") != 0) {
+        const char *names[] = {"@p", "@p[0]", "constptrconst@p[0]"};
+        unsigned k;
+        reset = request("/api/control", NULL, "{\"cmd\":\"reset\",\"func\":\"constptrconst\"}");
+        sj_free(reset);
+        for (k = 0; k < sizeof names / sizeof names[0]; k++) {
+            all = request("/api/symbols", names[k], NULL);
+            e = exact(all, names[k]);
+            require(sj_get_bool(e, "writable", 0), names[k]);
+            sj_free(all);
+        }
+        reset = request("/api/control", NULL, "{\"cmd\":\"reset\",\"func\":\"TEST_cycle\"}");
+        sj_free(reset);
     }
     reset = request("/api/control", NULL, "{\"cmd\":\"reset\"}");
     sj_free(reset);

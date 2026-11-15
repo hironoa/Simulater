@@ -1,0 +1,6 @@
+modi,intr_tm00,header initialization,1,4
+#InitWheneverCall,df_unit,Fs_ckc_mcm0
+0,5,1
+#COMMENT,Fs_ckc_css,df_unit,Fs_ckc_mcm0,Fs_ckc_css,u1g_reg_ckc
+,1,5,1,1,80
+,0,5,1,0,16

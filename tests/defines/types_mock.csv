@@ -1,0 +1,3 @@
+mod,intr_tm00,nested structures,4,5
+#COMMENT,NESTED.arr[2],NESTED.u.w,MIXED.b,MIXED.c,NESTED_BYTE,NESTED.u.w,MIXED_RAW,MIXED.b,MIXED.c
+,0x55,0x1234,5,1,0x55,0x1234,5,5,1

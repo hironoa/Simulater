@@ -412,6 +412,7 @@ enum {
     L_p_u8, L_cu8, L_p_cu8, L_fp_u8, L_fp_cu8,
     L_S, L_p_S, L_cS, L_p_cS, L_W, L_E, L_E2, L_U, L_C, L_Cu, L_Cs,
     L_a_u8_8, L_a_u8_3, L_a_u8_2_3, L_cu16, L_a_cu16_4, L_cchar, L_a_cchar_8, L_vu16, L_a_u8_2,
+    L_const_mixed, L_cp_u8, L_cp_cu8,
     L_last
 };
 
@@ -486,11 +487,18 @@ static void common_types(void)
     d_array(L_a_u8_8, L_u8, 8, 0);
     d_array(L_a_u8_3, L_u8, 3, 0);
     d_array(L_a_u8_2_3, L_u8, 2, 3);
+    d_qual(L_cp_u8, TAG_const, L_p_u8);
+    d_qual(L_cp_cu8, TAG_const, L_p_cu8);
     d_qual(L_cu16, TAG_const, L_u16);
     d_array(L_a_cu16_4, L_cu16, 4, 0);
     d_qual(L_cchar, TAG_const, L_char);
     d_array(L_a_cchar_8, L_cchar, 8, 0);
     d_qual(L_vu16, TAG_volatile, L_u16);
+    d_agg_begin(L_const_mixed, TAG_struct, "ConstMixed", 4);
+    d_member("ro", L_cu8, 0);
+    d_member("rw", L_u8, 1);
+    d_member("data", L_a_u8_2, 2);
+    d_end();
 }
 
 #define FUNC(n, ext, ret) d_func_begin(n, faddr(n), fend(faddr(n)), ext, ret)
@@ -502,6 +510,12 @@ static void build_dwarf(void)
     common_types();
     d_var("g_a", L_u8, 0xFE100, 1);           /* 最初の変数に独自属性が付く */
     d_junk_tag();
+    d_var("g_const_pointer", L_cp_u8, 0xFE190, 1);
+    d_var("g_const_target", L_p_cu8, 0xFE192, 1);
+    d_var("g_const_mixed", L_const_mixed, 0xFE180, 1);
+    d_var("g_const_elements", L_a_cu16_4, 0xFE184, 1);
+    d_var("g_const_record", L_cS, 0xFE18C, 1);
+
     d_var("g_c", L_u8, 0xFE101, 1);
     d_var("g_b", L_u16, 0xFE102, 1);
     d_var("g_l", L_u32, 0xFE104, 1);
@@ -550,16 +564,31 @@ static void build_dwarf(void)
     FUNC("f_args8", 1, L_u8); d_param("a1", L_u8); d_param("a2", L_u8); d_param("a3", L_u8); d_param("a4", L_u8);
     d_param("a5", L_u8); d_param("a6", L_u8); d_param("a7", L_u8); d_param("a8", L_u8); d_end();
     FUNC("f_mix2", 1, -1); d_param("a", L_u8); d_param("b", L_u32); d_param("c", L_u16); d_param("d", L_u8); d_end();
+    /* 同じ機械語を異なるconstシグネチャで呼ぶ。 */
+    d_func_begin("constptr", TP_f_sum, fend(TP_f_sum), 1, L_u16);
+    d_param("p", L_cp_u8); d_param("n", L_u8); d_end();
+    d_func_begin("ptrconst", TP_f_sum, fend(TP_f_sum), 1, L_u16);
+    d_param("p", L_p_cu8); d_param("n", L_u8); d_end();
+    d_func_begin("constptrconst", TP_f_sum, fend(TP_f_sum), 1, L_u16);
+    d_param("p", L_cp_cu8); d_param("n", L_u8); d_end();
+    d_func_begin("constvalue", TP_f_mix, fend(TP_f_mix), 1, L_cu16);
+    d_param("a", L_cu8); d_param("b", L_cu16); d_param("c", L_cu8); d_end();
+    d_func_begin("constret", TP_f_far_read, fend(TP_f_far_read), 1, L_cu8);
+    d_param("p", L_fp_cu8); d_end();
+    d_func_begin("constretptr", TP_f_far_write, fend(TP_f_far_write), 1, L_fp_cu8);
+    d_param("p", L_fp_u8); d_param("v", L_u8); d_end();
     FUNC("f_far_read", 1, L_u8); d_param("p", L_fp_cu8); d_end();
     FUNC("f_far_write", 1, L_fp_u8); d_param("p", L_fp_u8); d_param("v", L_u8); d_end();
     FUNC("f_far2", 1, -1); d_param("a", L_u8); d_param("w", L_u16); d_param("p", L_fp_u8); d_end();
     FUNC("f_far3", 1, -1); d_param("w1", L_u16); d_param("w2", L_u16); d_param("p", L_fp_u8); d_end();
-    FUNC("f_sum", 1, L_u16); d_param("p", L_p_cu8); d_param("n", L_u8); d_end();
+    FUNC("f_sum", 1, L_u16); d_param("p", L_p_u8); d_param("n", L_u8); d_end();
     FUNC("f_neg", 1, L_i8); d_end();
     FUNC("f_float", 1, L_float); d_end();
     FUNC("f_ll", 1, L_llong); d_end();
-    FUNC("f_ptr_struct", 1, L_u16); d_param("p", L_p_cS); d_end();
-    FUNC("f_bits", 1, -1); d_end();
+    FUNC("f_ptr_struct", 1, L_u16); d_param("p", L_p_S); d_end();
+    FUNC("f_bits", 1, -1);
+    d_var("constant", L_cu8, 0xFE194, 0);
+    d_local("local_const", L_cu8); d_end();
     FUNC("f_mulhu", 1, L_u32); d_param("a", L_u16); d_param("b", L_u16); d_end();
     FUNC("f_mdu", 1, L_u16); d_param("a", L_u16); d_param("b", L_u16); d_end();
     FUNC("read_io", 1, L_u16); d_end();
@@ -700,6 +729,8 @@ static void write_map(const char *path)
 int main(int argc, char **argv)
 {
     const char *kind, *out;
+    int startup = 0, checksum = 0, boundary = 0;
+    unsigned char vector[2];
     int nodw = 0, i, sh_symtab, sh_strtab;
     FILE *f;
     buf file = {0};
@@ -708,14 +739,20 @@ int main(int argc, char **argv)
     if (argc != 3) { fprintf(stderr, "使い方: mkabs dwarf2|dwarf3|dwarf4|nodwarf 出力.abs\n"); return 2; }
     kind = argv[1];
     out = argv[2];
-    if (!strcmp(kind, "dwarf2")) V = 2;
+    if (!strcmp(kind, "startup")) { V = 2; startup = 1; }
+    else if (!strcmp(kind, "boundary")) { V = 2; boundary = 1; }
+    else if (!strcmp(kind, "checksum")) { V = 2; checksum = 1; }
+    else if (!strcmp(kind, "dwarf2")) V = 2;
     else if (!strcmp(kind, "dwarf3")) V = 3;
     else if (!strcmp(kind, "dwarf4")) V = 4;
     else if (!strcmp(kind, "nodwarf")) nodw = 1;
     else { fprintf(stderr, "mkabs: 種類 %s は分かりません\n", kind); return 2; }
 
     add_sect("", 0, 0, 0, NULL, 0);
-    add_sect(".vect", 1, 2, 0, TP_IMAGE, 2);
+    vector[0] = (unsigned char)TP_trace_boot; vector[1] = (unsigned char)(TP_trace_boot >> 8);
+    if (checksum) { vector[0] = (unsigned char)TP_rom_check; vector[1] = (unsigned char)(TP_rom_check >> 8); }
+    if (boundary) { vector[0] = (unsigned char)TP_boundary_boot; vector[1] = (unsigned char)(TP_boundary_boot >> 8); }
+    add_sect(".vect", 1, 2, 0, (startup || checksum || boundary) ? vector : TP_IMAGE, 2);
     add_sect(".text", 1, 6, 0x100, TP_IMAGE + 0x100, (unsigned)(TP_code_end - 0x100));
     add_sect(".data", 1, 2, 0x1800, TP_IMAGE + 0x1800, (unsigned)(TP_data_rom_end - TP_data_rom));
     add_sect(".sdata", 1, 2, 0x1840, TP_IMAGE + 0x1840, (unsigned)(TP_sdata_rom_end - TP_sdata_rom));
@@ -728,6 +765,8 @@ int main(int argc, char **argv)
     /* .symtab */
     putstr(&strtab, "");
     sym("", 0, 0, 0, 0, 0);
+    if (startup) { sym("_trace_boot", TP_trace_boot, TP_wait_sfr - TP_trace_boot, 1, 2, 2); sym("_wait_sfr", TP_wait_sfr, TP_code_end - TP_wait_sfr, 1, 2, 2); }
+    if (boundary) { sym("_boundary_end", TP_boundary_end, 1, 1, 2, 2); sym("_boundary_short", TP_boundary_short, 1, 1, 2, 2); }
     sym("testprog.s", 0, 0, 0, 4, 0xfff1);                 /* STT_FILE */
     sym("_intr_tm00@1", TP_intr_tm00, fend(TP_intr_tm00) - TP_intr_tm00, 0, 2, 2);
     sym("_s_i@1", 0xFE13A, 2, 0, 1, 7);

@@ -113,6 +113,174 @@ static void test_breakpoints(void)
     rl78_destroy(c);
 }
 
+/* A ROM checksum must see identical bytes with or without breakpoints.
+   Exercise aligned mirror pages (fast bus), direct/ES reads and both halves
+   of a word; breakpoints are instruction addresses, never operand bytes. */
+static void test_breakpoint_data(void)
+{
+    rl78_cpu *c = t_cpu(RL78_CORE_S3);
+    uint8_t rom[] = {0x42, 0x73};
+    unsigned half;
+    for (half = 0; half < 2; half++) {
+        rl78_snapshot *snap;
+        CHECK_EQ(t_load(c,
+            ".org 100H\nstart:\n"
+            "MOV A, !2000H\nMOV B, A\n"
+            "MOV A, !2001H\nMOV C, A\n"
+            "MOV ES, #0\nMOVW HL, #2000H\n"
+            "MOV A, ES:[HL]\nMOV !0FE80H, A\n"
+            "MOV A, ES:!2001H\nMOV !0FE81H, A\n"
+            "MOVW AX, ES:[HL]\nMOVW DE, AX\n"
+            "MOVW AX, !2000H\nMOVW HL, AX\n"), 0);
+        rl78_load(c, 0x2000, rom, sizeof rom);
+        CHECK_EQ(rl78_add_breakpoint(c, 0x2000 + half), 0);
+        CHECK_EQ(rl78_peek8(c, 0x2000 + half), rom[half]);
+        CHECK_EQ(rl78_read8(c, 0x2000 + half), rom[half]);
+        CHECK_EQ(rl78_read8(c, 0xF2000 + half), rom[half]);
+        CHECK_EQ(rl78_read16(c, 0x2000), 0x7342);
+        CHECK_EQ(rl78_read16(c, 0xF2000), 0x7342);
+        CHECK_EQ(rl78_memory(c)[0x2000 + half], rom[half]);
+        CHECK_EQ(rl78_run(c, 14), RL78_STOP_LIMIT);
+        CHECK_EQ(rl78_read16(c, 0xFFE80), 0x7342);
+        CHECK_EQ(rl78_get_reg(c, RL78_REG_B), 0x42);
+        CHECK_EQ(rl78_get_reg(c, RL78_REG_C), 0x73);
+        CHECK_EQ(rl78_get_reg(c, RL78_REG_DE), 0x7342);
+        CHECK_EQ(rl78_get_reg(c, RL78_REG_HL), 0x7342);
+        /* !2000 uses the F2000 mirror. ES:[HL] above uses ROM directly. */
+        snap = rl78_snapshot_create(c);
+        CHECK(snap != NULL);
+        if (snap) {
+            uint8_t changed[] = {0x19, 0x28};
+            rl78_load(c, 0x2000, changed, sizeof changed);
+            rl78_snapshot_restore(c, snap);
+            CHECK_EQ(rl78_read16(c, 0xF2000), 0x7342);
+            CHECK_EQ(rl78_memory(c)[0x2000 + half], rom[half]);
+            rl78_snapshot_free(snap);
+        }
+        rl78_clear_breakpoints(c);
+    }
+    rl78_destroy(c);
+}
+
+static void test_breakpoint_writes(void)
+{
+    rl78_cpu *c = t_cpu(RL78_CORE_S3);
+    rl78_snapshot *snap;
+    uint8_t bytes[] = {0x00, 0x51, 0x5A}; /* NOP; MOV A,#5AH */
+    rl78_load(c, 0xFFD00, bytes, sizeof bytes);
+    CHECK_EQ(rl78_add_breakpoint(c, 0xFFD01), 0);
+    rl78_write8(c, 0xFFD01, 0x00);
+    CHECK_EQ(rl78_read8(c, 0xFFD01), 0);
+    CHECK_EQ(rl78_memory(c)[0xFFD01], 0);
+    rl78_write16(c, 0xFFD00, 0x5100);
+    CHECK_EQ(rl78_read16(c, 0xFFD00), 0x5100);
+    snap = rl78_snapshot_create(c);
+    CHECK(snap != NULL);
+    if (snap) {
+        rl78_clear_breakpoints(c);
+        rl78_write16(c, 0xFFD00, 0);
+        CHECK_EQ(rl78_add_breakpoint(c, 0xFFD02), 0);
+        rl78_snapshot_restore(c, snap);
+        CHECK_EQ(rl78_read16(c, 0xFFD00), 0x5100);
+        CHECK_EQ(rl78_read8(c, 0xFFD02), 0x5A);
+        CHECK_EQ(rl78_breakpoint_count(c), 1); /* current breakpoints survive */
+        rl78_snapshot_free(snap);
+    }
+    rl78_clear_breakpoints(c);
+    CHECK_EQ(rl78_add_breakpoint(c, 0xFFD01), 0);
+    rl78_memory(c)[0xFFD02] = 0x79;
+    rl78_set_reg(c, RL78_REG_PC, 0xFFD00);
+    CHECK_EQ(rl78_run(c, 10), RL78_STOP_BREAKPOINT);
+    CHECK_EQ(rl78_step(c), RL78_STOP_LIMIT);
+    CHECK_EQ(rl78_get_reg(c, RL78_REG_A), 0x79);
+    CHECK_EQ(rl78_remove_breakpoint(c, 0xFFD01), 0);
+    CHECK_EQ(rl78_memory(c)[0xFFD01], 0x51);
+    rl78_destroy(c);
+}
+
+/* An internal bus/PSW boundary is not a public breakpoint resume. */
+static void test_breakpoint_internal_boundary(void)
+{
+    rl78_cpu *c = t_cpu(RL78_CORE_S3);
+    uint32_t stop;
+    CHECK_EQ(t_load(c, ".org 100H\nstart:\nMOV PSW, #06H\ntarget:\n.db 0FFH\n"), 0);
+    stop = (uint32_t)tasm_label("target");
+    CHECK_EQ(rl78_add_breakpoint(c, stop), 0);
+    CHECK_EQ(rl78_run(c, 10), RL78_STOP_BREAKPOINT);
+    CHECK_EQ(rl78_get_reg(c, RL78_REG_PC), stop);
+    CHECK_EQ(rl78_insn_count(c), 1);
+    CHECK_EQ(rl78_step(c), RL78_STOP_UNDEFINED); /* explicit public resume */
+    rl78_destroy(c);
+}
+
+/* Fixed seed, public interfaces only: mask state must agree with registration
+   across loads, bus writes, resets, hooks and changing snapshot contents. */
+static void test_breakpoint_sequences(void)
+{
+    rl78_cpu *c = t_cpu(RL78_CORE_S3);
+    rl78_snapshot *snap;
+    uint32_t rng = 0x71638A2Du;
+    uint8_t values[8] = {0}, saved[8] = {0}, active[8] = {0};
+    unsigned round, k;
+    snap = rl78_snapshot_create(c);
+    CHECK(snap != NULL);
+    if (!snap) { rl78_destroy(c); return; }
+    for (round = 0; round < 2000; round++) {
+        unsigned action, slot;
+        uint32_t addr;
+        uint8_t value;
+        rng ^= rng << 13; rng ^= rng >> 17; rng ^= rng << 5;
+        action = rng % 10; slot = (rng >> 8) % 8;
+        addr = 0xFFD04u + 4u * slot;
+        value = (rng & 0x10000u) ? 0xFF : 0;
+        switch (action) {
+        case 0: CHECK_EQ(rl78_add_breakpoint(c, addr), 0); active[slot] = 1; break;
+        case 1: CHECK_EQ(rl78_remove_breakpoint(c, addr), active[slot] ? 0 : -1); active[slot] = 0; break;
+        case 2: rl78_clear_breakpoints(c); memset(active, 0, sizeof active); break;
+        case 3: rl78_reset(c); break;
+        case 4: rl78_snapshot_update(c, snap); memcpy(saved, values, sizeof saved); break;
+        case 5: rl78_snapshot_restore(c, snap); memcpy(values, saved, sizeof values); break;
+        case 6: rl78_load(c, addr, &value, 1); values[slot] = value; break;
+        case 7: rl78_write8(c, addr, value); values[slot] = value; break;
+        case 8: rl78_clear_hooks(c); CHECK_EQ(rl78_add_hook(c, 0xFFD00, 0xFFE00, NULL, NULL, NULL), 0); break;
+        case 9: rl78_clear_hooks(c); break;
+        }
+        for (k = 0; k < 8; k++) {
+            uint8_t nop = 0;
+            uint32_t a = 0xFFD04u + 4u * k;
+            rl78_load(c, a - 1, &nop, 1);
+            CHECK_EQ(rl78_has_breakpoint(c, a), active[k]);
+            CHECK_EQ(rl78_peek8(c, a), values[k]);
+            CHECK_EQ(rl78_read8(c, a), values[k]);
+            rl78_set_reg(c, RL78_REG_PC, a - 1);
+            CHECK_EQ(rl78_run(c, 2), active[k] ? RL78_STOP_BREAKPOINT :
+                     values[k] == 0xFF ? RL78_STOP_UNDEFINED : RL78_STOP_LIMIT);
+            if (active[k]) CHECK_EQ(rl78_step(c), values[k] == 0xFF ? RL78_STOP_UNDEFINED : RL78_STOP_LIMIT);
+        }
+    }
+    rl78_snapshot_free(snap);
+    rl78_destroy(c);
+}
+
+static void test_reset_opcode(void)
+{
+    rl78_cpu *c = t_cpu(RL78_CORE_S3);
+    uint8_t code[] = {0x00, 0xFF, 0xEF, 0xFA};
+    rl78_load(c, 0x9000, code, sizeof code);
+    rl78_set_reg(c, RL78_REG_PC, 0x9000);
+    CHECK_EQ(rl78_add_breakpoint(c, 0x9001), 0);
+    CHECK_EQ(rl78_run(c, 10), RL78_STOP_BREAKPOINT);
+    CHECK_EQ(rl78_step(c), RL78_STOP_UNDEFINED);
+    CHECK_EQ(rl78_get_reg(c, RL78_REG_PC), 0x9001);
+    CHECK_EQ(rl78_insn_count(c), 1);
+    CHECK(strstr(rl78_last_fault(c)->text, "FFH") != NULL);
+    CHECK(strstr(rl78_last_fault(c)->text, "internal reset") != NULL);
+    rl78_clear_breakpoints(c);
+    CHECK_EQ(rl78_step(c), RL78_STOP_UNDEFINED);
+    CHECK(strstr(rl78_last_fault(c)->text, "FFH") != NULL);
+    rl78_destroy(c);
+}
+
 /* ---- hooks ---- */
 typedef struct {
     int reads, writes, last_size;
@@ -455,6 +623,11 @@ static void test_misc(void)
 void suite_api(void)
 {
     test_breakpoints();
+    test_breakpoint_data();
+    test_reset_opcode();
+    test_breakpoint_internal_boundary();
+    test_breakpoint_sequences();
+    test_breakpoint_writes();
     test_hooks();
     test_snapshot();
     test_sleep_policy();

@@ -65,7 +65,7 @@ static int scalar(const sim_type *t)
 {
     return t && (t->kind == SIM_T_INT || t->kind == SIM_T_UINT || t->kind == SIM_T_PTR || t->kind == SIM_T_BOOL) &&
            (t->size == 1 || t->size == 2 || t->size == 4) &&
-           !(t->kind == SIM_T_PTR && (t->size != 2 || (t->target && t->target->kind == SIM_T_FUNC)));
+           !(t->kind == SIM_T_PTR && (t->size != 2 && t->size != 4));
 }
 int rl78_ca78k0r_check(const sim_func *f, char *err, size_t errlen)
 {
@@ -79,9 +79,6 @@ int rl78_ca78k0r_check(const sim_func *f, char *err, size_t errlen)
         if (!scalar(t) || (t->kind == SIM_T_BOOL)) {
             snprintf(err,errlen,"CA78K0R: 関数 %s の第 %d 引数の型は未確認のため対応外です",f->name,i+1); return -1;
         }
-        if (i == 0 && t->size > 2) {
-            snprintf(err,errlen,"CA78K0R: 第1引数の4バイト値は AX/BC の順序が未確認のため対応外です"); return -1;
-        }
     }
     return 0;
 }
@@ -92,4 +89,24 @@ uint64_t rl78_ca78k0r_ret(rl78_cpu *cpu, const sim_type *t)
     if (t->size == 1) return lo & 0xFFu;
     if (t->size == 2) return lo;
     return lo | (uint64_t)rl78_get_reg(cpu,RL78_REG_DE) << 16;
+}
+
+/* 整数は生のビット列で指定する。符号付き負数は 0xFFFF などを使う。 */
+int rl78_abi_check_skip(int ca, const sim_type *t, uint64_t value)
+{
+    if (!t || (t->kind != SIM_T_INT && t->kind != SIM_T_UINT && t->kind != SIM_T_BOOL &&
+        !(t->kind == SIM_T_PTR && (t->size == 2 || (ca && t->size == 4))))) return -1;
+    if (t->size != 1 && t->size != 2 && t->size != 4) return -1;
+    if (t->kind == SIM_T_BOOL && value > 1) return -1;
+    return value <= (t->size == 4 ? UINT32_MAX : (UINT64_C(1) << (8 * t->size)) - 1) ? 0 : -1;
+}
+void rl78_abi_set_ret(rl78_cpu *cpu, int ca, const sim_type *t, uint64_t value)
+{
+    if (ca && t->kind == SIM_T_BOOL) {
+        rl78_set_reg(cpu, RL78_REG_PSW, (rl78_get_reg(cpu, RL78_REG_PSW) & ~1u) | (unsigned)value);
+    } else if (t->size == 1) rl78_set_reg(cpu, ca ? RL78_REG_C : RL78_REG_A, (unsigned)value);
+    else {
+        rl78_set_reg(cpu, ca ? RL78_REG_BC : RL78_REG_AX, (unsigned)value);
+        if (t->size == 4) rl78_set_reg(cpu, ca ? RL78_REG_DE : RL78_REG_BC, (unsigned)(value >> 16));
+    }
 }

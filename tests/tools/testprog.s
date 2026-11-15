@@ -102,7 +102,7 @@ _start:
 	mov	SDATAR & 0xFFFF[bc], a
 	br	$.Lsdata
 .Lsdata_done:
-	call	!!_main
+ call !!_main
 _exit:
 	br	$_exit
 
@@ -388,6 +388,48 @@ _f_halt:				; void f_halt(void) { HALT(); g_out = 0x77; }
 	halt
 	mov	!g_out, #0x77
 	ret
+; スタートアップ診断専用（mkabs startup のときだけリセットベクタを向ける）。
+_trace_boot:
+ movw sp, #0xFE20
+ call !!_wait_sfr
+ call !!_main
+ br $_trace_boot
+_wait_sfr:
+ mov a, !0x00A8
+.Lwait_sfr:
+ mov a, !0xFFA2
+ cmp a, #1
+ bnz $.Lwait_sfr
+ ret
+; ROM checksum through the mirror; range includes init_end, stub and skip.
+; Independent expected sum of the unchanged instruction bytes, modulo 256.
+_rom_check:
+ movw hl, #(_main + 0x8000)
+ mov b, #0
+.Lrom_sum:
+ mov a, [hl]
+ add a, b
+ mov b, a
+ incw hl
+ movw ax, hl
+ cmpw ax, #(_use_io + 0x8000)
+ bnz $.Lrom_sum
+ mov a, b
+ cmp a, #0x9C
+ bz $.Lrom_ok
+_rom_reset:
+ .byte 0xFF
+ br $_rom_reset
+.Lrom_ok:
+ br !!_start
+; PSW slow-path boundary immediately before init_end (real FFH).
+_boundary_boot:
+ movw sp, #0xFE20
+ mov psw, #6
+_boundary_end:
+ .byte 0xFF
+_boundary_short:
+ ret
 _code_end:
 
 ;---------------------------------------------------------------- ROM のデータ

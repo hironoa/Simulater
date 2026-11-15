@@ -1,0 +1,2 @@
+
+#define BAD (1

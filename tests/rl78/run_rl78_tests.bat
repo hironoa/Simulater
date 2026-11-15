@@ -53,6 +53,7 @@ call :run "G22: .data copied after RAM filled with 0xA5" 0 "OK 1, NG 0" --cfg "%
 call :run "G23: bss cleared after RAM filled with 0xA5" 0 "OK 1, NG 0" --cfg "%R%\csv\g23_fill.cfg" "%R%\csv\g23_startup.csv"
 
 echo == generated .abs: calling convention and types
+for %%K in (dwarf2 dwarf3 dwarf4) do for %%N in (g_const_mixed.ro g_const_elements[0] g_const_record.w) do call :dwarf_const "%%K" "%%N"
 for %%K in (dwarf2 dwarf3 dwarf4) do call :run "%%K: calling convention and types (43 rows)" 0 "OK 43, NG 0" --abs "%WORK%\tp_%%K.abs" "%R%\csv\synth_call.csv" "%R%\csv\synth_types.csv"
 call :run "result CSVs for byte compare" 0 "OK 43, NG 0" --abs "%TP%" "%R%\csv\synth_call.csv" "%R%\csv\synth_types.csv" --fixed-time
 fc /b "%WORK%\r_out\synth_call.csv" "%R%\expected\synth_call.csv" >nul
@@ -105,7 +106,7 @@ set RC=%ERRORLEVEL%
 if "%RC%"=="0" (call :ok "LMF list") else (call :ng "LMF list")
 call :has "%WORK%\lmf.list" "arr" "LMF array symbol"
 call :run "LMF ABI startup driver unknown sizes 16 rows" 0 "OK 16" --abs "%WORK%\test.lmf" "%R%\csv\lmf_call.csv"
-call :run "LMF first long rejected" 1 "AX" --abs "%WORK%\test.lmf" "%R%\csv\lmf_first32.csv"
+call :run "LMF first long accepted" 0 "NO Check 1" --abs "%WORK%\test.lmf" "%R%\csv\lmf_first32.csv"
 > "%WORK%\abi.cfg" echo abi = ccrl
 "%RS%" info --abs "%WORK%\test.lmf" --cfg "%WORK%\abi.cfg" > "%WORK%\lmf.log" 2>&1
 set RC=%ERRORLEVEL%
@@ -144,6 +145,46 @@ if "%RC%"=="0" (call :ok "mklmf no debug") else (call :ng "mklmf no debug")
 >> "%WORK%\sym.csv" echo #COMMENT,ticks:2,init:2,ticks:2
 >> "%WORK%\sym.csv" echo ,4,0x1234,5
 call :run "LMF no debug SYM addresses" 0 "OK 1" --abs "%WORK%\nodbg.lmf" "%WORK%\sym.csv"
+
+echo == CA78K0R probe types and calls
+set "PROBE=%T%\ca78k0r_probe\DefaultBuild\ca78k0r_probe.lmf"
+set "B=%ROOT%\runtime\backends\rl78"
+"%CC%" -std=c11 -O2 -Wall -Wextra -D_DEFAULT_SOURCE -I"%B%" -I"%ROOT%\runtime\include" -I"%ROOT%\runtime\src" "%T%\tools\check_lmf_types.c" "%B%\rl78_lmf.c" "%B%\rl78_elf.c" "%B%\rl78_dwarf.c" "%B%\rl78_map.c" "%ROOT%\runtime\src\sim_util.c" -o "%WORK%\lmf_types.exe" > "%WORK%\types_build.log" 2>&1
+set RC=%ERRORLEVEL%
+if "%RC%"=="0" (call :ok "LMF type checker build") else (call :ng "LMF type checker build" & type "%WORK%\types_build.log")
+"%WORK%\lmf_types.exe" "%WORK%\test.lmf" constargs > "%WORK%\const_types.txt" 2>&1
+set RC=%ERRORLEVEL%
+if "%RC%"=="0" (call :ok "LMF argument top const and variable return const") else (call :ng "LMF argument top const and variable return const")
+"%WORK%\lmf_types.exe" "%PROBE%" probe > "%WORK%\probe_types.txt" 2> "%WORK%\probe_warnings.txt"
+set RC=%ERRORLEVEL%
+if "%RC%"=="0" (call :ok "probe 57 variables 17 functions 0 warnings") else (call :ng "probe type counts and warnings")
+fc /b "%WORK%\probe_types.txt" "%R%\expected\probe_types.txt" >nul
+set RC=%ERRORLEVEL%
+if "%RC%"=="0" (call :ok "probe types sizes addresses signatures match reference") else (call :ng "probe types match reference")
+"%RS%" list --abs "%PROBE%" > "%WORK%\probe_list_raw.txt" 2> "%WORK%\probe_stderr.txt"
+set RC=%ERRORLEVEL%
+if "%RC%"=="0" (call :ok "probe sim list") else (call :ng "probe sim list")
+"%WORK%\lmf_types.exe" "%WORK%\probe_list_raw.txt" list > "%WORK%\probe_list.txt"
+set RC=%ERRORLEVEL%
+if "%RC%"=="0" (call :ok "probe list has 57 typed variables") else (call :ng "probe list has 57 typed variables")
+fc /b "%WORK%\probe_list.txt" "%R%\expected\probe_list.txt" >nul
+set RC=%ERRORLEVEL%
+if "%RC%"=="0" (call :ok "probe sim list matches lmfdump") else (call :ng "probe sim list matches lmfdump")
+call :run "probe initial values 50 rows" 0 "OK 50" --abs "%PROBE%" "%R%\csv\probe_init.csv"
+call :run "probe calls 17 rows" 0 "OK 17" --abs "%PROBE%" "%R%\csv\probe_call.csv"
+call :run "probe writes 2 rows" 0 "OK 2" --abs "%PROBE%" "%R%\csv\probe_write.csv"
+call :run "probe aggregate return rejected" 2 "f_ret_struct" --abs "%PROBE%" "%R%\csv\probe_ret_struct.csv"
+call :run "probe float argument rejected" 2 "f_float" --abs "%PROBE%" "%R%\csv\probe_float.csv"
+call :run "probe char unsigned" 0 "OK 1" --abs "%PROBE%" --cfg "%R%\cfg\probe_char.cfg" "%R%\csv\probe_char.csv"
+call :run "probe 32 bit skip" 0 "OK 1" --abs "%PROBE%" --cfg "%R%\cfg\probe_skip.cfg" "%R%\csv\probe_skip.csv"
+call :run "generated struct bitfields far pointer" 0 "OK 1" --abs "%WORK%\test.lmf" "%R%\csv\lmf_aggregate.csv"
+for %%M in (tagref tagaux tagmismatch tagend tagcycle tagwidth) do call :lmf_badtag %%M
+rem an argument whose type cannot be resolved must not be called with the integer convention; variables keep the raw integer fallback
+"%WORK%\mklmf.exe" badarg "%WORK%\badarg.lmf"
+set RC=%ERRORLEVEL%
+if "%RC%"=="0" (call :ok "mklmf badarg") else (call :ng "mklmf badarg")
+call :run "unresolved LMF argument type rejected" 2 "OK 0, NG 0" --abs "%WORK%\badarg.lmf" "%R%\csv\lmf_badarg.csv"
+call :run "unresolved LMF variable falls back to raw integer" 0 "OK 1, NG 0" --abs "%WORK%\badarg.lmf" "%R%\csv\lmf_badvar.csv"
 
 echo == real backend GUI call failures
 where curl >nul 2>nul
@@ -193,6 +234,132 @@ echo == performance (real backend)
 for /l %%I in (1,1,2000) do >> "%WORK%\perf_cycle.csv" echo ,%%I
 call :run "TEST_cycle 2000 times" 0 "OK 2000, NG 0" --abs "%TP%" "%WORK%\perf_cycle.csv"
 type "%WORK%\r.log" | findstr /v /c:"mod " /c:"->"
+
+echo == startup diagnostics and skip poke
+"%WORK%\mkabs.exe" startup "%WORK%\startup.abs"
+set RC=%ERRORLEVEL%
+if "%RC%"=="0" (call :ok "mkabs startup") else (call :ng "mkabs startup")
+"%RS%" info --abs "%WORK%\startup.abs" --cfg "%R%\cfg\startup_limit.cfg" --trace-startup --trace-head 1 --trace-tail 1 > "%WORK%\trace.log" 2>&1
+set RC=%ERRORLEVEL%
+if "%RC%"=="2" (call :ok "SFR wait exits 2") else (call :ng "SFR wait exits 2")
+call :has "%WORK%\trace.log" "wait" "trace stopped function"
+call :has "%WORK%\trace.log" "boot" "trace call history and caller"
+call :has "%WORK%\trace.log" "0xFFFA2" "trace SFR address"
+call :has "%WORK%\trace.log" "0xF00A8" "trace extended SFR address"
+call :has "%WORK%\trace.log" "SP" "trace registers"
+"%RS%" info --abs "%WORK%\startup.abs" --cfg "%R%\cfg\startup_limit.cfg" > "%WORK%\plain.log" 2>&1
+set RC=%ERRORLEVEL%
+if "%RC%"=="2" (call :ok "plain startup failure exits 2") else (call :ng "plain startup failure exits 2")
+call :has "%WORK%\plain.log" "trace" "plain failure offers diagnostics"
+call :startup_ok poke
+call :startup_ok skip
+call :run "CCRL skip byte word long nested and poke snapshot" 0 "OK 5, NG 0" --abs "%TP%" --cfg "%R%\cfg\skip_ccrl.cfg" "%R%\csv\skip_ccrl.csv"
+call :run "CA78K0R skip byte word long" 0 "OK 3, NG 0" --abs "%WORK%\test.lmf" --cfg "%R%\cfg\skip_ca.cfg" "%R%\csv\skip_ca.csv"
+call :run "LMF const arguments and returns" 0 "OK 5" --abs "%WORK%\test.lmf" "%R%\csv\const_lmf.csv"
+for %%K in (dwarf2 dwarf3 dwarf4) do call :const_calls "%%K"
+for %%N in (constant const_pointer cycle@constant) do call :const_reject "%WORK%\test.lmf" cycle "%%N"
+> "%WORK%\const_ok.csv" echo mod,cycle,const pointer target,2,0
+>> "%WORK%\const_ok.csv" echo #COMMENT,0xFE03E:2,const_pointer[0]
+>> "%WORK%\const_ok.csv" echo ,0xE004,1
+call :run "LMF allows const_pointer[0]" 0 "NG 0" --abs "%WORK%\test.lmf" "%WORK%\const_ok.csv"
+> "%WORK%\const_skip.cfg" echo skip = constbyte:231
+> "%WORK%\const_skip.csv" echo mod,constbyte,const skip,0,1
+>> "%WORK%\const_skip.csv" echo #COMMENT,constbyte@@
+>> "%WORK%\const_skip.csv" echo ,231
+call :run "LMF const return skip" 0 "OK 1" --abs "%WORK%\test.lmf" --cfg "%WORK%\const_skip.cfg" "%WORK%\const_skip.csv"
+
+call :startup_bad "skip = missing_function"
+call :startup_bad "skip = read_io:garbage"
+call :startup_bad "skip = read_io:0x10000"
+call :startup_bad "skip = f_ll:1"
+call :startup_bad "poke = bad:1"
+call :startup_bad "poke = 0x100000:1"
+call :startup_bad "poke = 0xFFFA2:bad"
+call :startup_bad "poke = 0xFFFA2:256"
+call :startup_bad "poke = 0xFFFFF:1:2"
+call :startup_bad "poke = 0xFFFA2:1:0"
+call :startup_bad "poke = 0xFFFA2:1:5"
+call :startup_bad "poke = 0xFFFA2:1:1:2"
+> "%WORK%\bad_startup.cfg" echo stub = read_io:AMSTB_read_io
+>> "%WORK%\bad_startup.cfg" echo skip = read_io
+"%RS%" info --abs "%TP%" --cfg "%WORK%\bad_startup.cfg" > "%WORK%\trace.log" 2>&1
+set RC=%ERRORLEVEL%
+if "%RC%"=="2" (call :ok "stub skip conflict exits 2") else (call :ng "stub skip conflict exits 2")
+call :run "trace startup retains existing ABI 43 rows" 0 "OK 43, NG 0" --abs "%TP%" --trace-startup "%R%\csv\synth_call.csv" "%R%\csv\synth_types.csv"
+
+echo == ROM checksum and opcode FFH
+"%WORK%\mkabs.exe" checksum "%WORK%\checksum.abs"
+set RC=%ERRORLEVEL%
+if "%RC%"=="0" (call :ok "mkabs checksum") else (call :ng "mkabs checksum")
+"%WORK%\mklmf.exe" checksum "%WORK%\checksum.lmf"
+set RC=%ERRORLEVEL%
+if "%RC%"=="0" (call :ok "mklmf checksum") else (call :ng "mklmf checksum")
+call :rom_check ccrl checksum.abs 0x13D plain ""
+call :rom_check ccrl checksum.abs 0x13D trace --trace-startup
+call :rom_check ca checksum.lmf 0x10E plain ""
+call :rom_check ca checksum.lmf 0x10E trace --trace-startup
+fc /b "%WORK%\count_ccrl.plain" "%WORK%\count_ccrl.trace" >nul
+set RC=%ERRORLEVEL%
+if "%RC%"=="0" (call :ok "CCRL plain trace equal counts") else (call :ng "CCRL plain trace equal counts")
+fc /b "%WORK%\count_ca.plain" "%WORK%\count_ca.trace" >nul
+set RC=%ERRORLEVEL%
+if "%RC%"=="0" (call :ok "CA plain trace equal counts") else (call :ng "CA plain trace equal counts")
+
+echo == Boundary startup comparison and LMF groups
+"%WORK%\mkabs.exe" boundary "%WORK%\boundary.abs"
+set RC=%ERRORLEVEL%
+if "%RC%"=="0" (call :ok "mkabs boundary") else (call :ng "mkabs boundary")
+> "%WORK%\boundary.cfg" echo init_end = boundary_end
+>> "%WORK%\boundary.cfg" echo stub = boundary_end:boundary_short
+>> "%WORK%\boundary.cfg" echo skip = boundary_short
+"%RS%" info --abs "%WORK%\boundary.abs" --cfg "%WORK%\boundary.cfg" --trace-startup > "%WORK%\boundary.log" 2>&1
+set RC=%ERRORLEVEL%
+if "%RC%"=="0" (call :ok "boundary stops before FFH") else (call :ng "boundary stops before FFH")
+call :has "%WORK%\boundary.log" "MATCH" "boundary both paths match"
+"%WORK%\mklmf.exe" diagnostics "%WORK%\diag.lmf"
+set RC=%ERRORLEVEL%
+if "%RC%"=="0" (call :ok "mklmf diagnostics") else (call :ng "mklmf diagnostics")
+"%RS%" info --abs "%WORK%\diag.lmf" > "%WORK%\diag.log" 2>&1
+set RC=%ERRORLEVEL%
+if "%RC%"=="0" (call :ok "LMF diagnostics load") else (call :ng "LMF diagnostics load")
+call :has "%WORK%\diag.log" "0x55 0xDEAD 0x0000 normal 2" "LMF grouped repeated combinations"
+call :has "%WORK%\diag.log" "0x55 0xDEAD 0x0000 absolute 1" "LMF absolute combination"
+findstr /l /c:"unknown" "%WORK%\diag.log" >nul
+if errorlevel 1 (call :ok "LMF default hides names") else (call :ng "LMF default hides names")
+"%RS%" info --abs "%WORK%\diag.lmf" -v -v > "%WORK%\diag_names.log" 2>&1
+call :has "%WORK%\diag_names.log" "unknown" "LMF named examples explicit"
+call :run "header names and modi real" 0 "OK 2, NG 0" --abs "%WORK%\test.lmf" --cfg "%T%\defines\real.cfg" "%T%\defines\real.csv"
+"%RS%" info --abs "%WORK%\test.lmf" --cfg "%T%\defines\real.cfg" > "%WORK%\header.log" 2>&1
+set RC=%ERRORLEVEL%
+if "%RC%"=="0" (call :ok "header info real") else (call :ng "header info real")
+call :has "%WORK%\header.log" "defines files" "recursive header scan real"
+call :run "var and varfile real" 0 "OK 1, NG 0" --abs "%WORK%\test.lmf" --cfg "%T%\defines\var_real.cfg" "%T%\defines\var_real.csv"
+
+echo == defines: compile switches (real)
+call :rcond_cfg
+call :rcond_list "%WORK%\test.lmf"
+call :has "%WORK%\cond_list.log" "0xFF964 COND_REG" "cond real: no switch takes the else branch"
+call :has "%WORK%\cond_list.log" "0xFF97E COND_K0R" "cond real: LMF defines the CA78K0R implicit macros"
+call :has "%WORK%\cond_info.log" "cdef implicit" "cond real: info shows the macro counts"
+>> "%WORK%\cond.cfg" echo cdef = PRODUCT=2
+>> "%WORK%\cond.cfg" echo cundef = __K0R__
+call :rcond_list "%WORK%\test.lmf"
+call :has "%WORK%\cond_list.log" "0xFF962 COND_REG" "cond real: cdef PRODUCT 2"
+call :has "%WORK%\cond_list.log" "0xFF97F COND_K0R" "cond real: cundef removes an implicit macro"
+call :run "cond real: 16-bit typedef and struct member" 0 "OK 1, NG 0" --abs "%WORK%\test.lmf" --cfg "%WORK%\cond.cfg" "%T%\defines\cond_real.csv"
+call :rcond_cfg
+>> "%WORK%\cond.cfg" echo mtpj = %T%\defines\cond\cond_test.mtpj
+call :rcond_list "%WORK%\test.lmf"
+call :has "%WORK%\cond_list.log" "0xFF960 COND_REG" "cond real: mtpj macro definitions"
+call :has "%WORK%\cond_info.log" "MTPJ_ONLY" "cond real: info lists the mtpj macros"
+call :rcond_cfg
+call :rcond_list "%TP%"
+call :has "%WORK%\cond_list.log" "0xFF97F COND_K0R" "cond real: ELF does not define the CA78K0R macros"
+call :rcond_cfg
+>> "%WORK%\cond.cfg" echo mtpj = %T%\ca78k0r_probe\ca78k0r_probe.mtpj
+call :rcond_list "%PROBE%"
+call :has "%WORK%\cond_info.log" "mtpj macro definitions" "cond real: probe project file has no macro definitions"
+
 exit /b 0
 
 rem ---------------------------------------------------------------- subroutines
@@ -297,3 +464,91 @@ if "%RC%"=="0" (call :ok "mklmf %1") else (call :ng "mklmf %1")
 set RC=%ERRORLEVEL%
 if "%RC%"=="2" (call :ok "LMF malformed %1 rejected") else (call :ng "LMF malformed %1 rejected")
 exit /b 0
+
+:startup_ok
+"%RS%" info --abs "%WORK%\startup.abs" --cfg "%R%\cfg\startup_%~1.cfg" --trace-startup > "%WORK%\trace.log" 2>&1
+set RC=%ERRORLEVEL%
+if "%RC%"=="0" (call :ok "%~1 allows startup") else (call :ng "%~1 allows startup")
+call :has "%WORK%\trace.log" "%~1" "%~1 settings shown"
+exit /b 0
+
+:startup_bad
+> "%WORK%\bad_startup.cfg" echo %~1
+"%RS%" info --abs "%TP%" --cfg "%WORK%\bad_startup.cfg" > "%WORK%\trace.log" 2>&1
+set RC=%ERRORLEVEL%
+if "%RC%"=="2" (call :ok "bad startup setting rejected %~1") else (call :ng "bad startup setting rejected %~1")
+exit /b 0
+
+:lmf_badtag
+"%WORK%\mklmf.exe" %1 "%WORK%\badtag.lmf"
+set RC=%ERRORLEVEL%
+if "%RC%"=="0" (call :ok "mklmf %1") else (call :ng "mklmf %1")
+"%WORK%\lmf_types.exe" "%WORK%\badtag.lmf" bad > "%WORK%\tag.log" 2>&1
+set RC=%ERRORLEVEL%
+if "%RC%"=="0" (call :ok "malformed %1 becomes unknown") else (call :ng "malformed %1 becomes unknown")
+exit /b 0
+
+:rom_check
+"%RS%" info --abs "%WORK%\%~2" --cfg "%R%\cfg\rom_check_%~1.cfg" %~5 > "%WORK%\rom_%~1.%~4.log" 2>&1
+set RC=%ERRORLEVEL%
+if "%RC%"=="0" (call :ok "ROM checksum %~1 %~4 reaches main") else (call :ng "ROM checksum %~1 %~4 reaches main")
+call :has "%WORK%\rom_%~1.%~4.log" "main" "ROM checksum init end"
+findstr /l /c:"Hz" "%WORK%\rom_%~1.%~4.log" > "%WORK%\count_%~1.%~4"
+copy /y "%R%\cfg\rom_check_%~1.cfg" "%WORK%\corrupt.cfg" >nul
+>> "%WORK%\corrupt.cfg" echo poke = %~3:0
+"%RS%" info --abs "%WORK%\%~2" --cfg "%WORK%\corrupt.cfg" %~5 > "%WORK%\reset_%~1.%~4.log" 2>&1
+set RC=%ERRORLEVEL%
+if "%RC%"=="2" (call :ok "ROM checksum %~1 %~4 rejects corruption") else (call :ng "ROM checksum %~1 %~4 rejects corruption")
+call :has "%WORK%\reset_%~1.%~4.log" "FFH" "ROM checksum FFH diagnostic"
+call :has "%WORK%\reset_%~1.%~4.log" "original bytes" "ROM checksum original bytes"
+call :has "%WORK%\reset_%~1.%~4.log" "breakpoint" "ROM checksum breakpoint context"
+exit /b 0
+
+:rcond_cfg
+> "%WORK%\cond.cfg" echo defines = %T%\defines\cond
+exit /b 0
+
+rem :rcond_list load-module
+:rcond_list
+"%RS%" list --abs "%~1" --cfg "%WORK%\cond.cfg" COND_ > "%WORK%\cond_list.log" 2>&1
+"%RS%" info --abs "%~1" --cfg "%WORK%\cond.cfg" > "%WORK%\cond_info.log" 2>&1
+exit /b 0
+
+:dwarf_const
+> "%WORK%\dwarf_const.csv" echo mod,f_bits,const path,1,0
+>> "%WORK%\dwarf_const.csv" echo #COMMENT,%~2
+>> "%WORK%\dwarf_const.csv" echo ,1
+"%SIM_RL78%" run --abs "%WORK%\tp_%~1.abs" "%WORK%\dwarf_const.csv" -o "%WORK%\dwarf_const" > "%WORK%\dwarf_const.log" 2>&1
+set RC=%ERRORLEVEL%
+if "%RC%"=="2" (call :ok "%~1 const %~2 rejected") else (call :ng "%~1 const %~2 rejected")
+exit /b
+
+:const_calls
+call :run "%~1 const arguments and returns" 0 "OK 10" --abs "%WORK%\tp_%~1.abs" "%R%\csv\const_dwarf.csv"
+for %%N in (g_const_pointer g_const_target[0] f_bits@constant f_bits@local_const) do call :const_reject "%WORK%\tp_%~1.abs" f_bits "%%N"
+> "%WORK%\const_ok.csv" echo mod,f_bits,const pointer target,3,0
+>> "%WORK%\const_ok.csv" echo #COMMENT,0xFE190:2,0xFE192:2,g_const_pointer[0]
+>> "%WORK%\const_ok.csv" echo ,0xE11A,0xE11A,1
+call :run "%~1 allows g_const_pointer[0]" 0 "NG 0" --abs "%WORK%\tp_%~1.abs" "%WORK%\const_ok.csv"
+> "%WORK%\const_skip.cfg" echo skip = constret:231
+> "%WORK%\const_skip.csv" echo mod,constret,const skip,0,1
+>> "%WORK%\const_skip.csv" echo #COMMENT,constret@@
+>> "%WORK%\const_skip.csv" echo ,231
+call :run "%~1 const return skip" 0 "OK 1" --abs "%WORK%\tp_%~1.abs" --cfg "%WORK%\const_skip.cfg" "%WORK%\const_skip.csv"
+exit /b
+
+:const_reject
+if "%~2"=="cycle" goto const_reject_lmf
+> "%WORK%\const_reject.csv" echo mod,%~2,const protection,3,0
+>> "%WORK%\const_reject.csv" echo #COMMENT,0xFE190:2,0xFE192:2,%~3
+>> "%WORK%\const_reject.csv" echo ,0xE11A,0xE11A,1
+goto const_reject_run
+:const_reject_lmf
+> "%WORK%\const_reject.csv" echo mod,%~2,const protection,2,0
+>> "%WORK%\const_reject.csv" echo #COMMENT,0xFE03E:2,%~3
+>> "%WORK%\const_reject.csv" echo ,0xE004,1
+:const_reject_run
+"%SIM_RL78%" run --abs "%~1" "%WORK%\const_reject.csv" -o "%WORK%\const_out" > "%WORK%\const.log" 2>&1
+set RC=%ERRORLEVEL%
+if "%RC%"=="2" (call :ok "const %~3 rejected") else (call :ng "const %~3 rejected")
+exit /b

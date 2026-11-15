@@ -1,0 +1,6 @@
+modi,"intr_tm00","",1,2,,,,CPP,,,"",0
+#InitWheneverCall,"g_ms_tick","g_gear_up_rpm[0]","g_eng.water_temp","g_gear_up_rpm[1]","g_gear_up_rpm[2]","TEST_time_us","P1","g_mode","sim_psw_ie","s_log_idx","s_sub","AMSTB_SrcFile.c/AMSTB_adc_read@AMIN_adc[0]","AMSTB_SrcFile.c/AMSTB_adc_read@AMIN_adc[1]","AMSTB_SrcFile.c/AMSTB_adc_read@AMIN_adc[2]","AMSTB_SrcFile.c/AMSTB_adc_read@AMIN_adc[3]","AMSTB_SrcFile.c/AMSTB_adc_read@AMIN_adc[4]","AMSTB_SrcFile.c/AMSTB_adc_read@AMIN_adc[5]","AMSTB_SrcFile.c/AMSTB_adc_read@AMIN_adc[6]","AMSTB_SrcFile.c/AMSTB_adc_read@AMIN_adc[7]","TEST_cycle_cnt"
+0,3000,120,-1,5300,4,132000,0xFF,1,1,0,0,0,0,0,0,0,0,0,0,0
+#COMMENT,g_mode,g_ms_tick,g_mode
+,7,3001,7
+,8,3001,8

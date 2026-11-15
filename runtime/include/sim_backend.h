@@ -60,6 +60,7 @@ struct sim_type {
     uint32_t count;          /* ARRAY の要素数 */
     const sim_member *members;
     int nmembers;
+    int is_const;           /* この型自身の const。PTR の指す先は target が保持 */
 };
 
 typedef struct {
@@ -99,6 +100,15 @@ typedef struct {
     const char *exe_dir;     /* 実行ファイルのあるフォルダ */
     const char *abs_path;    /* ロードモジュール（.abs）。NULL なら設定ファイルの abs= */
     const char *cfg_path;    /* 設定ファイル。NULL なら .abs と同じフォルダの sim.cfg（あれば） */
+    const char **defines;
+    int ndefines;
+    const char **cdefs;      /* --cdef 名前[=値]（defines の条件付きコンパイル用の定義マクロ） */
+    int ncdefs;
+    const char *mtpj_path;   /* --mtpj: CS+ のプロジェクトファイル。NULL なら設定ファイルの mtpj= */
+    const char *csv_init;    /* CLI override: auto / once / every */
+    int lmf_names;
+    int trace_startup;       /* スタートアップを単命令で診断 */
+    unsigned trace_head, trace_tail; /* 0 は既定（50 / 100） */
     int verbose;             /* 1 なら読み込み中の警告や詳細を標準エラーに出す */
 } sim_open_opts;
 
@@ -149,6 +159,7 @@ struct sim_backend {
     /* 省略可: `sim info` 用の概要を out に書く */
     void (*print_info)(sim_backend *b, FILE *out);
 
+    int csv_init;            /* 0 auto, 1 once, 2 every */
     void *impl;              /* バックエンド固有のデータ */
 };
 

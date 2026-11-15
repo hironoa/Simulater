@@ -92,8 +92,7 @@ uint8_t rl78_read8(rl78_cpu *cpu, uint32_t addr);
 void rl78_write8(rl78_cpu *cpu, uint32_t addr, uint8_t val);
 uint16_t rl78_read16(rl78_cpu *cpu, uint32_t addr);
 void rl78_write16(rl78_cpu *cpu, uint32_t addr, uint16_t val);
-/* Direct pointer to the 1 MB backing store (advanced use; do not write to
-   bytes where breakpoints are set). */
+/* Direct pointer to the unmodified 1 MB backing store (advanced use). */
 uint8_t *rl78_memory(rl78_cpu *cpu);
 
 /* ---- registers --------------------------------------------------------- */
@@ -153,7 +152,8 @@ void rl78_clear_counters(rl78_cpu *cpu);
 /* Add clocks (e.g. to model wait states from a hook). */
 void rl78_add_clocks(rl78_cpu *cpu, uint64_t clocks);
 
-/* Information about the last RL78_STOP_UNDEFINED. */
+/* Information about the last RL78_STOP_UNDEFINED. FFH has a distinct
+   diagnostic: on hardware this illegal opcode causes an internal reset. */
 typedef struct {
     uint32_t pc;
     uint8_t bytes[6];
@@ -162,14 +162,15 @@ typedef struct {
 const rl78_fault *rl78_last_fault(const rl78_cpu *cpu);
 
 /* ---- breakpoints (address reached -> stop before executing it) ----------
-   Implemented by code patching, so there is no per-instruction cost.  The
+   An opcode-only trap mask leaves all memory bytes unchanged. The
    address must be the first byte of an instruction (or of its ES: prefix).
    Data reads of that byte still return the original value.  There is no
-   fixed limit (a 1 MB bitmap is allocated on first use); any number of
+   fixed limit (a bitmap is allocated on first use); any number of
    addresses may be set. */
 #define RL78_MAX_BREAKPOINTS 0x100000 /* kept for source compatibility */
 int rl78_add_breakpoint(rl78_cpu *cpu, uint32_t addr);    /* 0 ok, -1 out of memory */
 int rl78_breakpoint_count(const rl78_cpu *cpu);
+int rl78_has_breakpoint(const rl78_cpu *cpu, uint32_t addr);
 int rl78_remove_breakpoint(rl78_cpu *cpu, uint32_t addr); /* 0 ok, -1 not found */
 void rl78_clear_breakpoints(rl78_cpu *cpu);
 

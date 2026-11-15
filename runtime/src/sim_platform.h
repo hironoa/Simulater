@@ -63,5 +63,9 @@ void sim_console_utf8(void);
  * パスの表記（./、..、相対・絶対、シンボリックリンク、ハードリンク、大文字小文字）ではなく
  * ファイルそのもので比べる。POSIX は st_dev/st_ino、Windows はボリュームシリアルとファイルインデックス */
 int sim_same_file(const char *a, const char *b);
+/* 0 missing/unsupported, 1 regular file, 2 directory. Directory links are
+   not followed, so recursive source scans cannot loop through symlinks. */
+int sim_path_kind(const char *path);
+int sim_dir_each(const char *path, void (*visit)(void *, const char *, int), void *ctx);
 
 #endif

@@ -9,7 +9,7 @@ int main(int argc, char **argv)
     char err[1024]; int i; size_t k;
     if (argc < 2) return 2;
     w.verbose = 1;
-    if (rl78_lmf_load(&e,&t,&w,argv[1],err,sizeof err)) { fprintf(stderr,"%s\n",err); return 1; }
+    if (rl78_lmf_load(&e,&t,&w,argv[1],0,err,sizeof err)) { fprintf(stderr,"%s\n",err); return 1; }
     for (i=0;i<e.nseg;i++) {
         const rl78_seg *g = &e.seg[i]; uint32_t j;
         for (j=0;j<g->filesz;j++) printf("B %05X %02X\n",g->paddr+j,e.data[g->offset+j]);

@@ -30,6 +30,108 @@ check() {
     if "$@"; then ok "$_name"; else ng "$_name"; fi
 }
 contains() { grep -F -q -- "$2" "$1"; }
+lacks() { ! grep -F -q -- "$2" "$1"; }
+
+# ---------------------------------------------------------------- defines のコンパイルスイッチ（モックと本物で共通）
+# tests/defines/cond のヘッダは番地を 4 桁（0xF960 など）で書いてある。モックは defines_near_base = 0 で 0x0F960、
+# 本物は既定の 0xF0000 を足して 0xFF960 になる。
+COND="$T/defines/cond"
+# cond_cfg 行...: $WORK/cond.cfg を作る（COND_HI が 0F9 ならモック用）
+cond_cfg() {
+    {
+        printf 'defines = %s\n' "$COND"
+        [ "$COND_HI" = 0F9 ] && printf 'defines_near_base = 0\n'
+        for _l in "$@"; do printf '%s\n' "$_l"; done
+    } > "$WORK/cond.cfg"
+}
+# cond_list sim の引数...: sim list の結果を $WORK/cond_list.log に、sim info を $WORK/cond_info.log に取る
+cond_list() {
+    "$COND_SIM" list $COND_ARGS --cfg "$WORK/cond.cfg" "$@" COND_ > "$WORK/cond_list.log" 2>&1
+    "$COND_SIM" info $COND_ARGS --cfg "$WORK/cond.cfg" "$@" > "$WORK/cond_info.log" 2>&1
+}
+# cond_at 番地の下 2 桁 名前 型: 取り込まれた番地と型
+cond_at() { grep -q -E "^var  0x${COND_HI}$1 $2 +$3 " "$WORK/cond_list.log"; }
+# cond_suite 名前 sim 番地の上位（0F9 / FF9） テスト CSV [sim の共通引数]
+cond_suite() {
+    _t=$1; COND_SIM=$2; COND_HI=$3; _csv=$4; COND_ARGS=${5:-}
+    # スイッチを与えない: #else の枝。未定義の識別子の一覧に出る
+    cond_cfg
+    cond_list
+    check "$_t: no switch takes the #else branches" sh -c 'grep -q -E "^var  0x${1}64 COND_REG +u8 " "$2" && grep -q -E "^var  0x${1}67 COND_SIM +u8 " "$2" && grep -q -E "^var  0x${1}69 COND_AB +u8 " "$2" && grep -q -E "^var  0x${1}6D COND_NEST +u8 " "$2"' sh "$COND_HI" "$WORK/cond_list.log"
+    check "$_t: switch defined in an included header (#elif COND_BOARD == 3)" cond_at 6F COND_INC u8
+    check "$_t: short-circuit keeps division by an undefined name determinate" cond_at 77 COND_SHORT u8
+    check "$_t: indeterminate #if reads every branch, first definition wins" cond_at 72 COND_UNKNOWN u8
+    check "$_t: same-named header nearest to the includer (near)" cond_at 78 COND_NEAR_OK u8
+    check "$_t: same-named header nearest to the includer (far)" cond_at 7A COND_FAR_OK u8
+    check "$_t: include cycle stops and both files are read" sh -c 'grep -q "COND_CYCLE " "$1" && grep -q "COND_CYCLE_B " "$1"' sh "$WORK/cond_list.log"
+    check "$_t: macro in a .c after its includes" cond_at 84 COND_LOCAL u8
+    check "$_t: info shows cond=on and the time breakdown" sh -c 'grep -q "^defines cond=on roots=4 " "$1" && grep -q -E "^defines time: scan=[0-9.]+ s read=[0-9.]+ s cond=[0-9.]+ s resolve=[0-9.]+ s" "$1"' sh "$WORK/cond_info.log"
+    check "$_t: info counts evaluated and indeterminate #if, missing and cut includes" sh -c 'grep -q -E "include-missing=2 include-cut=[1-9][0-9]* if-evaluated=[1-9][0-9]* if-indeterminate=1$" "$1"' sh "$WORK/cond_info.log"
+    check "$_t: undefined identifiers listed with reference counts" sh -c 'grep -q -x "  PRODUCT (4)" "$1" && grep -q -x "  SIM (2)" "$1" && grep -q -x "  COND_UNSET_SWITCH (1)" "$1" && grep -q -x "  COND_A (1)" "$1"' sh "$WORK/cond_info.log"
+    check "$_t: include guards are not listed as undefined" sh -c '! grep -q -E "COND_PRODUCT_H|COND_SWITCH_H|COND_TYPES_H" "$1"' sh "$WORK/cond_info.log"
+    cond_list -v
+    check "$_t: verbose lists the indeterminate #if with file and line" sh -c 'grep -q "判定不能: .*cond_product.h:58: #if COND_FUNC(1) > 0" "$1"' sh "$WORK/cond_info.log"
+    check "$_t: verbose lists names defined elsewhere but not visible" contains "$WORK/cond_info.log" "  COND_HAS_SIM (1)"
+    check "$_t: verbose lists differing duplicates with file and line" sh -c 'grep -q "異なる重複 COND_UNKNOWN: .*cond_product.h:59 / .*cond_product.h:61" "$1"' sh "$WORK/cond_info.log"
+    # PRODUCT = 1
+    cond_cfg 'cdef = PRODUCT=1'
+    cond_list
+    check "$_t: cdef PRODUCT=1 selects the #if branch and the 8-bit typedef" sh -c 'grep -q -E "^var  0x${1}60 COND_REG +u8 " "$2" && grep -q -E "^var  0x${1}6A COND_NEST +u8 " "$2"' sh "$COND_HI" "$WORK/cond_list.log"
+    check "$_t: PRODUCT no longer listed as undefined" sh -c '! grep -q "^  PRODUCT (" "$1"' sh "$WORK/cond_info.log"
+    "$COND_SIM" run $COND_ARGS --cfg "$WORK/cond.cfg" "$_csv" -o "$WORK/cond_out" > "$WORK/cond_run.log" 2>&1
+    check "$_t: PRODUCT=1 has neither the 16-bit register nor the member (exit 2)" test $? -eq 2
+    # PRODUCT = 2、SIM、COND_A（sim.cfg）と COND_DIV（コマンドライン）
+    cond_cfg 'cdef = PRODUCT=2' 'cdef = SIM' 'cdef = COND_A'
+    cond_list --cdef COND_DIV=2
+    check "$_t: cdef PRODUCT=2 selects the #elif branch and the 16-bit typedef" cond_at 62 COND_REG u16
+    check "$_t: #ifdef SIM" cond_at 66 COND_SIM u8
+    check "$_t: defined(A) && !defined(B)" cond_at 68 COND_AB u8
+    check "$_t: nested #if / #ifdef" cond_at 6B COND_NEST u8
+    check "$_t: switch from an included header sees SIM (COND_HAS_SIM)" cond_at 6E COND_INC u8
+    check "$_t: --cdef value used in arithmetic (8 / COND_DIV)" cond_at 76 COND_SHORT u8
+    check "$_t: effective cdef list in info" sh -c 'grep -q "有効な定義マクロ（cdef）: PRODUCT=2, SIM=1, COND_A=1" "$1" && grep -q "有効な定義マクロ（--cdef）: COND_DIV=2" "$1"' sh "$WORK/cond_info.log"
+    "$COND_SIM" run $COND_ARGS --cfg "$WORK/cond.cfg" "$_csv" -o "$WORK/cond_out" > "$WORK/cond_run.log" 2>&1
+    check "$_t: PRODUCT=2 reads and writes the 16-bit register and the struct member" sh -c '[ "$1" -eq 0 ] && grep -F -q "総数 1, OK 1, NG 0" "$2"' sh "$?" "$WORK/cond_run.log"
+    "$COND_SIM" list $COND_ARGS --cfg "$WORK/cond.cfg" --where COND_REG > "$WORK/cond_where.log" 2>&1
+    check "$_t: list --where shows file and line of the active definition" contains "$WORK/cond_where.log" "cond_product.h:15]"
+    check "$_t: list without --where shows the file only" sh -c 'grep -q "cond_product.h\]" "$1" && ! grep -q "cond_product.h:" "$1"' sh "$WORK/cond_list.log"
+    cond_list --cdef PRODUCT=1
+    check "$_t: --cdef overrides cdef in sim.cfg" cond_at 60 COND_REG u8
+    # cundef と B の定義
+    cond_cfg 'cdef = SIM' 'cundef = SIM' 'cdef = COND_A' 'cdef = COND_B'
+    cond_list
+    check "$_t: cundef removes a cdef" cond_at 67 COND_SIM u8
+    check "$_t: defined(A) && !defined(B) with B defined" cond_at 69 COND_AB u8
+    check "$_t: cundef shown in info" contains "$WORK/cond_info.log" "  cundef: SIM"
+    # defines_cond = off: 従来どおりすべての枝を読む（最初の定義を使い、違う内容を重複として数える）
+    cond_cfg 'cdef = PRODUCT=2' 'defines_cond = off'
+    cond_list
+    check "$_t: defines_cond = off reads every branch (first definition, first typedef)" cond_at 60 COND_REG u16
+    check "$_t: defines_cond = off evaluates nothing and counts duplicates" sh -c 'grep -q "^defines cond=off roots=10 includes=0 .*if-evaluated=0 if-indeterminate=0$" "$1" && grep -q -E "duplicates=1[0-9] " "$1"' sh "$WORK/cond_info.log"
+    # CS+ のプロジェクトファイル
+    cond_cfg "mtpj = $COND/cond_test.mtpj"
+    cond_list
+    check "$_t: mtpj macro definitions of the current build mode" sh -c 'grep -q -E "^var  0x${1}60 COND_REG +u8 " "$2" && grep -q -E "^var  0x${1}66 COND_SIM +u8 " "$2"' sh "$COND_HI" "$WORK/cond_list.log"
+    check "$_t: mtpj macro undefinition removes COND_A" cond_at 69 COND_AB u8
+    check "$_t: mtpj value with XML escapes ((1<<4))" cond_at 82 COND_ESC u8
+    check "$_t: info lists what was read from the mtpj" sh -c 'grep -q -F "mtpj macro definitions (5): PRODUCT=1, SIM, COND_A, COND_SHIFT=(1<<4), MTPJ_ONLY=0x10" "$1" && grep -q -F "mtpj macro undefinitions (1): COND_A" "$1" && grep -q "ビルド・モード DefaultBuild（2 個中 1 番目。全モード: DefaultBuild, ProductB）" "$1"' sh "$WORK/cond_info.log"
+    check "$_t: info says the mtpj format is inferred and names the element" sh -c 'grep -q "<MacroDefinitions-0> から読みました。.*推定" "$1"' sh "$WORK/cond_info.log"
+    check "$_t: assembler macro definitions are not used" lacks "$WORK/cond_info.log" "ASM_ONLY"
+    cond_cfg "mtpj = $COND/cond_test.mtpj" 'mtpj_mode = ProductB' 'cdef = SIM'
+    cond_list
+    check "$_t: mtpj_mode selects another build mode" sh -c 'grep -q -E "^var  0x${1}62 COND_REG +u16 " "$2" && grep -q -E "^var  0x${1}68 COND_AB +u8 " "$2" && grep -q -E "^var  0x${1}6B COND_NEST +u8 " "$2"' sh "$COND_HI" "$WORK/cond_list.log"
+    check "$_t: unreadable mtpj line is reported" contains "$WORK/cond_info.log" "名前として読めない行を無視しました: 9BAD LINE"
+    cond_cfg
+    cond_list --mtpj "$COND/cond_test.mtpj"
+    check "$_t: --mtpj on the command line" cond_at 60 COND_REG u8
+    cond_list --mtpj "$T/ca78k0r_probe/ca78k0r_probe.mtpj"
+    check "$_t: real CS+ project file without macro definitions" sh -c 'grep -q -F "mtpj macro definitions (0): なし" "$1" && grep -q "ビルド・モード DefaultBuild（1 個中 1 番目" "$1"' sh "$WORK/cond_info.log"
+    for _bad in 'mtpj_mode = NoSuchMode' 'cdef = 1BAD' 'cdef = A B' 'cundef = A=1' 'defines_cond = maybe' 'mtpj = no_such.mtpj'; do
+        if [ "$_bad" = 'mtpj_mode = NoSuchMode' ]; then cond_cfg "mtpj = $COND/cond_test.mtpj" "$_bad"; else cond_cfg "$_bad"; fi
+        "$COND_SIM" info $COND_ARGS --cfg "$WORK/cond.cfg" > "$WORK/cond_info.log" 2>&1
+        check "$_t: rejects $_bad (exit 2)" test $? -eq 2
+    done
+}
 
 echo "== ビルド"
 if [ -z "${SIM:-}" ]; then
@@ -49,6 +151,116 @@ run_cmp() {
     else ng "$_csv: 結果 CSV が期待どおり（バイト単位）" "$(diff "$T/expected/$_csv" "$_out/$_csv" | head -5)"; fi
 }
 
+
+check "build GUI CSV table checks" "${CC:-clang}" -std=c11 -O2 -Wall -Wextra -D_DEFAULT_SOURCE -I"$ROOT/runtime/include" -I"$ROOT/runtime/src" \
+    "$T/tools/check_csv_table.c" "$ROOT/runtime/src/sim_csv.c" "$ROOT/runtime/src/sim_expr.c" "$ROOT/runtime/src/sim_util.c" "$ROOT/runtime/src/sim_platform.c" "$ROOT/runtime/src/sim_cfg.c" "$ROOT/runtime/backends/mock/mock_backend.c" -o "$WORK/csv_table" -lpthread -lm
+check "GUI CSV initialization expansion" "$WORK/csv_table"
+check "build const argument checks" "${CC:-clang}" -std=c11 -O2 -Wall -Wextra -D_DEFAULT_SOURCE -I"$ROOT/runtime/include" -I"$ROOT/runtime/src" \
+    "$T/tools/check_const_refs.c" "$ROOT/runtime/src/sim_expr.c" "$ROOT/runtime/src/sim_util.c" "$ROOT/runtime/src/sim_platform.c" "$ROOT/runtime/src/sim_cfg.c" "$ROOT/runtime/backends/mock/mock_backend.c" -o "$WORK/const_refs" -lpthread -lm
+check "mock const argument preparation and symbol writable" "$WORK/const_refs"
+
+echo "== header defines (mock)"
+"$SIM" run "$T/defines/mock.csv" --cfg "$T/defines/mock.cfg" -o "$WORK/header_mock" > "$WORK/header_mock.log" 2>&1
+RC=$?
+check "header names and modi initializers mock" test "$RC" -eq 0
+if [ "$RC" -ne 0 ]; then cat "$WORK/header_mock.log"; fi
+"$SIM" list --cfg "$T/defines/mock.cfg" > "$WORK/header_list.log" 2>&1
+check "header names in list mock" contains "$WORK/header_list.log" "df_unit"
+check "constant member index is registered" sh -c 'grep -F -q unsupported_index "$1"' sh "$WORK/header_list.log"
+"$SIM" list --cfg "$T/defines/expansion.cfg" > "$WORK/expansion.log" 2>&1
+check "unparenthesized macro array has five elements" contains "$WORK/expansion.log" "u8[5]"
+"$SIM" list --cfg "$T/defines/encoding.cfg" > "$WORK/encoding.log" 2>&1
+check "UTF8 comment preserves next definition" contains "$WORK/encoding.log" "UTF8_REG"
+echo "== defines: text and malformed input contracts"
+TEXT_SRCS="$T/tools/check_defines_text.c $ROOT/runtime/src/sim_defines.c $ROOT/runtime/src/sim_ppexpr.c $ROOT/runtime/src/sim_mtpj.c $ROOT/runtime/src/sim_expr.c $ROOT/runtime/src/sim_cfg.c $ROOT/runtime/src/sim_util.c $ROOT/runtime/src/sim_platform.c $ROOT/runtime/backends/mock/mock_backend.c"
+# shellcheck disable=SC2086
+check "build defines text checks" "${CC:-clang}" -std=c11 -O2 -Wall -Wextra -D_DEFAULT_SOURCE -I"$ROOT/runtime/include" -I"$ROOT/runtime/src" $TEXT_SRCS -o "$WORK/check_defines_text" -lpthread -lm
+check "definition addresses counts and malformed inputs" "$WORK/check_defines_text" "$T" "$WORK"
+# shellcheck disable=SC2086
+check "build defines text ASan UBSan" "${CC:-clang}" -std=c11 -O1 -g -Wall -Wextra -fsanitize=address,undefined -fno-omit-frame-pointer -D_DEFAULT_SOURCE -I"$ROOT/runtime/include" -I"$ROOT/runtime/src" $TEXT_SRCS -o "$WORK/check_defines_sanitize" -lpthread -lm
+check "definition text ASan UBSan 200 malformed inputs" "$WORK/check_defines_sanitize" "$T" "$WORK"
+echo "== defines: const paths reject CSV inputs"
+while read -r const_name; do
+    printf 'mod,TEST_cycle,const path,1,0\n#COMMENT,%s\n,123\n' "$const_name" > "$WORK/const_path.csv"
+    "$SIM" run "$WORK/const_path.csv" --cfg "$T/defines/type_contract.cfg" -o "$WORK/const_path" > "$WORK/const_path.log" 2>&1
+    const_rc=$?
+    check "const CSV $const_name exits 2" test "$const_rc" -eq 2
+done < "$T/defines/type_contract_ro.txt"
+echo "== defines: value expressions (mock)"
+"$SIM" run "$T/defines/value_forms.csv" --cfg "$T/defines/value_forms.cfg" -o "$WORK/value_good" > "$WORK/value_good.log" 2>&1
+RC=$?
+check "direct lvalues typed CSV and physical offsets" sh -c '[ "$1" -eq 0 ] && grep -F -q "総数 1, OK 1, NG 0" "$2"' sh "$RC" "$WORK/value_good.log"
+
+"$SIM" info -v --cfg "$T/defines/value_forms.cfg" > "$WORK/value_info.log" 2>&1
+RC=$?
+check "value forms load" test "$RC" -eq 0
+check "value forms counted separately" contains "$WORK/value_info.log" "value-excluded=18"
+while read -r value_name; do
+    check "$value_name verbose source" grep -E -q "対象外）: $value_name .*value_forms.h:[0-9]+" "$WORK/value_info.log"
+    printf 'mod,intr_tm00,rejected,1,0\n#COMMENT,%s\n,1\n' "$value_name" > "$WORK/value_bad.csv"
+    "$SIM" run "$WORK/value_bad.csv" --cfg "$T/defines/value_forms.cfg" -o "$WORK/value_bad" > "$WORK/value_bad.log" 2>&1
+    RC=$?
+    check "$value_name CSV unusable" test "$RC" -eq 2
+done < "$T/defines/value_rejected.txt"
+echo "== defines: declarators (mock)"
+for decl_csv in declarators declarator_supported declarator_members; do
+    if [ "$decl_csv" = declarators ]; then decl_cfg=declarators; else decl_cfg=declarator_supported; fi
+    "$SIM" run "$T/defines/$decl_csv.csv" --cfg "$T/defines/$decl_cfg.cfg" -o "$WORK/decl" > "$WORK/decl.log" 2>&1
+    RC=$?
+    check "$decl_csv CSV typed read write and physical offsets" sh -c '[ "$1" -eq 0 ] && grep -F -q "総数 1, OK 1, NG 0" "$2"' sh "$RC" "$WORK/decl.log"
+    if [ "$RC" -ne 0 ]; then cat "$WORK/decl.log"; fi
+done
+"$SIM" list --cfg "$T/defines/declarators.cfg" > "$WORK/decl_list.log" 2>&1
+check "long long is u64" grep -E -q 'WIDE +u64 ' "$WORK/decl_list.log"
+"$SIM" list --cfg "$T/defines/declarator_supported.cfg" > "$WORK/decl_list.log" 2>&1
+while read -r decl_name decl_type; do
+    check "$decl_name type $decl_type" grep -E -q " $decl_name +$decl_type " "$WORK/decl_list.log"
+done < "$T/defines/declarator_types.txt"
+"$SIM" info -v --cfg "$T/defines/declarator_rejected.cfg" > "$WORK/decl_info.log" 2>&1
+RC=$?
+check "unsupported declarations are unresolved not load errors" test "$RC" -eq 0
+check "all 50 unsupported declarations counted" contains "$WORK/decl_info.log" "unresolved=50 "
+check "void pointer constant is skipped as a pointer" contains "$WORK/decl_info.log" "pointer-skipped=1 "
+"$SIM" list --cfg "$T/defines/declarator_rejected.cfg" > "$WORK/decl_list.log" 2>&1
+decl_reject() {
+    lacks "$WORK/decl_list.log" " $1 " && contains "$WORK/decl_info.log" "定義 $1 (" || return 1
+    printf 'mod,intr_tm00,rejected,1,0\n#COMMENT,%s\n,1\n' "$1" > "$WORK/decl_bad.csv"
+    "$SIM" run "$WORK/decl_bad.csv" --cfg "$T/defines/declarator_rejected.cfg" -o "$WORK/decl_bad" > "$WORK/decl_bad.log" 2>&1
+    _decl_rc=$?
+    [ "$_decl_rc" -eq 2 ]
+}
+while read -r decl_name; do check "$decl_name counted and unusable" decl_reject "$decl_name"; done < "$T/defines/declarator_rejected.txt"
+for decl_mode in packed lmf; do
+    "$SIM" info -v --cfg "$T/defines/declarator_$decl_mode.cfg" > "$WORK/decl_info.log" 2>&1
+    RC=$?
+    check "$decl_mode unsupported types counted without load errors" sh -c '[ "$1" -eq 0 ] && grep -F -q "unresolved=2 " "$2"' sh "$RC" "$WORK/decl_info.log"
+    "$SIM" list --cfg "$T/defines/declarator_$decl_mode.cfg" > "$WORK/decl_list.log" 2>&1
+    if [ "$decl_mode" = packed ]; then decl_names="DECLPACKED DECLEXPLICITPACKED"; else decl_names="WIDE SIGNEDWIDE"; fi
+    for decl_name in $decl_names; do
+        printf 'mod,intr_tm00,rejected,1,0\n#COMMENT,%s\n,1\n' "$decl_name" > "$WORK/decl_bad.csv"
+        "$SIM" run "$WORK/decl_bad.csv" --cfg "$T/defines/declarator_$decl_mode.cfg" -o "$WORK/decl_bad" > "$WORK/decl_bad.log" 2>&1
+        RC=$?
+        check "$decl_mode $decl_name unusable" sh -c '[ "$1" -eq 2 ] && ! grep -F -q " $2 " "$3"' sh "$RC" "$decl_name" "$WORK/decl_list.log"
+    done
+done
+echo "== defines: #if の式の評価器（単体テスト）"
+check "build check_ppexpr" "${CC:-clang}" -std=c11 -O2 -Wall -Wextra -I"$ROOT/runtime/src" "$T/tools/check_ppexpr.c" "$ROOT/runtime/src/sim_ppexpr.c" -o "$WORK/check_ppexpr"
+"$WORK/check_ppexpr" > "$WORK/ppexpr.log" 2>&1
+RC=$?
+check "preprocessor expression evaluator boundary cases" test "$RC" -eq 0
+check "preprocessor expression evaluator ran its cases (0 failed)" grep -q -E "^ppexpr: [1-9][0-9]* cases, 0 failed" "$WORK/ppexpr.log"
+if [ "$RC" -ne 0 ]; then cat "$WORK/ppexpr.log"; fi
+echo "== defines: コンパイルスイッチ（モック）"
+cond_suite "cond mock" "$SIM" 0F9 "$T/defines/cond_mock.csv"
+cond_cfg
+cond_list
+check "cond mock: no implicit macros without a load module" cond_at 7F COND_K0R u8
+check "build gen_defines_bench" "${CC:-clang}" -std=c11 -O2 -Wall -Wextra "$T/tools/gen_defines_bench.c" -o "$WORK/gen_defines_bench"
+"$WORK/gen_defines_bench" "$WORK/bench" 200 40 > "$WORK/bench_gen.log" 2>&1
+printf 'defines = %s\ncdef = PRODUCT=2\n' "$WORK/bench" > "$WORK/bench.cfg"
+"$SIM" info --cfg "$WORK/bench.cfg" > "$WORK/bench_info.log" 2>&1
+check "generated 200-file tree: all 4800 macros resolved, includes reused" sh -c 'grep -q "^defines files=200 variables=3240 bits=1560 .*unresolved=0 duplicates=0 " "$1" && grep -q -E "include-reused=[1-9]" "$1"' sh "$WORK/bench_info.log"
+grep "^defines time:" "$WORK/bench_info.log"
 echo "== テスト CSV の実行と結果 CSV"
 run_cmp unit_all.csv 0
 run_cmp ng_case.csv 1
@@ -294,7 +506,7 @@ if ! command -v curl > /dev/null 2>&1; then
 else
     PORT=$((20000 + $$ % 20000))
     mkdir -p "$WORK/nohtml"
-    "$SIM" gui --no-browser --port "$PORT" --period-ms 2 --html-dir "$WORK/nohtml" > "$WORK/gui.log" 2>&1 &
+    "$SIM" gui --no-browser --cfg "$T/defines/type_contract.cfg" --port "$PORT" --period-ms 2 --html-dir "$WORK/nohtml" > "$WORK/gui.log" 2>&1 &
     GUI_PID=$!
     U="http://127.0.0.1:$PORT"
     i=0
@@ -304,6 +516,18 @@ else
     done
     if ! kill -0 "$GUI_PID" 2>/dev/null; then cat "$WORK/gui.log"; fi
     post() { curl -s -o "$WORK/$2" -w '%{http_code}' -X POST -H 'Content-Type: application/json' --data-binary "@$T/gui/$1" "$U$3"; }
+
+    while read -r const_name; do
+        curl -s -G --data-urlencode "q=$const_name" "$U/api/symbols" > "$WORK/const_symbol.json"
+        check "const symbol $const_name readonly" contains "$WORK/const_symbol.json" '"writable":false'
+        printf '{"name":"%s","value":"123"}' "$const_name" > "$WORK/const_write.json"
+        CODE=$(curl -s -o "$WORK/const_write.out" -w '%{http_code}' -X POST --data-binary "@$WORK/const_write.json" "$U/api/write")
+        check "const API $const_name rejects write" test "$CODE" = 400
+    done < "$T/defines/type_contract_ro.txt"
+    curl -s -G --data-urlencode 'q=CONST_STRUCT' "$U/api/symbols" > "$WORK/const_children.json"
+    check "const symbols expand children" contains "$WORK/const_children.json" 'CONST_STRUCT.data[0]'
+    curl -s -G --data-urlencode 'q=MIXED.mutable' "$U/api/symbols" > "$WORK/const_mutable.json"
+    check "mutable sibling writable" contains "$WORK/const_mutable.json" '"writable":true'
 
     check "/api/info が応答" contains "$WORK/info.json" '"version":"0.1.0"'
     check "/api/info に functions と既定の関数" contains "$WORK/info.json" '"func":"TEST_cycle","functions":["eng_judge_gear"'
@@ -968,6 +1192,56 @@ data: {"periodMs":2,"func":"TEST_cycle","names":["g_eng.state","TEST_cycle_cnt",
     GUI_PID=""
 fi
 
+
+echo "== modi initialization"
+run_cmp modi_every.csv 0
+run_cmp modi_auto_once.csv 0
+"$SIM" run "$T/csv/modi_once.csv" --csv-init=once -o "$WORK/modi_once" --fixed-time > "$WORK/modi.log" 2>&1
+RC=$?
+check "modi once distinct second row" test "$RC" -eq 0
+check "modi once preserves header bytes" cmp -s "$WORK/modi_once/modi_once.csv" "$T/expected/modi_once.csv"
+"$SIM" run "$WORK/modi_once/modi_once.csv" --csv-init=once -o "$WORK/modi_reread" --fixed-time > "$WORK/modi.log" 2>&1
+RC=$?
+check "modi result CSV reread" test "$RC" -eq 0
+printf "csv_init = once\n" > "$WORK/csv_init.cfg"
+"$SIM" run "$T/csv/modi_every.csv" --cfg "$WORK/csv_init.cfg" --csv-init=every -o "$WORK/modi_override" > "$WORK/modi.log" 2>&1
+RC=$?
+check "csv init CLI overrides cfg" test "$RC" -eq 0
+for bad in missing range duplicate values; do
+    case "$bad" in
+    missing) printf "modi,intr_tm00,t,0,0\n#InitOnce,no_such_var\n0,1\n#COMMENT\nstep 1\n" ;;
+    range) printf "modi,intr_tm00,t,0,0\n#InitOnce,g_mode\n0,256\n#COMMENT\nstep 1\n" ;;
+    duplicate) printf "modi,intr_tm00,t,0,0\n#InitOnce,g_mode\n0,1\n#InitOnce,g_mode\n0,2\n#COMMENT\nstep 1\n" ;;
+    values) printf "modi,intr_tm00,t,0,0\n#InitOnce,g_mode\n0,1\n0,2\n#COMMENT\nstep 1\n" ;;
+    esac > "$WORK/modi_bad.csv"
+    "$SIM" run "$WORK/modi_bad.csv" -o "$WORK/modi_bad" > "$WORK/modi.log" 2>&1
+    RC=$?
+    check "modi rejects $bad" test "$RC" -eq 2
+done
+
+
+"$SIM" run "$T/defines/var_mock.csv" --cfg "$T/defines/var_mock.cfg" -o "$WORK/var_mock" > "$WORK/var_mock.log" 2>&1
+RC=$?
+check "var and varfile byte word bit range array float signed mock" test "$RC" -eq 0
+"$SIM" list --cfg "$T/defines/var_mock.cfg" > "$WORK/var_list.log" 2>&1
+check "configured vars in list" contains "$WORK/var_list.log" "TBL"
+
+"$SIM" run "$T/defines/types_mock.csv" --cfg "$T/defines/mock.cfg" -o "$WORK/types_mock" > "$WORK/types_mock.log" 2>&1
+RC=$?
+check "header arrays nested union and mixed bit storage" test "$RC" -eq 0
+if [ "$RC" -ne 0 ]; then cat "$WORK/types_mock.log"; fi
+for bad in path address varbit vararray policy; do
+    case "$bad" in
+    path) printf "defines = missing/no_such_header.h\n" ;;
+    address) printf "var = BAD : u16 @ 0xFFFFF\n" ;;
+    varbit) printf "var = BAD : u8.8 @ 0xFF01\n" ;;
+    vararray) printf "var = BAD : u8[0] @ 0xF900\n" ;;
+    policy) printf "csv_init = invalid\n" ;;
+    esac > "$WORK/bad_defs.cfg"
+    "$SIM" info --cfg "$WORK/bad_defs.cfg" > "$WORK/bad_defs.log" 2>&1
+    RC=$?
+    check "definition config rejects $bad" test "$RC" -eq 2
+done
 MOCK_PASS=$PASS
 MOCK_FAIL=$FAIL
 . "$T/rl78/run_rl78_tests.sh"

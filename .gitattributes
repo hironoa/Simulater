@@ -8,3 +8,7 @@ tests/gui/*.json -text
 *.abs binary
 *.map -text
 tests/rl78/expected/*.txt -text
+
+# Source encoding fixtures must retain their original bytes.
+tests/defines/text/encoding/*.h -text
+tests/defines/text/diagnostics/*.h -text

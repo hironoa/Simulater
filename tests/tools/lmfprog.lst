@@ -1,5 +1,5 @@
 
-/var/folders/q0/zwcbvnzs6lsdfyq_6khy350h0000gn/T//lmfprog.NYAiD3/t.elf:     file format elf32-rl78
+/var/folders/q0/zwcbvnzs6lsdfyq_6khy350h0000gn/T//lmfprog.rtZbGQ/t.elf:     file format elf32-rl78
 
 
 Disassembly of section .text:
@@ -12,7 +12,7 @@ Disassembly of section .text:
 00000100 <_start>:
  100:	cb f8 e0 fd                   	movw	sp, #0xfde0
  104:	30 34 12                      	movw	ax, #0x1234
- 107:	bf 00 e0                      	movw	!fe000 <.plt+0xfdeaa>, ax
+ 107:	bf 00 e0                      	movw	!fe000 <.plt+0xfde8e>, ax
  10a:	fc 0e 01 00                   	call	!!10e <_main>
 
 0000010e <_main>:
@@ -70,9 +70,9 @@ Disassembly of section .text:
  140:	d7                            	ret
 
 00000141 <_cycle>:
- 141:	af 02 e0                      	movw	ax, !fe002 <.plt+0xfdeac>
+ 141:	af 02 e0                      	movw	ax, !fe002 <.plt+0xfde90>
  144:	a1                            	incw	ax
- 145:	bf 02 e0                      	movw	!fe002 <.plt+0xfdeac>, ax
+ 145:	bf 02 e0                      	movw	!fe002 <.plt+0xfde90>, ax
  148:	d7                            	ret
 
 00000149 <_first32>:
@@ -88,9 +88,26 @@ Disassembly of section .text:
  154:	c6                            	pop	hl
  155:	d7                            	ret
 
+00000156 <_rom_check>:
+ 156:	36 0e 81                      	movw	hl, #0x810e
+ 159:	53 00                         	mov	b, #0
+ 15b:	8b                            	mov	a, [hl]
+ 15c:	61 0b                         	add	a, b
+ 15e:	73                            	mov	b, a
+ 15f:	a7                            	incw	hl
+ 160:	17                            	movw	ax, hl
+ 161:	44 4a 81                      	cmpw	ax, #0x814a
+ 164:	df f5                         	bnz	$15b <_rom_check+0x5>
+ 166:	63                            	mov	a, b
+ 167:	4c 47                         	cmp	a, #71
+ 169:	dd 03                         	bz	$16e <_rom_reset+0x3>
+
+0000016b <_rom_reset>:
+ 16b:	ff                            	brk1
+ 16c:	ef fd                         	br	$16b <_rom_reset>
+ 16e:	ec 00 01 00                   	br	!!100 <_start>
+
 Disassembly of section .plt:
 
-00000156 <.plt>:
- 156:	00                            	nop
- 157:	00                            	nop
+00000172 <.plt>:
 	...

@@ -90,7 +90,6 @@ void rl78__rebuild_pages(rl78_cpu *c)
         if (c->cfg.mdu && pg == (MDCL >> 8)) slow = 1;    /* MDCL/MDCH/MDUC */
         for (i = 0; i < c->nhooks; i++)
             if (c->hooks[i].start < end && c->hooks[i].end > base) slow = 1;
-        if (c->bppage[pg]) slow = 1;
         if (c->cfg.mirror_end != 0 && c->cfg.mirror_start < end && c->cfg.mirror_end > base) {
             if (c->cfg.mirror_start <= base && c->cfg.mirror_end >= end) {
                 r = c->mem + mirror_src(c, base);
@@ -197,10 +196,9 @@ static uint8_t sys_rd8(rl78_cpu *c, uint32_t a)
     case 0xFFFFEu: return c->pmc;
     default: break;
     }
-    if (bp_at(c, a)) return c->bporig[a];
     if (in_mirror(c, a)) {
         uint32_t s = mirror_src(c, a);
-        return bp_at(c, s) ? c->bporig[s] : c->mem[s];
+        return c->mem[s];
     }
     return c->mem[a];
 }
@@ -229,7 +227,6 @@ static void sys_wr8(rl78_cpu *c, uint32_t a, uint8_t v, int mdu_trigger)
     default: break;
     }
     if (is_rom(c, a) || in_mirror(c, a)) return; /* read-only */
-    if (bp_at(c, a)) { c->bporig[a] = v; return; }
     if (is_mdu_reg(c, a)) {
         if (a == MDUC) {
             /* bits 1,2 (MACSF, MACOF) are read-only */
@@ -309,7 +306,8 @@ rl78_cpu *rl78_create(const rl78_config *cfg)
     rl78_cpu *c = (rl78_cpu *)calloc(1, sizeof(rl78_cpu));
     if (!c) return NULL;
     c->mem = (uint8_t *)calloc(1, RL78_MEM_SIZE + RL78_MEM_PAD);
-    if (!c->mem) { free(c); return NULL; }
+    c->bptrap = (uint8_t *)calloc(1, RL78_MEM_SIZE + RL78_MEM_PAD);
+    if (!c->mem || !c->bptrap) { free(c->mem); free(c->bptrap); free(c); return NULL; }
     memset(c->mem + RL78_MEM_SIZE, 0xFF, RL78_MEM_PAD); /* run-off traps as undefined */
     if (cfg) c->cfg = *cfg;
     else rl78_default_config(&c->cfg, RL78_CORE_S3);
@@ -327,7 +325,7 @@ void rl78_destroy(rl78_cpu *c)
     free(c->mem);
     free(c->bplist);
     free(c->bpbits);
-    free(c->bporig);
+    free(c->bptrap);
     free(c);
 }
 
@@ -361,8 +359,7 @@ void rl78_load(rl78_cpu *c, uint32_t addr, const void *data, size_t len)
     size_t i;
     for (i = 0; i < len; i++) {
         uint32_t a = (addr + (uint32_t)i) & 0xFFFFFu;
-        if (bp_at(c, a)) c->bporig[a] = d[i];
-        else c->mem[a] = d[i];
+        c->mem[a] = d[i];
     }
 }
 
@@ -540,6 +537,12 @@ static void fill_fault(rl78_cpu *c)
     int i;
     c->fault.pc = c->pc;
     for (i = 0; i < 6; i++) c->fault.bytes[i] = rl78_peek8(c, c->pc + (uint32_t)i);
+    if (c->fault.bytes[0] == 0xFF) {
+        snprintf(c->fault.text, sizeof c->fault.text,
+                 "opcode FFH at %05X: internal reset on hardware (possibly intentional)",
+                 (unsigned)c->pc);
+        return;
+    }
     rl78_disasm(c, c->pc, dis, sizeof dis);
     snprintf(c->fault.text, sizeof c->fault.text,
              "undefined instruction at %05X: %02X %02X %02X %02X (%s)",
@@ -551,6 +554,8 @@ rl78_stop_reason rl78_run(rl78_cpu *c, uint64_t max_insns)
 {
     uint64_t remaining = max_insns;
     c->stop_req = 0;
+    /* Resume is a public-call property, never an internal bus/IRQ boundary. */
+    c->skip_bp_pc = (c->nbps && bp_at(c, c->pc)) ? c->pc : NO_BP;
     for (;;) {
         uint64_t lim, n;
         int why;
@@ -567,7 +572,6 @@ rl78_stop_reason rl78_run(rl78_cpu *c, uint64_t max_insns)
         lim = remaining;
         if (c->hold_irq && c->nirqs) lim = 1; /* run the instruction after a hold insn */
         c->hold_irq = 0;
-        c->skip_bp_pc = (c->nbps && bp_at(c, c->pc)) ? c->pc : NO_BP;
         n = rl78__exec(c, lim, &why);
         c->skip_bp_pc = NO_BP;
         c->insns += n;
@@ -603,12 +607,7 @@ int rl78_add_breakpoint(rl78_cpu *c, uint32_t addr)
     addr &= 0xFFFFFu;
     if (!c->bpbits) {
         c->bpbits = (uint8_t *)calloc(RL78_MEM_SIZE / 8u, 1);
-        c->bporig = (uint8_t *)malloc(RL78_MEM_SIZE);
-        if (!c->bpbits || !c->bporig) {
-            free(c->bpbits); free(c->bporig);
-            c->bpbits = NULL; c->bporig = NULL;
-            return -1;
-        }
+        if (!c->bpbits) return -1;
     }
     if (bp_at(c, addr)) return 0;
     if (c->nbps == c->bpcap) {
@@ -619,10 +618,8 @@ int rl78_add_breakpoint(rl78_cpu *c, uint32_t addr)
         c->bpcap = ncap;
     }
     c->bplist[c->nbps++] = addr;
-    c->bporig[addr] = c->mem[addr];
-    c->mem[addr] = BP_OPCODE;
+    c->bptrap[addr] = BP_OPCODE;
     c->bpbits[addr >> 3] = (uint8_t)(c->bpbits[addr >> 3] | (1u << (addr & 7u)));
-    if (c->bppage[addr >> 8]++ == 0) rl78__rebuild_pages(c);
     return 0;
 }
 
@@ -634,9 +631,8 @@ int rl78_remove_breakpoint(rl78_cpu *c, uint32_t addr)
     for (i = 0; i < c->nbps; i++)
         if (c->bplist[i] == addr) break;
     c->bplist[i] = c->bplist[--c->nbps];
-    c->mem[addr] = c->bporig[addr];
+    c->bptrap[addr] = 0;
     c->bpbits[addr >> 3] = (uint8_t)(c->bpbits[addr >> 3] & ~(1u << (addr & 7u)));
-    if (--c->bppage[addr >> 8] == 0) rl78__rebuild_pages(c);
     return 0;
 }
 
@@ -645,15 +641,14 @@ void rl78_clear_breakpoints(rl78_cpu *c)
     int i;
     for (i = 0; i < c->nbps; i++) {
         uint32_t a = c->bplist[i];
-        c->mem[a] = c->bporig[a];
+        c->bptrap[a] = 0;
         c->bpbits[a >> 3] = 0;
     }
     c->nbps = 0;
-    memset(c->bppage, 0, sizeof c->bppage);
-    rl78__rebuild_pages(c);
 }
 
 int rl78_breakpoint_count(const rl78_cpu *c) { return c->nbps; }
+int rl78_has_breakpoint(const rl78_cpu *c, uint32_t addr) { return bp_at(c, addr & 0xFFFFFu) != 0; }
 
 /* ---- hooks ------------------------------------------------------------------ */
 
@@ -692,9 +687,7 @@ struct rl78_snapshot {
 
 void rl78_snapshot_update(rl78_cpu *c, rl78_snapshot *s)
 {
-    int i;
     memcpy(s->mem, c->mem, RL78_MEM_SIZE);
-    for (i = 0; i < c->nbps; i++) s->mem[c->bplist[i]] = c->bporig[c->bplist[i]];
     s->pc = c->pc;
     s->sp = c->sp;
     s->psw = c->psw;
@@ -721,12 +714,7 @@ rl78_snapshot *rl78_snapshot_create(rl78_cpu *c)
 
 void rl78_snapshot_restore(rl78_cpu *c, const rl78_snapshot *s)
 {
-    int i;
     memcpy(c->mem, s->mem, RL78_MEM_SIZE);
-    for (i = 0; i < c->nbps; i++) {
-        c->bporig[c->bplist[i]] = c->mem[c->bplist[i]];
-        c->mem[c->bplist[i]] = BP_OPCODE;
-    }
     c->pc = s->pc;
     c->sp = s->sp;
     c->es = s->es;

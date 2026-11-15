@@ -214,8 +214,7 @@ int rl78__insn_len(rl78_cpu *c, uint32_t pc)
     uint8_t b[8];
     int i;
     for (i = 0; i < 8; i++) b[i] = rl78__rd8(c, (pc + (uint32_t)i) & 0xFFFFFu);
-    /* code bytes: use raw memory, but hide breakpoints (rd8 does that only
-       for pages marked slow; breakpoint pages always are) */
+    /* The opcode trap mask is never applied to instruction-length reads. */
     return insn_len_bytes(b);
 }
 
@@ -338,6 +337,7 @@ uint64_t rl78__exec(rl78_cpu *C, uint64_t lim, int *why);
 uint64_t rl78__exec(rl78_cpu *C, uint64_t lim, int *why)
 {
     uint8_t *const M = C->mem;
+    const uint8_t *const T = C->bptrap;
     uint8_t *R = C->rb;
     uint32_t pc = C->pc;
     uint32_t ipc = pc;
@@ -358,7 +358,9 @@ uint64_t rl78__exec(rl78_cpu *C, uint64_t lim, int *why)
         n++;
         ipc = pc;
         seg = 0xF0000u;
-        op = M[pc];
+        /* Only the first opcode sees traps; operands/data use unchanged M.
+           No breakpoint branch in either the fetch or data-read fast path. */
+        op = M[pc] | T[pc];
     dispatch:
         switch (op) {
         /* ---------------------------------------------------------------- */
@@ -1206,7 +1208,7 @@ uint64_t rl78__exec(rl78_cpu *C, uint64_t lim, int *why)
             if (!C->bpbits || !(C->bpbits[pc >> 3] & (1u << (pc & 7u)))) UNDEF();
             if (C->skip_bp_pc == pc && seg == 0xF0000u) {
                 C->skip_bp_pc = 0xFFFFFFFFu;
-                op = C->bporig[pc];
+                op = M[pc];
                 if (op == BP_OPCODE) UNDEF();
                 goto dispatch;
             }

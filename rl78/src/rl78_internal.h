@@ -44,6 +44,7 @@ struct rl78_cpu {
     uint8_t flashpen[RL78_NPAGES]; /* extra clocks for data read from flash */
 
     uint8_t *mem;
+    uint8_t *bptrap; /* opcode-only mask: FF at breakpoints, zero elsewhere */
     uint8_t *rb; /* current register bank: mem + FFEF8H - 8*bank */
 
     uint32_t pc;
@@ -64,13 +65,11 @@ struct rl78_cpu {
 
     rl78_hook hooks[RL78_MAX_HOOKS];
     int nhooks;
-    /* breakpoints: address list (for iteration), a 1 MB bitmap and the
-       saved original bytes (allocated on first use), per-page counts */
+    /* Breakpoints: address list and bitmap allocated on first use.
+       bptrap is separate from the program-visible backing store. */
     uint32_t *bplist;
     int nbps, bpcap;
     uint8_t *bpbits;   /* 1 bit per address */
-    uint8_t *bporig;   /* original byte per address (valid where bit set) */
-    uint16_t bppage[RL78_NPAGES];
     rl78_irq irqs[RL78_MAX_PENDING_IRQ];
     int nirqs;
     uint32_t irq_seq;
@@ -79,7 +78,7 @@ struct rl78_cpu {
     rl78_fault fault;
 };
 
-/* slow-path bus access (hooks, SFRs, mirror edges, breakpoints) */
+/* slow-path bus access (hooks, SFRs, mirror edges) */
 uint8_t rl78__rd8_slow(rl78_cpu *c, uint32_t a);
 void rl78__wr8_slow(rl78_cpu *c, uint32_t a, uint8_t v);
 uint16_t rl78__rd16_slow(rl78_cpu *c, uint32_t a);

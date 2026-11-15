@@ -22,6 +22,8 @@ typedef struct {
 int sim_cfg_load(sim_cfg *c, const char *path, char *err, size_t errlen);
 void sim_cfg_init(sim_cfg *c);
 void sim_cfg_free(sim_cfg *c);
+/* 0 auto, 1 once, 2 every; -1 invalid. CLI takes precedence. */
+int sim_cfg_csv_init(sim_cfg *c, const char *override, char *err, size_t errlen);
 /* 最後に現れた値（なければ NULL）。見つかれば used を立てる */
 const char *sim_cfg_get(sim_cfg *c, const char *key);
 /* 設定ファイルのフォルダを基準にしたパス（呼び出し側で free） */

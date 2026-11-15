@@ -180,7 +180,7 @@ static int ci_prefix(const char *s, const char *word)
 static int is_mod(const line_t *L)
 {
     char *k = first_key(L);
-    int r = ci_prefix(k, "mod") && k[3] == 0;
+    int r = ci_prefix(k, "mod") && (k[3] == 0 || (tolower((unsigned char)k[3]) == 'i' && k[4] == 0));
     free(k);
     return r;
 }
@@ -212,6 +212,63 @@ static int is_header(const line_t *L)
     int r = ci_prefix(k, "#COMMENT");
     free(k);
     return r;
+}
+
+static int is_init(const line_t *L)
+{
+    char *k = first_key(L);
+    int r = ci_prefix(k, "#Init");
+    free(k);
+    return r;
+}
+
+/* Read one optional initialization pair before the first data row. COMMENT
+   may appear on either side of the pair. Values column 1 is only a comment. */
+static int block_prefix(line_t *ls, size_t n, size_t start, size_t *hdr,
+                        sim_csv_table *t, char *err, size_t cap)
+{
+    size_t j;
+    char *key = first_key(&ls[start]);
+    int modi = ci_prefix(key, "modi");
+    free(key);
+    *hdr = 0;
+    for (j = start + 1; j < n && !is_mod(&ls[j]); j++) {
+        if (is_init(&ls[j])) {
+            int k;
+            if (t->ninit) { snprintf(err, cap, "%d 行目: #Init 行が複数あります", ls[j].lineno); return -1; }
+            if (ls[j].ncells < 2 || j + 1 >= n || is_mod(&ls[j+1]) ||
+                first_starts(&ls[j+1], '#') || first_starts(&ls[j+1], ';')) {
+                snprintf(err, cap, "%d 行目: #Init の変数名または次の初期値行がありません", ls[j].lineno); return -1;
+            }
+            t->ninit = ls[j].ncells - 1;
+            t->init_names = sim_xcalloc((size_t)t->ninit, sizeof *t->init_names);
+            t->init_cells = sim_xcalloc((size_t)t->ninit, sizeof *t->init_cells);
+            t->init_header = j; t->init_values = j + 1;
+            key = first_key(&ls[j]);
+            t->init_every = ci_prefix(key, "#InitWheneverCall") && strlen(key) == strlen("#InitWheneverCall");
+            free(key);
+            for (k = 0; k < t->ninit; k++) {
+                t->init_names[k] = cell_value(&ls[j], k + 1);
+                t->init_cells[k] = cell_value(&ls[j+1], k + 1);
+            }
+            for (k = t->ninit + 1; k < ls[j+1].ncells; k++) {
+                char *v = cell_value(&ls[j+1], k);
+                int extra = v[0] != 0;
+                free(v);
+                if (extra) { snprintf(err, cap, "%d 行目: 初期値が変数名の数より多いです", ls[j+1].lineno); return -1; }
+            }
+            j++;
+        } else if (is_header(&ls[j])) {
+            if (!*hdr) *hdr = j;
+        } else if (!first_starts(&ls[j], '#') && !first_starts(&ls[j], ';') && !all_empty(&ls[j])) {
+            if (!*hdr) { snprintf(err, cap, "%d 行目: #COMMENT 行の前にデータ行があります（初期値の複数行は不可）", ls[j].lineno); return -1; }
+            break;
+        }
+    }
+    if (!*hdr) { char *func = cell_value(&ls[start], 1); snprintf(err, cap, "mod '%s' に #COMMENT 行がありません", func); free(func); return -1; }
+    if (modi && !t->ninit) t->warning = sim_xstrdup("modi ですが #Init 行がありません。初期化なしで実行します");
+    if (!modi && t->ninit) t->warning = sim_xstrdup("mod ブロックの #Init 行を初期化として受け付けます");
+    return 0;
 }
 
 static void copy_line(sim_buf *out, const line_t *L)
@@ -291,6 +348,10 @@ static size_t run_block(sim_ctx *c, const char *path, line_t *ls, size_t n, size
     int nin = 0, nout = 0, k, failed = 0;
     size_t j, hdr = 0;
     col_t *cols = NULL;
+    sim_csv_table init = {0};
+    sim_ref **init_refs = NULL;
+    sim_cellval *init_vals = NULL;
+    int initialized = 0, every = 0;
     long b_total = 0, b_ok = 0, b_ng = 0, b_nc = 0, b_rows = 0;
 
     copy_line(out, &ls[i]);
@@ -303,23 +364,14 @@ static size_t run_block(sim_ctx *c, const char *path, line_t *ls, size_t n, size
     free(v);
     if (!failed && !func[0]) { snprintf(err, sizeof err, "mod 行の 2 列目に対象関数名がありません"); failed = 1; }
 
-    /* #COMMENT 行を探す */
-    j = i + 1;
-    if (!failed) {
-        for (; j < n && !is_mod(&ls[j]); j++) {
-            if (is_header(&ls[j])) { hdr = j; break; }
-            if (first_starts(&ls[j], ';') || first_starts(&ls[j], '#') || all_empty(&ls[j])) continue;
-            snprintf(err, sizeof err, "#COMMENT 行の前にデータ行があります（%d 行目）", ls[j].lineno);
-            failed = 1;
-            break;
-        }
-        if (!failed && !hdr) { snprintf(err, sizeof err, "mod '%s' に #COMMENT 行がありません", func); failed = 1; }
-    }
+    if (!failed && block_prefix(ls, n, i, &hdr, &init, err, sizeof err)) failed = 1;
+    if (init.warning) warn(path, ls[i].lineno, init.warning);
     if (failed) {
         report(path, ls[i].lineno, err);
         st->errors++;
         for (j = i + 1; j < n && !is_mod(&ls[j]); j++) copy_line(out, &ls[j]);
         free(func);
+        sim_csv_table_free(&init);
         return j;
     }
     for (j = i + 1; j < hdr; j++) copy_line(out, &ls[j]);
@@ -371,6 +423,18 @@ static size_t run_block(sim_ctx *c, const char *path, line_t *ls, size_t n, size
         }
     }
 
+    every = sim_ctx_backend(c)->csv_init == 2 || (!sim_ctx_backend(c)->csv_init && init.init_every);
+    init_refs = sim_xcalloc((size_t)init.ninit + 1, sizeof *init_refs);
+    init_vals = sim_xcalloc((size_t)init.ninit + 1, sizeof *init_vals);
+    for (k = 0; k < init.ninit && !failed; k++) {
+        init_refs[k] = sim_ref_parse(c, init.init_names[k], err, sizeof err);
+        if (!init_refs[k] || !sim_ref_writable(init_refs[k]) || sim_ref_is_return(init_refs[k])) {
+            if (init_refs[k]) snprintf(err, sizeof err, "初期化変数 %s には書き込めません", init.init_names[k]);
+            failed = 1;
+        } else if (sim_parse_cell(init.init_cells[k], strlen(init.init_cells[k]), &init_vals[k], err, sizeof err) ||
+                   sim_ref_check_value(init_refs[k], &init_vals[k], err, sizeof err)) failed = 1;
+        if (failed) report(path, ls[init.init_values].lineno, err);
+    }
     for (j = hdr + 1; j < n && !is_mod(&ls[j]); j++) {
         line_t *L = &ls[j];
         sim_buf row;
@@ -378,6 +442,9 @@ static size_t run_block(sim_ctx *c, const char *path, line_t *ls, size_t n, size
         uint64_t t0, t1, clk0 = 0, clk1 = 0;
         sim_backend *bk = sim_ctx_backend(c);
         int skipped = first_starts(L, ';') || first_starts(L, '#') || all_empty(L);
+        if (init.ninit && (j == init.init_header || j == init.init_values)) { copy_line(out, L); continue; }
+        if (is_init(L)) { report(path, L->lineno, "#Init 行が複数あるか、データ行の後にあります"); failed = 1; }
+
         if (!skipped) b_rows++;
         if (failed || skipped) {
             copy_line(out, L);
@@ -385,6 +452,14 @@ static size_t run_block(sim_ctx *c, const char *path, line_t *ls, size_t n, size
         }
         sim_buf_init(&row);
         sim_buf_add(&row, L->cells[0].p, L->cells[0].n);
+        /* Initial values precede row inputs, so overlapping row inputs win. */
+        if (every || !initialized) {
+            for (k = 0; k < init.ninit && !failed; k++)
+                if (sim_ref_write(c, init_refs[k], &init_vals[k], err, sizeof err)) {
+                    report(path, L->lineno, err); failed = 1;
+                }
+            initialized = 1;
+        }
         /* 入力 */
         for (k = 0; k < nin && !failed; k++) {
             char *cv = cell_value(L, 1 + k);
@@ -525,6 +600,8 @@ static size_t run_block(sim_ctx *c, const char *path, line_t *ls, size_t n, size
         for (k = 0; k < nin + nout; k++) sim_ref_free(cols[k].ref);
         free(cols);
     }
+    for (k = 0; k < init.ninit; k++) { sim_ref_free(init_refs[k]); sim_cellval_free(&init_vals[k]); }
+    free(init_refs); free(init_vals); sim_csv_table_free(&init);
     free(func);
     sim_ctx_set_func(c, NULL, err, sizeof err);
     return j;
@@ -658,6 +735,8 @@ int sim_csv_run_file(sim_ctx *c, const char *path, const sim_csv_opts *o, sim_cs
 
 void sim_csv_table_free(sim_csv_table *t)
 {
+    for (int k = 0; k < t->ninit; k++) { free(t->init_names[k]); free(t->init_cells[k]); }
+    free(t->init_names); free(t->init_cells); free(t->warning);
     int r, k;
     free(t->func);
     for (k = 0; k < t->nin + t->nout; k++) free(t->names ? t->names[k] : NULL);
@@ -693,13 +772,14 @@ int sim_csv_load_table(const char *data, size_t len, sim_csv_table *t, char *err
     v = cell_value(&ls[i], 4);
     if (parse_count(v, &t->nout)) { snprintf(err, errlen, "%d 行目: 出力数 '%s' が数値ではありません", ls[i].lineno, v); free(v); goto fail; }
     free(v);
-    for (i = i + 1; i < n && !is_mod(&ls[i]); i++) if (is_header(&ls[i])) { hdr = i; break; }
-    if (!hdr) { snprintf(err, errlen, "#COMMENT 行がありません"); goto fail; }
+    if (block_prefix(ls, n, i, &hdr, t, err, errlen)) goto fail;
     if (ls[hdr].ncells < 1 + t->nin + t->nout) { snprintf(err, errlen, "#COMMENT 行の変数名が足りません"); goto fail; }
     t->names = sim_xcalloc((size_t)(t->nin + t->nout) + 1, sizeof *t->names);
     for (k = 0; k < t->nin + t->nout; k++) t->names[k] = cell_value(&ls[hdr], 1 + k);
     for (i = hdr + 1; i < n && !is_mod(&ls[i]); i++) {
         char **row;
+        if (t->ninit && (i == t->init_header || i == t->init_values)) continue;
+        if (is_init(&ls[i])) { snprintf(err, errlen, "#Init 行が複数あるか、データ行の後にあります"); goto fail; }
         if (first_starts(&ls[i], ';') || first_starts(&ls[i], '#') || all_empty(&ls[i])) continue;
         row = sim_xcalloc((size_t)t->nin + 1, sizeof *row);
         for (k = 0; k < t->nin; k++) {
@@ -716,4 +796,24 @@ fail:
     free_lines(ls, n);
     sim_csv_table_free(t);
     return -1;
+}
+
+void sim_csv_table_expand_init(sim_csv_table *t, int mode)
+{
+    int k, row, old = t->nin, n = t->ninit;
+    int every = mode == 2 || (!mode && t->init_every);
+    char **names;
+    if (!n) return;
+    names = sim_xcalloc((size_t)(n + old + t->nout), sizeof *names);
+    for (k = 0; k < n; k++) names[k] = sim_xstrdup(t->init_names[k]);
+    for (k = 0; k < old + t->nout; k++) names[n+k] = t->names[k];
+    free(t->names); t->names = names;
+    for (row = 0; row < t->nrows; row++) {
+        char **cells = sim_xcalloc((size_t)(n + old), sizeof *cells);
+        for (k = 0; k < n; k++)
+            if ((every || row == 0) && t->init_cells[k][0]) cells[k] = sim_xstrdup(t->init_cells[k]);
+        for (k = 0; k < old; k++) cells[n+k] = t->cells[row][k];
+        free(t->cells[row]); t->cells[row] = cells;
+    }
+    t->nin += n; t->init_columns = n;
 }
