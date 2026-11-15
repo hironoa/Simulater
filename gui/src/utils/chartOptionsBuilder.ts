@@ -1,3 +1,4 @@
+import { displaySignalName } from "./displaySignalName";
 import * as echarts from "echarts";
 import { addCompareRendering, CompareRendering } from "./compareRendering";
 import { YBreak } from "../types";
@@ -383,7 +384,7 @@ export function buildChartOptions(
       axisPointer: { type: "line" },
     },
     axisPointer: { link: [{ xAxisIndex: "all" }] },
-    legend: { show: false },
+    legend: { show: false, formatter: (name: string) => (showAlias && signalSettings[name]?.alias) || displaySignalName(name, activeSignals) },
     dataZoom: [] as echarts.DataZoomComponentOption[],
     xAxis: [] as echarts.XAXisComponentOption[],
     yAxis: [] as echarts.YAXisComponentOption[],
@@ -425,7 +426,7 @@ export function buildChartOptions(
       const gridIdx = sigToGridIndex[sig];
       if (gridIdx === undefined) return;
 
-      const displayName = showAlias ? set.alias || sig : sig;
+      const displayName = (showAlias && set.alias) || displaySignalName(sig, activeSignals);
       const unit = displayUnit(sig);
       const titleText = unit ? `${displayName} [${unit}]` : displayName;
 
@@ -673,7 +674,7 @@ export function buildChartOptions(
     }
 
     if (showSignalNames) {
-      const displayName = showAlias ? set.alias || sig : sig;
+      const displayName = (showAlias && set.alias) || displaySignalName(sig, activeSignals);
       let titleText = unit ? `${displayName} [${unit}]` : displayName;
 
       if (overlapTitleOffsets[gridIdx] === undefined) {
@@ -695,6 +696,8 @@ export function buildChartOptions(
         startYPx + currentIndex * (LABEL_HEIGHT_PX + LABEL_GAP_PX);
 
       option.title.push({
+        id: sig,
+        triggerEvent: true,
         text: comparison?.summary?.[sig]?.presence === "bOnly" ? `${titleText}\nB のみ`
           : comparison?.summary?.[sig]?.presence === "aOnly" ? `${titleText}\nA のみ` : titleText,
         left: 5,

@@ -1,3 +1,4 @@
+import { displaySignalName } from "../utils/displaySignalName";
 import { useCompareView } from "../hooks/useCompareView";
 import { compareSample, compareInactive, compareDisplaySteps } from "../utils/compareView";
 import { compareDeltaYScale, type CompareDeltaTrack } from "../utils/compareRendering";
@@ -565,6 +566,17 @@ export function Chart() {
     if (!chartInstance.current) {
       chartInstance.current = echarts.init(chartRef.current, theme);
 
+      // Canvas のレーン名・凡例にもネイティブの title で完全名を出す。
+      chartInstance.current.on("mouseover", (event: any) => {
+        const option = chartInstance.current?.getOption() as any;
+        const name = event.componentType === "title"
+          ? option?.title?.[event.componentIndex]?.id
+          : event.componentType === "legend" ? event.name : undefined;
+        if (chartRef.current && typeof name === "string") chartRef.current.title = name;
+      });
+      chartInstance.current.on("mouseout", () => chartRef.current?.removeAttribute("title"));
+      chartInstance.current.getZr().on("globalout", () => chartRef.current?.removeAttribute("title"));
+
       chartInstance.current.getZr().on("contextmenu", (event: any) => {
         const chart = chartInstance.current;
         const state = useWaveformStore.getState();
@@ -624,7 +636,7 @@ export function Chart() {
             ),
             signal,
             value,
-            label: `${state.showAlias ? state.signalSettings[signal]?.alias || signal : signal} = ${state.modeMapping[signal][value]}`,
+            label: `${(state.showAlias && state.signalSettings[signal]?.alias) || displaySignalName(signal, Object.keys(state.chartData?.seriesMap ?? {}))} = ${state.modeMapping[signal][value]}`,
           });
           break;
         }
@@ -1015,6 +1027,7 @@ export function Chart() {
         <div
           ref={menuRef}
           role="menu"
+          title={contextMenu.signal}
           className="absolute z-[70] rounded border border-gray-300 dark:border-slate-600 bg-white dark:bg-slate-800 text-gray-800 dark:text-gray-200 text-xs shadow-lg p-1"
           style={{ left: contextMenu.x, top: contextMenu.y }}
         >

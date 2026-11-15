@@ -1,3 +1,4 @@
+import { displaySignalName } from "../../utils/displaySignalName";
 import { useShallow } from "zustand/react/shallow";
 import { X, AlertCircle } from "lucide-react";
 import { useLiveStore } from "../../live/liveStore";
@@ -15,6 +16,7 @@ export function VariableMonitor() {
     watch: s.watch, values: s.values, errors: s.watchErrors, serverWatch: s.serverWatch,
   })));
   const colors = useWaveformStore(useShallow((s) => Object.fromEntries(watch.map((w) => [w.name, s.signalSettings[w.name]?.color ?? "#999"]))));
+  const names = watch.map(w => w.name);
   const watched = new Set(serverWatch);
   const allPlot = watch.length > 0 && watch.every((w) => w.plot);
 
@@ -50,7 +52,7 @@ export function VariableMonitor() {
                   </td>
                   <td className={cn("font-mono truncate max-w-[120px]", err && "text-red-500")} title={err ? `${w.name}: ${err}` : w.name}>
                     {err && <AlertCircle size={11} className="inline mr-0.5 -mt-0.5" />}
-                    {w.name}
+                    {displaySignalName(w.name, names)}
                     {!err && serverWatch.length > 0 && !watched.has(w.name) && <span className="text-[10px] text-gray-400">（同期待ち）</span>}
                   </td>
                   <td className="font-mono text-right tabular-nums" title={!err && mayBeRounded(values[w.name]) ? ROUNDED_TITLE : undefined}>

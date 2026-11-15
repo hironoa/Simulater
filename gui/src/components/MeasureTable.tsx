@@ -1,3 +1,4 @@
+import { displaySignalName } from "../utils/displaySignalName";
 import { useCompareView } from "../hooks/useCompareView";
 import { compareSample } from "../utils/compareView";
 import React, { useRef, useState, useLayoutEffect, useMemo } from "react";
@@ -271,9 +272,7 @@ export function MeasureTable({ id = "measure-table", forceTransposed }: { id?: s
                       Δt
                     </th>
                     {columnGroups.map(({ sig, count }) => {
-                      const displayName = showAlias
-                        ? signalSettings[sig].alias || sig
-                        : sig;
+                      const displayName = (showAlias && signalSettings[sig].alias) || displaySignalName(sig, activeSignals);
                       // Raw mode drops the unit here; the toolbar already says values are raw.
                       const unitText = valueDisplayMode === "raw" ? "" : getDisplayUnit(sig, unitMapping, modeMapping, valueDisplayMode);
                       const unit = unitText ? ` [${unitText}]` : "";
@@ -281,6 +280,7 @@ export function MeasureTable({ id = "measure-table", forceTransposed }: { id?: s
                         <th
                           key={sig}
                           colSpan={hasCompareColumns ? count : undefined}
+                          title={sig}
                           className={cn("py-[3px] px-1.5 border-b border-gray-300 dark:border-slate-600 border-r border-gray-200 dark:border-slate-600 bg-gray-50 dark:bg-slate-700 whitespace-normal break-words leading-tight align-middle", hasCompareColumns ? "text-center" : "text-left")}
                           style={{ color: signalSettings[sig].color }}
                         >
@@ -442,9 +442,7 @@ export function MeasureTable({ id = "measure-table", forceTransposed }: { id?: s
                   </tr>
                   {tableColumns.map(({ sig, side }, columnIndex) => {
                     const isGroupStart = columnIndex === 0 || tableColumns[columnIndex - 1].sig !== sig;
-                    const displayName = showAlias
-                      ? signalSettings[sig].alias || sig
-                      : sig;
+                    const displayName = (showAlias && signalSettings[sig].alias) || displaySignalName(sig, activeSignals);
                     // Raw mode drops the unit here; the toolbar already says values are raw.
                     const unitText = valueDisplayMode === "raw" ? "" : getDisplayUnit(sig, unitMapping, modeMapping, valueDisplayMode);
                     const unit = unitText ? ` [${unitText}]` : "";
@@ -459,7 +457,7 @@ export function MeasureTable({ id = "measure-table", forceTransposed }: { id?: s
                               color: signalSettings[sig].color,
                               borderLeft: `3px solid ${signalSettings[sig].color}`,
                             }}
-                            title={displayName}
+                            title={sig}
                           >
                             {displayName}
                             {unit}
@@ -469,7 +467,7 @@ export function MeasureTable({ id = "measure-table", forceTransposed }: { id?: s
                           <td
                             className="sticky z-20 bg-white dark:bg-slate-700 border-r border-b border-gray-200 dark:border-slate-600 w-[1%] py-[3px] px-1.5 text-center whitespace-nowrap box-border shadow-[1px_0_0_#eee] dark:shadow-none"
                             style={{ left: colWidths.w1, color: signalSettings[sig].color }}
-                            title={`${displayName} ${side}`}
+                            title={`${sig} ${side}`}
                           >
                             {side}
                           </td>

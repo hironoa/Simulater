@@ -1,24 +1,23 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import * as echarts from "echarts";
 import { useShallow } from "zustand/react/shallow";
 import { useWaveformStore } from "../../store/useWaveformStore";
 import { useLiveStore } from "../../live/liveStore";
 import { liveRecord } from "../../live/liveRecord";
-import { buildLiveSeriesData } from "../../live/liveWindow";
+import { drawLive } from "../../live/liveCanvas";
 import { getDisplayConversion } from "../../utils/helpers";
+import { displaySignalName } from "../../utils/displaySignalName";
 
-/** 描画の上限（fps）。samples は約 50ms ごとに届くが、描画はこれ以下に間引く。 */
-const MAX_FPS = 12;
+/** 描画の上限（fps）。samples は約 50ms ごとに届く。描画は記録が変わったときだけ行う。 */
+const MAX_FPS = 30;
 
 export interface LiveDrawStats { fps: number; lastDrawMs: number; points: number }
 
 /**
- * 実行中の軽い描画経路。レーンの構成（信号・色・テーマ・大きさ）が変わったときだけ option を作り直し、
- * それ以外は requestAnimationFrame で記録の変化を見て、直近 N 点の series.data と x 軸範囲だけを差し替える。
+ * 実行中の軽い描画経路。requestAnimationFrame で記録の変化を見て、直近 N 点を Canvas 2D に直接描く
+ * （描き方と、ECharts を使わない理由は live/liveCanvas.ts）。
  */
 export function LiveChart() {
-  const ref = useRef<HTMLDivElement>(null);
-  const chart = useRef<echarts.ECharts | null>(null);
+  const ref = useRef<HTMLCanvasElement>(null);
   const lastRev = useRef(-1);
   const [stats, setStats] = useState<LiveDrawStats>({ fps: 0, lastDrawMs: 0, points: 0 });
   const { watch, windowSize, periodMs } = useLiveStore(useShallow((s) => ({
@@ -51,7 +50,7 @@ export function LiveChart() {
       top: top + i * (lane + gap),
       height: lane,
       color: settings[sig]?.color ?? "#3b82f6",
-      label: (showAlias && settings[sig]?.alias) || sig,
+      label: (showAlias && settings[sig]?.alias) || displaySignalName(sig, plotted),
       conv: getDisplayConversion(sig, lsb, offset, mode),
       yMin: settings[sig] && !settings[sig].yAuto ? settings[sig].yMin : null,
       yMax: settings[sig] && !settings[sig].yAuto ? settings[sig].yMax : null,
@@ -59,58 +58,13 @@ export function LiveChart() {
     }));
   }, [plotted, size.h, settings, showAlias, lsb, offset, mode]);
 
-  useEffect(() => {
-    if (!ref.current) return;
-    chart.current?.dispose();
-    const c = echarts.init(ref.current, theme === "dark" ? "dark" : undefined, { renderer: "canvas" });
-    chart.current = c;
-    return () => { c.dispose(); if (chart.current === c) chart.current = null; };
-  }, [theme]);
-
-  useEffect(() => {
-    const c = chart.current;
-    if (!c) return;
-    c.resize();
-    const dark = theme === "dark";
-    const axisColor = dark ? "#94a3b8" : "#64748b";
-    const splitColor = dark ? "#334155" : "#e5e7eb";
-    const left = 150, right = 20;
-    c.setOption({
-      backgroundColor: "transparent",
-      animation: false,
-      grid: layout.map((l) => ({ left, right, top: l.top, height: l.height, containLabel: false })),
-      xAxis: layout.map((_, i) => ({
-        type: "value", gridIndex: i, scale: true,
-        axisLabel: { show: i === layout.length - 1, color: axisColor, fontSize: 10, formatter: (v: number) => `${Number(v.toPrecision(10))}` },
-        axisTick: { show: i === layout.length - 1 },
-        axisLine: { lineStyle: { color: splitColor } },
-        splitLine: { show: true, lineStyle: { color: splitColor } },
-        name: i === layout.length - 1 ? "ms" : undefined, nameGap: 4, nameTextStyle: { color: axisColor, fontSize: 10 },
-      })),
-      yAxis: layout.map((l, i) => ({
-        type: "value", gridIndex: i, scale: true,
-        min: l.yMin ?? undefined, max: l.yMax ?? undefined,
-        name: l.label, nameLocation: "middle", nameRotate: 0, nameGap: 60,
-        nameTextStyle: { color: l.color, fontSize: 11, fontWeight: "bold", width: 80, overflow: "truncate", align: "right" },
-        axisLabel: { color: axisColor, fontSize: 10 },
-        splitNumber: 2,
-        splitLine: { lineStyle: { color: splitColor } },
-      })),
-      series: layout.map((l, i) => ({
-        id: l.sig, name: l.sig, type: "line", xAxisIndex: i, yAxisIndex: i,
-        step: "end", showSymbol: false, symbol: "none", sampling: "lttb", silent: true,
-        lineStyle: { color: l.color, width: l.lineWidth }, itemStyle: { color: l.color },
-        data: [],
-      })),
-      tooltip: { show: false },
-    }, true);
-    lastRev.current = -1; // 構成を変えたら必ず描き直す
-  }, [layout, theme, size.w]);
-
   const layoutRef = useRef(layout);
   layoutRef.current = layout;
-  const paramsRef = useRef({ windowSize, periodMs });
-  paramsRef.current = { windowSize, periodMs };
+  const paramsRef = useRef({ windowSize, periodMs, theme, size });
+  paramsRef.current = { windowSize, periodMs, theme, size };
+
+  // 構成（レーン・テーマ・大きさ）が変わったら必ず描き直す
+  useEffect(() => { lastRev.current = -1; }, [layout, theme, size.w, size.h]);
 
   useEffect(() => {
     let raf = 0;
@@ -121,33 +75,41 @@ export function LiveChart() {
     let points = 0;
     const tick = (now: number) => {
       raf = requestAnimationFrame(tick);
-      const c = chart.current;
-      if (!c) return;
-      if (now - lastDraw < 1000 / MAX_FPS - 1) return;
-      // 非表示から表示に戻った直後など、ResizeObserver より先に描くときは大きさを合わせ直す
-      const el = ref.current;
-      if (el && el.clientWidth > 0 && (el.clientWidth !== c.getWidth() || el.clientHeight !== c.getHeight())) {
-        c.resize();
-        setSize((prev) => (prev.w === el.clientWidth && prev.h === el.clientHeight ? prev : { w: el.clientWidth, h: el.clientHeight }));
-      }
+      const cv = ref.current;
+      if (!cv) return;
       if (now - fpsSince >= 1000) {
         setStats({ fps: Math.round((frames * 1000) / (now - fpsSince)), lastDrawMs: Number(drawMs.toFixed(1)), points });
         frames = 0;
         fpsSince = now;
       }
-      if (liveRecord.revision === lastRev.current) return;
+      if (now - lastDraw < 1000 / MAX_FPS - 1) return;
+      // 非表示から表示に戻った直後など、ResizeObserver より先に描くときは大きさを合わせ直す
+      const w = cv.clientWidth, h = cv.clientHeight;
+      if (w <= 0 || h <= 0) return;
+      const dpr = window.devicePixelRatio || 1;
+      const bw = Math.round(w * dpr), bh = Math.round(h * dpr);
+      let resized = false;
+      if (cv.width !== bw || cv.height !== bh) {
+        cv.width = bw;
+        cv.height = bh;
+        resized = true;
+        setSize((prev) => (prev.w === w && prev.h === h ? prev : { w, h }));
+      }
+      if (!resized && liveRecord.revision === lastRev.current) return;
+      const ctx = cv.getContext("2d");
+      if (!ctx) return;
       lastRev.current = liveRecord.revision;
       lastDraw = now;
       const t0 = performance.now();
-      const { windowSize: n, periodMs: p } = paramsRef.current;
-      const lanes = layoutRef.current;
-      const data = buildLiveSeriesData(liveRecord, lanes, n, p);
-      c.setOption({
-        xAxis: lanes.map(() => ({ min: data.xMin, max: data.xMax })),
-        series: lanes.map((l, i) => ({ id: l.sig, data: data.series[i] })),
-      }, { lazyUpdate: false, silent: true });
+      const { windowSize: n, periodMs: p, theme: th } = paramsRef.current;
+      const dark = th === "dark";
+      const res = drawLive(ctx, w, h, dpr, liveRecord, layoutRef.current, n, p, {
+        axisColor: dark ? "#94a3b8" : "#64748b",
+        splitColor: dark ? "#334155" : "#e5e7eb",
+        left: 150, right: 20,
+      });
       drawMs = performance.now() - t0;
-      points = data.points;
+      points = res.points;
       frames++;
     };
     raf = requestAnimationFrame(tick);
@@ -160,7 +122,7 @@ export function LiveChart() {
 
   return (
     <div className="relative w-full h-full">
-      <div ref={ref} className="w-full h-full rounded bg-white dark:bg-slate-900" />
+      <canvas ref={ref} className="block w-full h-full rounded bg-white dark:bg-slate-900" />
       {plotted.length === 0 && (
         <div className="absolute inset-0 flex items-center justify-center text-sm text-gray-400 pointer-events-none">
           変数モニタで「波形」に印を付けた変数がここに流れます

@@ -1,3 +1,4 @@
+import { displaySignalName } from "../../../utils/displaySignalName";
 import { useCompareView } from "../../../hooks/useCompareView";
 import { CompareBadge } from "./CompareStatus";
 import React, { useMemo } from "react";
@@ -13,6 +14,9 @@ import { GroupSettings } from "./GroupSettings";
 import { SignalSettings } from "./SignalSettings";
 
 export function SignalItemOverlay({ sigName }: { sigName: string }) {
+  // 表示名の重なりの判定に使う名前の一覧。行ごとに useCompareView() を呼ぶと、比較表示のたびに全信号のデータを
+  // 行の数だけ作り直すので、ストアの名前だけを見る
+  const names = useWaveformStore(useShallow((state) => Object.keys(state.signalSettings)));
   const {
        signalSettings, showAlias 
     } = useWaveformStore(useShallow((state) => ({
@@ -21,14 +25,14 @@ export function SignalItemOverlay({ sigName }: { sigName: string }) {
     })));
   const setting = signalSettings[sigName];
   if (!setting) return null;
-  const displayName = showAlias ? setting.alias || sigName : sigName;
+  const displayName = (showAlias && setting.alias) || displaySignalName(sigName, names);
 
   return (
     <div className="border border-gray-200 dark:border-slate-700 bg-white dark:bg-slate-800 shadow-xl opacity-90 ring-2 ring-blue-500 transition-colors" style={{ listStyle: "none" }}>
       <div className="flex items-center pr-1 pl-1.5 py-0.5 text-xs border-l-4 border-transparent cursor-grabbing">
         <span className="w-3 mr-1 shrink-0"></span>
         <input type="checkbox" checked={setting.checked} readOnly className="mr-1 cursor-pointer" />
-        <span className="flex-1 whitespace-nowrap overflow-hidden text-ellipsis font-semibold px-1 rounded" style={{ color: setting.color }}>
+        <span className="flex-1 whitespace-nowrap overflow-hidden text-ellipsis font-semibold px-1 rounded" style={{ color: setting.color }} title={sigName}>
           {displayName}
         </span>
         <button className="text-gray-400 ml-auto p-1 pointer-events-none"><Settings size={14} /></button>
@@ -67,6 +71,9 @@ export function GroupItemOverlay({ id }: { id: string }) {
 }
 
 export function SortableSignalItem({ id, sigName }: { id: string; sigName: string; key?: React.Key; }) {
+  // 表示名の重なりの判定に使う名前の一覧。行ごとに useCompareView() を呼ぶと、比較表示のたびに全信号のデータを
+  // 行の数だけ作り直すので、ストアの名前だけを見る
+  const names = useWaveformStore(useShallow((state) => Object.keys(state.signalSettings)));
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id, data: { type: "Signal" } });
   const style = { transform: CSS.Transform.toString(transform), transition, opacity: isDragging ? 0.3 : 1 };
 
@@ -89,7 +96,7 @@ export function SortableSignalItem({ id, sigName }: { id: string; sigName: strin
   if (!setting) return null;
 
   const isHovered = hoveredSignal === sigName;
-  const displayName = showAlias ? setting.alias || sigName : sigName;
+  const displayName = (showAlias && setting.alias) || displaySignalName(sigName, names);
 
   const autoRange = useMemo(() => {
     if (!chartData || !chartData.seriesMap[sigName]) return { min: 0, max: 1 };
@@ -156,7 +163,7 @@ export function SortableSignalItem({ id, sigName }: { id: string; sigName: strin
       <div {...attributes} {...listeners} className={cn("flex items-center pr-1 pl-1.5 py-0.5 text-xs border-l-4 transition-colors cursor-grab active:cursor-grabbing touch-none", "border-transparent hover:border-blue-500", isHovered ? "border-blue-500" : "")}>
         <span className="w-3 mr-1 shrink-0"></span>
         <input type="checkbox" checked={setting.checked} onChange={() => toggleSignalCheck(sigName)} onPointerDown={(e) => e.stopPropagation()} className="mr-1 cursor-pointer" />
-        <span className="flex-1 whitespace-nowrap overflow-hidden text-ellipsis cursor-pointer font-semibold px-1 rounded transition-opacity hover:opacity-70 hover:underline" style={{ color: setting.color }} title={displayName} onClick={() => toggleSignalCheck(sigName)}>
+        <span className="flex-1 whitespace-nowrap overflow-hidden text-ellipsis cursor-pointer font-semibold px-1 rounded transition-opacity hover:opacity-70 hover:underline" style={{ color: setting.color }} title={sigName} onClick={() => toggleSignalCheck(sigName)}>
           {displayName}
         </span>
         <CompareBadge signal={sigName} />
@@ -183,7 +190,7 @@ export function GroupDroppableList({ id, signals }: { id: string; signals: strin
       <SortableContext items={signals.filter(sig => !aOnly.has(sig))} strategy={verticalListSortingStrategy}>
         {signals.map((sig) => (
           aOnly.has(sig) ? <li key={sig} className="flex items-center gap-2 px-2.5 py-1 text-xs">
-            <span className="truncate" style={{ color: view.settings[sig].color }}>{sig}</span>
+            <span className="truncate" style={{ color: view.settings[sig].color }} title={sig}>{displaySignalName(sig, view.signals)}</span>
             <CompareBadge signal={sig} />
           </li> : <SortableSignalItem key={sig} id={sig} sigName={sig} />
         ))}
