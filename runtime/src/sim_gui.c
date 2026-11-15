@@ -1393,6 +1393,8 @@ static void free_play_locked(void)
     G.play_cols = 0;
     sim_csv_table_free(&G.play);
     G.play_active = 0;
+    /* CSV の % 行による置換は、その CSV を手放すときに解除する */
+    if (G.b && G.b->set_csv_stubs) { char e[64]; G.b->set_csv_stubs(G.b, NULL, NULL, 0, e, sizeof e); }
 }
 
 static void api_load_csv(sim_sock s, req_t *r)
@@ -1478,11 +1480,23 @@ static void api_load_csv(sim_sock s, req_t *r)
             }
         }
     }
+    /* % 行の置換を確かめる。失敗したら以前の CSV の置換に戻して 400（以前の状態を残す） */
+    if (sim_csv_apply_stubs(G.b, &t, err, sizeof err)) {
+        char e2[64];
+        sim_csv_apply_stubs(G.b, &G.play, e2, sizeof e2);   /* G.play が空なら解除のまま */
+        for (i = 0; i < t.nin; i++) sim_ref_free(refs[i]);
+        free(refs);
+        sim_csv_table_free(&t);
+        sim_mutex_unlock(G.mu);
+        send_error(s, 400, err);
+        return;
+    }
     G.running = 0;
     G.budget = 0;
     G.dropped.len = 0;
     if (nf) commit_func_locked(t.func, nf);
     free_play_locked();
+    sim_csv_apply_stubs(G.b, &t, err, sizeof err);   /* free_play_locked が解除したので付け直す（上で確かめ済み） */
     G.play = t;
     G.play_cols = t.nin;
     G.play_refs = refs;
@@ -1550,7 +1564,18 @@ static void api_export(sim_sock s)
     for (k = 0; k < G.nin_cols; k++) nin += in_used[k];
     for (k = 0; k < G.nout_cols; k++) nout += out_used[k];
     /* 対象関数を変えるとリセットして記録を消すので、記録はすべて今の関数のもの */
-    sim_buf_printf(&b, "mod,%s,GUI記録,%d,%d\r\n#COMMENT", G.func, nin, nout);
+    sim_buf_printf(&b, "mod,%s,GUI記録,%d,%d\r\n", G.func, nin, nout);
+    /* 読み込んだ CSV の % 行による置換が有効なら、保存した CSV を sim run で再実行しても同じ置換になるよう書き出す
+     * （置換が変わるのは CSV の読み込みと対象関数の変更のときで、どちらも記録を消す） */
+    /* 再生が終わっても G.play は次の読み込みか関数の変更まで残り、置換も有効なまま */
+    for (k = 0; k < G.play.nstubs; k++) {
+        sim_buf_adds(&b, "%,");
+        sim_csv_cell(&b, G.play.stub_funcs[k]);
+        sim_buf_addc(&b, ',');
+        sim_csv_cell(&b, G.play.stub_origs[k]);
+        sim_buf_adds(&b, "\r\n");
+    }
+    sim_buf_adds(&b, "#COMMENT");
     for (k = 0; k < G.nin_cols; k++) if (in_used[k]) sim_buf_printf(&b, ",%s", G.in_cols[k]);
     for (k = 0; k < G.nout_cols; k++) if (out_used[k]) sim_buf_printf(&b, ",%s", G.out_cols[k]);
     sim_buf_adds(&b, "\r\n");

@@ -124,6 +124,8 @@ export function decodeWaveformCSV(text: string) {
     const key = firstKey(row);
     if (key.toLowerCase().startsWith("#init")) { initValues = true; return; }
     if (key.startsWith(";") || key.startsWith("#")) return;
+    // % 行は置換（スタブ）の指定（%,スタブ関数,元の関数）。周期に数えない。
+    if (key === "%") return;
     steps.push(steps.length + 1);
     picked.forEach(({ colIdx }, i) => seriesMap[headers[i]].push(cellValue(row[colIdx])));
   });

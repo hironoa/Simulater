@@ -159,6 +159,12 @@ struct sim_backend {
     /* 省略可: `sim info` 用の概要を out に書く */
     void (*print_info)(sim_backend *b, FILE *out);
 
+    /* 省略可: CSV の % 行（%,スタブ関数,元の関数）による置換。呼ぶたびに前回の指定を捨てて入れ替える
+     * （n = 0 で解除）。sim.cfg の stub / skip と同じ元の関数なら、こちらを優先する。
+     * 関数が見つからないなどで失敗したら -1 と err を返し、CSV による置換は 1 つもない状態にする */
+    int (*set_csv_stubs)(sim_backend *b, const char *const *origs, const char *const *stubs, int n,
+                         char *err, size_t errlen);
+
     int csv_init;            /* 0 auto, 1 once, 2 every */
     void *impl;              /* バックエンド固有のデータ */
 };
