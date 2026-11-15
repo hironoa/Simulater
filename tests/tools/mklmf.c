@@ -38,16 +38,19 @@ static void func(const char *n,unsigned addr,unsigned ret,unsigned p1,unsigned p
 {
     size_t a=sym(n,addr,1,ret,0x26,2,1); w32(a+4,code_size(addr)); w32(a+16,1);
     sym(".bf",addr,1,0,0x65,0,1);
-    if(!strcmp(n,"_cycle")) var("_local",0xFE01A,13,0,0,0,3);
+    if(!strcmp(n,"_cycle")) {
+        var("_local",0xFE01A,13,0,0,0,3);
+        var("_constant",0xFE03D,0x500C,0,0,0,3);
+    }
     if(p1) sym("_a",0,-1,p1,0x11,0,0);
     if(p2) sym("_b",4,-1,p2,9,0,0);
     sym(".ef",addr+1,1,0,0x65,0,1);
 }
-static void ptrfunc(const char *n,unsigned addr,int retptr)
+static void ptrfunc(const char *n,unsigned addr,int retptr,unsigned qualifier)
 {
     size_t a=sym(n,addr,1,12,0x26,retptr?6:2,1); w32(a+4,code_size(addr)); w32(a+16,1);
     sym(".bf",addr,1,0,0x65,0,1);
-    a=sym("_a",0,-1,12,0x11,1,1); w16(a+6,2); w16(a+18,1);
+    a=sym("_a",0,-1,12|qualifier,0x11,1,1); w16(a+6,2); w16(a+18,1);
     sym(".ef",addr+1,1,0,0x65,0,1);
 }
 int main(int argc,char **argv)
@@ -76,9 +79,12 @@ int main(int argc,char **argv)
     func("_second8",LP_second8,12,12,12); func("_second16",LP_second16,13,13,13);
     func("_second32",LP_second32,5,13,5); func("_ret32",LP_ret32,5,0,0);
     func("_cycle",LP_cycle,1,0,0); func("_first32",LP_first32,1,5,0);
-    ptrfunc("_readptr",LP_readptr,0);
+    ptrfunc("_readptr",LP_readptr,0,0);
+    ptrfunc("_constptr",LP_readptr,0,0x5100);
+    func("_constbyte",LP_echo8,0x500C,0x500C,0);
+    func("_constword",LP_echo16,0x500E,0x500E,0);
     /* 関数戻りの派生型は未確認なので echoptr は意図的に未知型になる。 */
-    ptrfunc("_echoptr",LP_echoptr,1);
+    ptrfunc("_echoptr",LP_echoptr,1,0);
     a=sym("_third32",LP_third32,1,5,0x26,2,1); w32(a+4,code_size(LP_third32)); w32(a+16,1);
     sym(".bf",LP_third32,1,0,0x65,0,1);
     sym("_a",0,-1,12,0x11,0,0); sym("_b",4,-1,12,9,0,0); sym("_c",6,-1,5,9,0,0);
@@ -96,6 +102,8 @@ int main(int argc,char **argv)
     var("_arr",0xFE004,12,3,4,4,0x26); var("_ptr",0xFE008,12,1,2,0,0x26);
     var("_unknown",0xFE00A,8,0,6,0,0x26); var("_mystery",0xFE010,13,0,2,0,0x55);
     var("_vol",0xFE012,0x100D,0,0,0,0x26); var("_float",0xFE014,6,0,0,0,0x26);
+    var("_constant",0xFE03C,0x500C,0,0,0,0x26);
+    var("_const_pointer",0xFE03E,0x510C,1,2,0,0x26);
     var("_private",0xFE018,13,0,0,0,3);
     sym("_@STBEG",0xFFDE0,-1,0,0x20,0,0); sym("_@STEND",0xFF000,-1,0,0x20,0,0);
     if (!strcmp(mode,"diagnostics")) {

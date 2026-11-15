@@ -1,0 +1,30 @@
+mod,constptr,allocated pointer argument,4,1
+#COMMENT,$@p,*@p,@p[0],@n,constptr@@
+,2,1|2,171,2,173
+mod,constptr,explicit pointer argument,4,1
+#COMMENT,g_b8[0],@p,@p[0],@n,constptr@@
+,17,0xE11A,231,1,231
+mod,ptrconst,allocated pointer argument,4,1
+#COMMENT,$@p,*@p,@p[0],@n,ptrconst@@
+,2,1|2,171,2,173
+mod,ptrconst,explicit pointer argument,4,1
+#COMMENT,g_b8[0],@p,@p[0],@n,ptrconst@@
+,17,0xE11A,231,1,231
+mod,constptrconst,allocated pointer argument,4,1
+#COMMENT,$@p,*@p,@p[0],@n,constptrconst@@
+,2,1|2,171,2,173
+mod,constptrconst,explicit pointer argument,4,1
+#COMMENT,g_b8[0],@p,@p[0],@n,constptrconst@@
+,17,0xE11A,231,1,231
+mod,constvalue,const value and return,3,1
+#COMMENT,@a,@b,@c,constvalue@@
+,255,54320,17,54321
+mod,constret,const byte return,2,1
+#COMMENT,$@p,@p[0],constret@@
+,1,231,231
+mod,constretptr,pointer to const return,2,2
+#COMMENT,@p,@v,constretptr@@,constretptr@@[0]
+,0xFE11A,171,0xFE11A,171
+mod,f_bits,const static read,0,1
+#COMMENT,f_bits@constant
+,0

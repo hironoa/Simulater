@@ -172,6 +172,20 @@ int main(int argc, char **argv)
         for (e = all->child; e; e = e->next) visit(e, 0);
         sj_free(all);
     }
+    if (strcmp(argv[3], "mock") != 0) {
+        const char *names[] = {"@p", "@p[0]", "constptrconst@p[0]"};
+        unsigned k;
+        reset = request("/api/control", NULL, "{\"cmd\":\"reset\",\"func\":\"constptrconst\"}");
+        sj_free(reset);
+        for (k = 0; k < sizeof names / sizeof names[0]; k++) {
+            all = request("/api/symbols", names[k], NULL);
+            e = exact(all, names[k]);
+            require(sj_get_bool(e, "writable", 0), names[k]);
+            sj_free(all);
+        }
+        reset = request("/api/control", NULL, "{\"cmd\":\"reset\",\"func\":\"TEST_cycle\"}");
+        sj_free(reset);
+    }
     reset = request("/api/control", NULL, "{\"cmd\":\"reset\"}");
     sj_free(reset);
     require(nseen > 0, "nonzero symbols");

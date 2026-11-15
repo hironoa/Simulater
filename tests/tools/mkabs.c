@@ -412,7 +412,7 @@ enum {
     L_p_u8, L_cu8, L_p_cu8, L_fp_u8, L_fp_cu8,
     L_S, L_p_S, L_cS, L_p_cS, L_W, L_E, L_E2, L_U, L_C, L_Cu, L_Cs,
     L_a_u8_8, L_a_u8_3, L_a_u8_2_3, L_cu16, L_a_cu16_4, L_cchar, L_a_cchar_8, L_vu16, L_a_u8_2,
-    L_const_mixed,
+    L_const_mixed, L_cp_u8, L_cp_cu8,
     L_last
 };
 
@@ -487,6 +487,8 @@ static void common_types(void)
     d_array(L_a_u8_8, L_u8, 8, 0);
     d_array(L_a_u8_3, L_u8, 3, 0);
     d_array(L_a_u8_2_3, L_u8, 2, 3);
+    d_qual(L_cp_u8, TAG_const, L_p_u8);
+    d_qual(L_cp_cu8, TAG_const, L_p_cu8);
     d_qual(L_cu16, TAG_const, L_u16);
     d_array(L_a_cu16_4, L_cu16, 4, 0);
     d_qual(L_cchar, TAG_const, L_char);
@@ -508,6 +510,8 @@ static void build_dwarf(void)
     common_types();
     d_var("g_a", L_u8, 0xFE100, 1);           /* 最初の変数に独自属性が付く */
     d_junk_tag();
+    d_var("g_const_pointer", L_cp_u8, 0xFE190, 1);
+    d_var("g_const_target", L_p_cu8, 0xFE192, 1);
     d_var("g_const_mixed", L_const_mixed, 0xFE180, 1);
     d_var("g_const_elements", L_a_cu16_4, 0xFE184, 1);
     d_var("g_const_record", L_cS, 0xFE18C, 1);
@@ -560,6 +564,19 @@ static void build_dwarf(void)
     FUNC("f_args8", 1, L_u8); d_param("a1", L_u8); d_param("a2", L_u8); d_param("a3", L_u8); d_param("a4", L_u8);
     d_param("a5", L_u8); d_param("a6", L_u8); d_param("a7", L_u8); d_param("a8", L_u8); d_end();
     FUNC("f_mix2", 1, -1); d_param("a", L_u8); d_param("b", L_u32); d_param("c", L_u16); d_param("d", L_u8); d_end();
+    /* 同じ機械語を異なるconstシグネチャで呼ぶ。 */
+    d_func_begin("constptr", TP_f_sum, fend(TP_f_sum), 1, L_u16);
+    d_param("p", L_cp_u8); d_param("n", L_u8); d_end();
+    d_func_begin("ptrconst", TP_f_sum, fend(TP_f_sum), 1, L_u16);
+    d_param("p", L_p_cu8); d_param("n", L_u8); d_end();
+    d_func_begin("constptrconst", TP_f_sum, fend(TP_f_sum), 1, L_u16);
+    d_param("p", L_cp_cu8); d_param("n", L_u8); d_end();
+    d_func_begin("constvalue", TP_f_mix, fend(TP_f_mix), 1, L_cu16);
+    d_param("a", L_cu8); d_param("b", L_cu16); d_param("c", L_cu8); d_end();
+    d_func_begin("constret", TP_f_far_read, fend(TP_f_far_read), 1, L_cu8);
+    d_param("p", L_fp_cu8); d_end();
+    d_func_begin("constretptr", TP_f_far_write, fend(TP_f_far_write), 1, L_fp_cu8);
+    d_param("p", L_fp_u8); d_param("v", L_u8); d_end();
     FUNC("f_far_read", 1, L_u8); d_param("p", L_fp_cu8); d_end();
     FUNC("f_far_write", 1, L_fp_u8); d_param("p", L_fp_u8); d_param("v", L_u8); d_end();
     FUNC("f_far2", 1, -1); d_param("a", L_u8); d_param("w", L_u16); d_param("p", L_fp_u8); d_end();
@@ -569,7 +586,9 @@ static void build_dwarf(void)
     FUNC("f_float", 1, L_float); d_end();
     FUNC("f_ll", 1, L_llong); d_end();
     FUNC("f_ptr_struct", 1, L_u16); d_param("p", L_p_S); d_end();
-    FUNC("f_bits", 1, -1); d_end();
+    FUNC("f_bits", 1, -1);
+    d_var("constant", L_cu8, 0xFE194, 0);
+    d_local("local_const", L_cu8); d_end();
     FUNC("f_mulhu", 1, L_u32); d_param("a", L_u16); d_param("b", L_u16); d_end();
     FUNC("f_mdu", 1, L_u16); d_param("a", L_u16); d_param("b", L_u16); d_end();
     FUNC("read_io", 1, L_u16); d_end();

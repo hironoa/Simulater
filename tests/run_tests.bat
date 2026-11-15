@@ -881,6 +881,12 @@ if "%RC%"=="0" (call :ok "build GUI CSV table checks") else (call :ng "build GUI
 "%WORK%\csv_table.exe"
 set RC=%ERRORLEVEL%
 if "%RC%"=="0" (call :ok "GUI CSV initialization expansion") else (call :ng "GUI CSV initialization expansion")
+"%CC%" -std=c11 -O2 -Wall -Wextra -D_DEFAULT_SOURCE -I"%ROOT%\runtime\include" -I"%ROOT%\runtime\src" "%T%\tools\check_const_refs.c" "%ROOT%\runtime\src\sim_expr.c" "%ROOT%\runtime\src\sim_util.c" "%ROOT%\runtime\src\sim_platform.c" "%ROOT%\runtime\src\sim_cfg.c" "%ROOT%\runtime\backends\mock\mock_backend.c" -o "%WORK%\const_refs.exe" -lws2_32
+set RC=%ERRORLEVEL%
+if "%RC%"=="0" (call :ok "build const argument checks") else (call :ng "build const argument checks")
+"%WORK%\const_refs.exe"
+set RC=%ERRORLEVEL%
+if "%RC%"=="0" (call :ok "mock const argument preparation and symbol writable") else (call :ng "mock const argument preparation and symbol writable")
 for /f "usebackq delims=" %%N in ("%T%\defines\type_contract_ro.txt") do call :const_csv "%%N"
 echo == definition text contracts
 "%CC%" -std=c11 -O2 -Wall -Wextra -D_DEFAULT_SOURCE -I"%ROOT%\runtime\include" -I"%ROOT%\runtime\src" "%T%\tools\check_defines_text.c" "%ROOT%\runtime\src\sim_defines.c" "%ROOT%\runtime\src\sim_ppexpr.c" "%ROOT%\runtime\src\sim_mtpj.c" "%ROOT%\runtime\src\sim_expr.c" "%ROOT%\runtime\src\sim_cfg.c" "%ROOT%\runtime\src\sim_util.c" "%ROOT%\runtime\src\sim_platform.c" "%ROOT%\runtime\backends\mock\mock_backend.c" -o "%WORK%\check_defines_text.exe" -lws2_32

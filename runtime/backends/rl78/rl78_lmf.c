@@ -385,7 +385,13 @@ int rl78_lmf_load(rl78_elf *e, rl78_symtab *t, rl78_warns *w,
             pn = ar_alloc(&t->ar, (size_t)np*sizeof *pn); pt = ar_alloc(&t->ar, (size_t)np*sizeof *pt);
             fi->f.nparams = (int)np; fi->f.param_names = pn; fi->f.param_types = pt;
             for (j = i+1; k < np; j++) if (syms[j].cls == 9 || syms[j].cls == 0x11) {
-                pn[k] = cname(syms[j].name); pt[k++] = lmf_type(&types,&syms[j],0,0);
+                sim_type *arg = lmf_type(&types,&syms[j],0,0);
+                /* 呼び出し側から設定する引数値。指す先の修飾は保持する。 */
+                if (arg->is_const) {
+                    sim_type *plain = ar_alloc(&t->ar, sizeof *plain);
+                    *plain = *arg; plain->is_const = 0; arg = plain;
+                }
+                pn[k] = cname(syms[j].name); pt[k++] = arg;
             }
             active = t->nfuncs-1; t->dwarf_ok = 1;
             continue;

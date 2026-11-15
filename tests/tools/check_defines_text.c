@@ -103,7 +103,9 @@ int main(int argc,char **argv)
         CHECK(sim_ctx_define(c,"TO_CONST",&cp,0xF962,-1,0,"test",2)>0);
         for (j=0;j<5;j++) {
             sim_ref *r=sim_ref_parse(c,expr[j],err,sizeof err);
-            CHECK(r!=NULL); if (r) CHECK(sim_ref_writable(r)==(j==1 || j==2));
+            /* ポインタ自身の const は、その変数だけを書き込み不可にする。指す先の可否は指す先の型の const で決まる。 */
+            static const int writable[]={0,1,1,0,0};
+            CHECK(r!=NULL); if (r) CHECK((sim_ref_writable(r)!=0)==writable[j]);
             sim_ref_free(r);
         }
     }

@@ -170,6 +170,39 @@ rl78_run "sim.cfg の abs = で .abs を指定（--abs なし）" 0 "合計: 総
 echo "== LMF: CA78K0R"
 check "mklmf build" "$CC" -std=c11 -O2 -Wall -Wextra -o "$WORK/mklmf" "$T/tools/mklmf.c"
 check "mklmf normal" "$WORK/mklmf" normal "$WORK/test.lmf"
+# 引数constは呼び出し側の準備を妨げず、通常の変数constは保護する。
+rl78_run "LMF const arguments and returns (5 rows)" 0 "総数 5, OK 5, NG 0" -- --abs "$WORK/test.lmf" "$R/csv/const_lmf.csv"
+for version in dwarf2 dwarf3 dwarf4; do
+    rl78_run "$version const arguments and returns (10 rows)" 0 "総数 10, OK 10, NG 0" -- --abs "$WORK/tp_$version.abs" "$R/csv/const_dwarf.csv"
+    for const_name in g_const_pointer 'g_const_target[0]' 'f_bits@constant' 'f_bits@local_const'; do
+        printf 'mod,f_bits,const protection,3,0\n#COMMENT,0xFE190:2,0xFE192:2,%s\n,0xE11A,0xE11A,1\n' "$const_name" > "$WORK/const_reject.csv"
+        "$RS" run --abs "$WORK/tp_$version.abs" "$WORK/const_reject.csv" -o "$WORK/const_out" > "$WORK/const.log" 2>&1
+        rc=$?
+        check "$version protects $const_name" test "$rc" -eq 2
+    done
+    # ポインタ自身が const でも、指す先（const でない型）には書ける
+    printf 'mod,f_bits,const pointer target,3,0\n#COMMENT,0xFE190:2,0xFE192:2,g_const_pointer[0]\n,0xE11A,0xE11A,1\n' > "$WORK/const_ok.csv"
+    "$RS" run --abs "$WORK/tp_$version.abs" "$WORK/const_ok.csv" -o "$WORK/const_out" > "$WORK/const.log" 2>&1
+    rc=$?
+    check "$version allows g_const_pointer[0]" test "$rc" -eq 0
+    printf 'skip = constret:231\n' > "$WORK/const_skip.cfg"
+    printf 'mod,constret,const skip,0,1\n#COMMENT,constret@@\n,231\n' > "$WORK/const_skip.csv"
+    rl78_run "$version const return skip" 0 "総数 1, OK 1, NG 0" -- --abs "$WORK/tp_$version.abs" --cfg "$WORK/const_skip.cfg" "$WORK/const_skip.csv"
+done
+for const_name in constant const_pointer 'cycle@constant'; do
+    printf 'mod,cycle,const protection,2,0\n#COMMENT,0xFE03E:2,%s\n,0xE004,1\n' "$const_name" > "$WORK/const_reject.csv"
+    "$RS" run --abs "$WORK/test.lmf" "$WORK/const_reject.csv" -o "$WORK/const_out" > "$WORK/const.log" 2>&1
+    rc=$?
+    check "LMF protects $const_name" test "$rc" -eq 2
+done
+printf 'mod,cycle,const pointer target,2,0\n#COMMENT,0xFE03E:2,const_pointer[0]\n,0xE004,1\n' > "$WORK/const_ok.csv"
+"$RS" run --abs "$WORK/test.lmf" "$WORK/const_ok.csv" -o "$WORK/const_out" > "$WORK/const.log" 2>&1
+rc=$?
+check "LMF allows const_pointer[0]" test "$rc" -eq 0
+printf 'skip = constbyte:231\n' > "$WORK/const_skip.cfg"
+printf 'mod,constbyte,const skip,0,1\n#COMMENT,constbyte@@\n,231\n' > "$WORK/const_skip.csv"
+rl78_run "LMF const return skip" 0 "総数 1, OK 1, NG 0" -- --abs "$WORK/test.lmf" --cfg "$WORK/const_skip.cfg" "$WORK/const_skip.csv"
+
 "$RS" info --abs "$WORK/test.lmf" -v > "$WORK/lmf.log" 2>&1
 check "LMF info" test $? -eq 0
 check "LMF ABI auto" contains "$WORK/lmf.log" "ABI: ca78k0r"
@@ -211,6 +244,7 @@ PROBE="$T/ca78k0r_probe/DefaultBuild/ca78k0r_probe.lmf"
 B="$ROOT/runtime/backends/rl78"
 check "LMF type checker build" "$CC" -std=c11 -O2 -Wall -Wextra -D_DEFAULT_SOURCE -I"$B" -I"$ROOT/runtime/include" -I"$ROOT/runtime/src" \
     "$T/tools/check_lmf_types.c" "$B/rl78_lmf.c" "$B/rl78_elf.c" "$B/rl78_dwarf.c" "$B/rl78_map.c" "$ROOT/runtime/src/sim_util.c" -o "$WORK/lmf_types"
+check "LMF argument top const removed and variable return const retained" "$WORK/lmf_types" "$WORK/test.lmf" constargs
 "$WORK/lmf_types" "$PROBE" probe > "$WORK/probe_types.txt" 2> "$WORK/probe_warnings.txt"
 check "probe: 57 variables / 17 functions / 0 LMF warnings" test $? -eq 0
 check "probe: reference types, addresses, sizes and function signatures" cmp -s "$WORK/probe_types.txt" "$R/expected/probe_types.txt"

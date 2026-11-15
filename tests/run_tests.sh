@@ -155,6 +155,9 @@ run_cmp() {
 check "build GUI CSV table checks" "${CC:-clang}" -std=c11 -O2 -Wall -Wextra -D_DEFAULT_SOURCE -I"$ROOT/runtime/include" -I"$ROOT/runtime/src" \
     "$T/tools/check_csv_table.c" "$ROOT/runtime/src/sim_csv.c" "$ROOT/runtime/src/sim_expr.c" "$ROOT/runtime/src/sim_util.c" "$ROOT/runtime/src/sim_platform.c" "$ROOT/runtime/src/sim_cfg.c" "$ROOT/runtime/backends/mock/mock_backend.c" -o "$WORK/csv_table" -lpthread -lm
 check "GUI CSV initialization expansion" "$WORK/csv_table"
+check "build const argument checks" "${CC:-clang}" -std=c11 -O2 -Wall -Wextra -D_DEFAULT_SOURCE -I"$ROOT/runtime/include" -I"$ROOT/runtime/src" \
+    "$T/tools/check_const_refs.c" "$ROOT/runtime/src/sim_expr.c" "$ROOT/runtime/src/sim_util.c" "$ROOT/runtime/src/sim_platform.c" "$ROOT/runtime/src/sim_cfg.c" "$ROOT/runtime/backends/mock/mock_backend.c" -o "$WORK/const_refs" -lpthread -lm
+check "mock const argument preparation and symbol writable" "$WORK/const_refs"
 
 echo "== header defines (mock)"
 "$SIM" run "$T/defines/mock.csv" --cfg "$T/defines/mock.cfg" -o "$WORK/header_mock" > "$WORK/header_mock.log" 2>&1

@@ -152,6 +152,9 @@ set "B=%ROOT%\runtime\backends\rl78"
 "%CC%" -std=c11 -O2 -Wall -Wextra -D_DEFAULT_SOURCE -I"%B%" -I"%ROOT%\runtime\include" -I"%ROOT%\runtime\src" "%T%\tools\check_lmf_types.c" "%B%\rl78_lmf.c" "%B%\rl78_elf.c" "%B%\rl78_dwarf.c" "%B%\rl78_map.c" "%ROOT%\runtime\src\sim_util.c" -o "%WORK%\lmf_types.exe" > "%WORK%\types_build.log" 2>&1
 set RC=%ERRORLEVEL%
 if "%RC%"=="0" (call :ok "LMF type checker build") else (call :ng "LMF type checker build" & type "%WORK%\types_build.log")
+"%WORK%\lmf_types.exe" "%WORK%\test.lmf" constargs > "%WORK%\const_types.txt" 2>&1
+set RC=%ERRORLEVEL%
+if "%RC%"=="0" (call :ok "LMF argument top const and variable return const") else (call :ng "LMF argument top const and variable return const")
 "%WORK%\lmf_types.exe" "%PROBE%" probe > "%WORK%\probe_types.txt" 2> "%WORK%\probe_warnings.txt"
 set RC=%ERRORLEVEL%
 if "%RC%"=="0" (call :ok "probe 57 variables 17 functions 0 warnings") else (call :ng "probe type counts and warnings")
@@ -252,6 +255,19 @@ call :startup_ok poke
 call :startup_ok skip
 call :run "CCRL skip byte word long nested and poke snapshot" 0 "OK 5, NG 0" --abs "%TP%" --cfg "%R%\cfg\skip_ccrl.cfg" "%R%\csv\skip_ccrl.csv"
 call :run "CA78K0R skip byte word long" 0 "OK 3, NG 0" --abs "%WORK%\test.lmf" --cfg "%R%\cfg\skip_ca.cfg" "%R%\csv\skip_ca.csv"
+call :run "LMF const arguments and returns" 0 "OK 5" --abs "%WORK%\test.lmf" "%R%\csv\const_lmf.csv"
+for %%K in (dwarf2 dwarf3 dwarf4) do call :const_calls "%%K"
+for %%N in (constant const_pointer cycle@constant) do call :const_reject "%WORK%\test.lmf" cycle "%%N"
+> "%WORK%\const_ok.csv" echo mod,cycle,const pointer target,2,0
+>> "%WORK%\const_ok.csv" echo #COMMENT,0xFE03E:2,const_pointer[0]
+>> "%WORK%\const_ok.csv" echo ,0xE004,1
+call :run "LMF allows const_pointer[0]" 0 "NG 0" --abs "%WORK%\test.lmf" "%WORK%\const_ok.csv"
+> "%WORK%\const_skip.cfg" echo skip = constbyte:231
+> "%WORK%\const_skip.csv" echo mod,constbyte,const skip,0,1
+>> "%WORK%\const_skip.csv" echo #COMMENT,constbyte@@
+>> "%WORK%\const_skip.csv" echo ,231
+call :run "LMF const return skip" 0 "OK 1" --abs "%WORK%\test.lmf" --cfg "%WORK%\const_skip.cfg" "%WORK%\const_skip.csv"
+
 call :startup_bad "skip = missing_function"
 call :startup_bad "skip = read_io:garbage"
 call :startup_bad "skip = read_io:0x10000"
@@ -505,4 +521,34 @@ exit /b 0
 "%SIM_RL78%" run --abs "%WORK%\tp_%~1.abs" "%WORK%\dwarf_const.csv" -o "%WORK%\dwarf_const" > "%WORK%\dwarf_const.log" 2>&1
 set RC=%ERRORLEVEL%
 if "%RC%"=="2" (call :ok "%~1 const %~2 rejected") else (call :ng "%~1 const %~2 rejected")
+exit /b
+
+:const_calls
+call :run "%~1 const arguments and returns" 0 "OK 10" --abs "%WORK%\tp_%~1.abs" "%R%\csv\const_dwarf.csv"
+for %%N in (g_const_pointer g_const_target[0] f_bits@constant f_bits@local_const) do call :const_reject "%WORK%\tp_%~1.abs" f_bits "%%N"
+> "%WORK%\const_ok.csv" echo mod,f_bits,const pointer target,3,0
+>> "%WORK%\const_ok.csv" echo #COMMENT,0xFE190:2,0xFE192:2,g_const_pointer[0]
+>> "%WORK%\const_ok.csv" echo ,0xE11A,0xE11A,1
+call :run "%~1 allows g_const_pointer[0]" 0 "NG 0" --abs "%WORK%\tp_%~1.abs" "%WORK%\const_ok.csv"
+> "%WORK%\const_skip.cfg" echo skip = constret:231
+> "%WORK%\const_skip.csv" echo mod,constret,const skip,0,1
+>> "%WORK%\const_skip.csv" echo #COMMENT,constret@@
+>> "%WORK%\const_skip.csv" echo ,231
+call :run "%~1 const return skip" 0 "OK 1" --abs "%WORK%\tp_%~1.abs" --cfg "%WORK%\const_skip.cfg" "%WORK%\const_skip.csv"
+exit /b
+
+:const_reject
+if "%~2"=="cycle" goto const_reject_lmf
+> "%WORK%\const_reject.csv" echo mod,%~2,const protection,3,0
+>> "%WORK%\const_reject.csv" echo #COMMENT,0xFE190:2,0xFE192:2,%~3
+>> "%WORK%\const_reject.csv" echo ,0xE11A,0xE11A,1
+goto const_reject_run
+:const_reject_lmf
+> "%WORK%\const_reject.csv" echo mod,%~2,const protection,2,0
+>> "%WORK%\const_reject.csv" echo #COMMENT,0xFE03E:2,%~3
+>> "%WORK%\const_reject.csv" echo ,0xE004,1
+:const_reject_run
+"%SIM_RL78%" run --abs "%~1" "%WORK%\const_reject.csv" -o "%WORK%\const_out" > "%WORK%\const.log" 2>&1
+set RC=%ERRORLEVEL%
+if "%RC%"=="2" (call :ok "const %~3 rejected") else (call :ng "const %~3 rejected")
 exit /b

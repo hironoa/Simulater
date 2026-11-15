@@ -795,7 +795,8 @@ static sim_ref *ref_parse(sim_ctx *c, const char *text, char *err, size_t errlen
                 if (!st || st->kind != SIM_T_PTR) FAIL("'%s': '->' の左がポインタではありません", buf);
                 if (add_step_t(r, ST_DEREF, 0, st, err, errlen)) { sim_ref_free(r); return NULL; }
                 st = st->target;
-                r->is_const = st && st->is_const;
+                /* ポインタの先の const は、指す先の型だけで決まる（ポインタ自身の const は引き継がない） */
+                r->is_const = st ? object_const(st) : 0;
             } else if (at_slot(r)) {
                 FAIL("'%s': 構造体の値渡しの引数/戻り値のメンバには対応していません", buf);
             }
@@ -932,6 +933,9 @@ static sim_ref *ref_parse(sim_ctx *c, const char *text, char *err, size_t errlen
         }
         if (!scalar_kind(r->elem)) FAIL("'%s': 要素が構造体などです。要素を 1 つずつ指定してください（例: %s[0].メンバ）", buf, buf);
     }
+    /* 引数を起点とする参照は、関数へ渡す入力データの準備に使う。
+       型のconstは残したまま、呼び出し側のスロットとその先は設定可能にする。 */
+    if (r->base == RB_ARG) r->is_const = 0;
 #undef FAIL
     return r;
 }
