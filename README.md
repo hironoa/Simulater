@@ -13,7 +13,8 @@ RL78 向け組み込みソフトを、CC-RL の `.abs` または CA78K0R の `.l
 - **WinAMS に読み込ませている CC-RL の `.abs` または CA78K0R の `.lmf`**（テストドライバとスタブを含めて CS+ でビルドしたもの。デバッグ情報つき）
 - WinAMS 用のテスト CSV
 - `sim.exe`。次のどちらかで入手する
-  - GitHub Actions の成果物 `sim-windows-x64`（`sim.exe`、`sim_gui.html`、`sim.cfg` の見本）
+  - GitHub Actions の成果物 `sim-windows-x64`（`sim.exe`、`sim_gui.html`、`xlate` フォルダ、`sim.cfg` の見本）
+  - リポジトリの `dist/sim-windows-x64.zip`（CI を使えないときに手元でビルドして置いたもの。ビルド元と確認の範囲は `dist/README.md`）
   - 自分でビルドする: MinGW-w64 gcc を PATH に入れ、`set CC=gcc` のあと `build.bat`（`build\sim\sim.exe` ができる）
 
 Windows の配布物は速度を優先して MinGW-w64 gcc でビルドする（gcc のランタイムは静的リンク）。
