@@ -16,6 +16,7 @@
  */
 #define _CRT_SECURE_NO_WARNINGS
 #include "rl78_be.h"
+#include "rl78_xl.h"
 #include "rl78.h"
 #include "rl78_abi.h"
 #include "sim_cfg.h"
@@ -75,6 +76,15 @@ typedef struct {
     struct startup_trace *trace;
 
     int map_sect_ok, map_sect_ng, map_sym_ok, map_sym_ng;
+
+    /* C への変換方式（exec = xlate / verify） */
+    int xl_mode;                /* RL78_XL_OFF / ON / VERIFY */
+    int xl_quiet;
+    int rom_auto;               /* rom_size を読み込む範囲から決めた */
+    rl78_xl *xl;
+    rl78_snapshot *vsnap;       /* 照合: 呼び出しの直前の状態 */
+    uint8_t *vmem, *vmem2;      /* 照合: 変換したコードで実行した後のメモリ、解釈実行の後のメモリ */
+    uint64_t verified;          /* 照合した呼び出しの数 */
 } be_t;
 
 /* ================================================================ 設定の値 */
@@ -532,6 +542,64 @@ static int run_to(be_t *z, uint32_t stop_at, uint64_t limit, const char *what, c
 
 /* ================================================================ 呼び出し */
 
+/* 対象関数を番兵まで実行する。照合（exec = verify）では、同じ呼び出しを「変換したコード」と「解釈実行」の両方で
+ * 実行して、レジスタ・命令数・クロック数・メモリ全体が一致することを確かめる。残す状態は解釈実行のもの */
+static int run_call(be_t *z, const char *what, char *err, size_t errlen)
+{
+    uint64_t ti, tc, i0, c0, xi, xc;
+    uint32_t regs[RL78_REG_COUNT];
+    char e1[1024];
+    int rc1, rc2, r;
+    if (z->xl_mode != RL78_XL_VERIFY || !z->xl || !rl78_xl_loaded(z->xl))
+        return run_to(z, z->sentinel, z->max_insns, what, err, errlen);
+    ti = z->tot_insns;
+    tc = z->tot_clocks;
+    rl78_snapshot_update(z->cpu, z->vsnap);
+    i0 = rl78_insn_count(z->cpu);
+    c0 = rl78_clock_count(z->cpu);
+    e1[0] = 0;
+    rc1 = run_to(z, z->sentinel, z->max_insns, what, e1, sizeof e1);
+    for (r = 0; r < RL78_REG_COUNT; r++) regs[r] = rl78_get_reg(z->cpu, (rl78_reg)r);
+    xi = rl78_insn_count(z->cpu) - i0;
+    xc = rl78_clock_count(z->cpu) - c0;
+    rl78_peek(z->cpu, 0, z->vmem, 0x100000);
+    /* 呼び出しの直前に戻し、解釈実行でやり直す */
+    rl78_snapshot_restore(z->cpu, z->vsnap);
+    z->tot_insns = ti;
+    z->tot_clocks = tc;
+    rl78_xl_set_enabled(z->cpu, 0);
+    rc2 = run_to(z, z->sentinel, z->max_insns, what, err, errlen);
+    rl78_xl_set_enabled(z->cpu, 1);
+    {
+        static const char *const RN[RL78_REG_COUNT] = {"X", "A", "C", "B", "E", "D", "L", "H", "AX", "BC", "DE", "HL", "PC", "SP", "PSW", "ES", "CS", "PMC"};
+        char diff[400];
+        uint32_t a;
+        diff[0] = 0;
+        if (rc1 != rc2) snprintf(diff, sizeof diff, "片方だけ実行エラーになりました（変換したコード: %s）", rc1 ? e1 : "成功");
+        for (r = 0; r < RL78_REG_COUNT && !diff[0]; r++)
+            if (regs[r] != rl78_get_reg(z->cpu, (rl78_reg)r))
+                snprintf(diff, sizeof diff, "レジスタ %s が 0x%X（解釈実行は 0x%X）", RN[r], (unsigned)regs[r], (unsigned)rl78_get_reg(z->cpu, (rl78_reg)r));
+        if (!diff[0] && xi != rl78_insn_count(z->cpu) - i0)
+            snprintf(diff, sizeof diff, "命令数が %llu（解釈実行は %llu）", (unsigned long long)xi, (unsigned long long)(rl78_insn_count(z->cpu) - i0));
+        if (!diff[0] && xc != rl78_clock_count(z->cpu) - c0)
+            snprintf(diff, sizeof diff, "クロック数が %llu（解釈実行は %llu）", (unsigned long long)xc, (unsigned long long)(rl78_clock_count(z->cpu) - c0));
+        if (!diff[0]) {
+            rl78_peek(z->cpu, 0, z->vmem2, 0x100000);
+            if (memcmp(z->vmem, z->vmem2, 0x100000)) {
+                for (a = 0; a < 0x100000u && z->vmem[a] == z->vmem2[a]; a++) {}
+                snprintf(diff, sizeof diff, "メモリ 0x%05X が 0x%02X（解釈実行は 0x%02X）", (unsigned)a, z->vmem[a], z->vmem2[a]);
+            }
+        }
+        if (diff[0]) {
+            snprintf(err, errlen, "%s: 照合で不一致。変換したコードの結果は%s。解釈実行の結果を残しました。sim の不具合なので、"
+                     "exec = interp で使い、この内容を知らせてください", what, diff);
+            return -1;
+        }
+    }
+    z->verified++;
+    return rc2;
+}
+
 static int is_far_ptr(const sim_type *t) { return t && t->kind == SIM_T_PTR && t->size >= 3; }
 
 static void poke(be_t *z, uint32_t a, const uint8_t *p, size_t n) { rl78_load(z->cpu, a, p, n); }
@@ -603,7 +671,8 @@ static int b_call(sim_backend *b, const sim_func *f, const int64_t *args, int na
     st = stub_at(z, (uint32_t)f->addr);
     rl78_set_reg(z->cpu, RL78_REG_PC, st && !st->skip ? st->stub : (uint32_t)f->addr);
     snprintf(what, sizeof what, "関数 %s", f->name);
-    if (run_to(z, z->sentinel, z->max_insns, what, err, errlen)) {
+    if (z->xl) rl78_xl_note_entry(z->xl, rl78_get_reg(z->cpu, RL78_REG_PC));
+    if (run_call(z, what, err, errlen)) {
         /* 次の呼び出しに備えて、CPU を止まった場所から引き離す */
         rl78_set_reg(z->cpu, RL78_REG_SP, z->call_sp);
         return -1;
@@ -764,6 +833,8 @@ static void b_exec_stats(sim_backend *b, sim_exec_stats *s)
     s->clocks = z->tot_clocks;
     s->calls = z->ncalls;
     s->startup_insns = z->startup_insns;
+    s->xl_insns = rl78_xl_insn_count(z->cpu);
+    s->xl_mode = z->xl_mode;
 }
 
 static const char *sect_type_name(uint32_t t)
@@ -808,6 +879,15 @@ static void b_print_info(sim_backend *b, FILE *out)
             z->init_end, (unsigned long long)z->startup_insns, (unsigned long long)z->startup_clocks,
             (double)z->startup_clocks / b->cpu_hz * 1e3, b->cpu_hz);
     fprintf(out, "1 回の呼び出しの命令数の上限: %llu\n", (unsigned long long)z->max_insns);
+    if (z->xl_mode == RL78_XL_OFF) fprintf(out, "実行方式: 解釈実行（exec = interp）\n");
+    else {
+        fprintf(out, "実行方式: %s（exec = %s）、コードフラッシュ 0x00000〜0x%05X%s\n", z->xl_mode == RL78_XL_VERIFY ? "照合" : "変換",
+                z->xl_mode == RL78_XL_VERIFY ? "verify" : "xlate", (unsigned)(z->cc.rom_size ? z->cc.rom_size - 1 : 0),
+                z->rom_auto ? "（rom_size の指定がないので全体。プログラムからの書き込みは無視）" : "");
+        if (z->xl && rl78_xl_why_off(z->xl)[0]) fprintf(out, "  変換できません: %s\n", rl78_xl_why_off(z->xl));
+        else if (z->xl) fprintf(out, "  変換済みの関数: %u 個%s、フォルダ: %s\n", (unsigned)rl78_xl_known(z->xl),
+                                rl78_xl_loaded(z->xl) ? "" : "（未読み込み）", rl78_xl_dir(z->xl));
+    }
     if (!z->nstubs) fprintf(out, "スタブ: なし\n");
     for (i = 0; i < z->nstubs; i++)
         if (!z->stubs[i].skip) fprintf(out, "スタブ: %s（0x%05X）-> %s（0x%05X）%s\n", z->stubs[i].oname, z->stubs[i].orig, z->stubs[i].sname,
@@ -834,6 +914,10 @@ static void b_print_info(sim_backend *b, FILE *out)
 static void be_free(be_t *z)
 {
     if (!z) return;
+    if (z->xl) rl78_xl_close(z->xl);
+    if (z->vsnap) rl78_snapshot_free(z->vsnap);
+    free(z->vmem);
+    free(z->vmem2);
     if (z->snap) rl78_snapshot_free(z->snap);
     if (z->cpu) rl78_destroy(z->cpu);
     rl78_elf_free(&z->elf);
@@ -846,8 +930,25 @@ static void be_free(be_t *z)
     free(z);
 }
 
+/* sim xlate: ロードモジュールのすべての関数を変換してコンパイルしておく */
+static int b_xlate_all(sim_backend *b, char *err, size_t errlen)
+{
+    be_t *z = b->impl;
+    uint32_t *all = sim_xmalloc(sizeof *all * (z->st.nfuncs + 1));
+    size_t i, n = 0;
+    int rc;
+    for (i = 0; i < z->st.nfuncs; i++) all[n++] = (uint32_t)z->st.funcs[i].f.addr;
+    rc = rl78_xl_update(z->xl, all, n);
+    free(all);
+    if (rc < 0) { snprintf(err, errlen, "変換できませんでした"); return -1; }
+    return 0;
+}
+
 static void b_close(sim_backend *b)
 {
+    be_t *z = b->impl;
+    /* 今回の実行で初めて通った関数があれば、変換してコンパイルしておく（次に開いたときから使う） */
+    if (z->xl) rl78_xl_update(z->xl, NULL, 0);
     be_free(b->impl);
     free(b);
 }
@@ -881,6 +982,13 @@ static int setup_core(be_t *z, char *err, size_t errlen)
         uint64_t v;
         if (parse_u64(s, &v) || v > 0x100000u) { snprintf(err, errlen, "sim.cfg: rom_size = %s を読めません（0〜0x100000 のバイト数）", s); return -1; }
         z->cc.rom_size = (uint32_t)v;
+    } else if (z->xl_mode != RL78_XL_OFF) {
+        /* 変換したコードは書き換わらないことが前提なので、コードフラッシュを書き込み禁止にする。
+         * 指定がなければ 0xF0000 より下の全体。rom_size = 0 のときも、フラッシュから読むときのクロックの加算は
+         * 0xF0000 より下が対象なので、クロック数は解釈実行（既定）と変わらない。変わるのは、プログラムがこの範囲へ
+         * 書き込んだときに無視する点だけ（実機でもフラッシュには書けない） */
+        z->cc.rom_size = 0xF0000u;
+        z->rom_auto = 1;
     }
     snprintf(z->core_desc, sizeof z->core_desc, "%s%s%s", is_auto ? "auto（S3 の命令" : (core == RL78_CORE_S1 ? "S1" : core == RL78_CORE_S2 ? "S2" : "S3"),
              is_auto ? (mdu ? " + 乗除算器 SFR）" : "）") : "", !is_auto && mdu ? " + 乗除算器 SFR" : "");
@@ -1084,7 +1192,8 @@ static const char *const KNOWN_KEYS[] = {
     "var", "varfile", "defines", "defines_recursive", "defines_exclude", "defines_near_base", "defines_guess_bits", "ctype",
     "defines_cond", "cdef", "cundef", "mtpj", "mtpj_mode",
     "abs", "abi", "map", "core", "mdu", "mirror", "rom_size", "ram", "heap", "sentinel", "call_sp", "init_end", "func",
-    "skip", "poke", "stub", "stub_auto", "cpu_hz", "max_insns", "startup_max_insns", "halt", "stop", "ram_fill", "bitfield_order", NULL
+    "skip", "poke", "stub", "stub_auto", "cpu_hz", "max_insns", "startup_max_insns", "halt", "stop", "ram_fill", "bitfield_order",
+    "exec", "xlate_cc", "xlate_dir", "xlate_jobs", NULL
 };
 
 sim_backend *sim_backend_open(const sim_open_opts *o, char *err, size_t errlen)
@@ -1206,6 +1315,20 @@ sim_backend *sim_backend_open(const sim_open_opts *o, char *err, size_t errlen)
         free(path);
     }
     if (layout(z, err, errlen)) { be_free(z); return NULL; }
+    {
+        /* 実行方式。--exec が設定ファイルより優先 */
+        const char *ex = o->exec ? o->exec : sim_cfg_get(&z->cfg, "exec");
+        if (!ex || !strcmp(ex, "interp")) z->xl_mode = RL78_XL_OFF;
+        else if (!strcmp(ex, "xlate")) z->xl_mode = RL78_XL_ON;
+        else if (!strcmp(ex, "verify")) z->xl_mode = RL78_XL_VERIFY;
+        else {
+            snprintf(err, errlen, "%s = %s は使えません（interp: 解釈実行、xlate: C に変換して実行、verify: 両方で実行して照合）",
+                     o->exec ? "--exec" : "sim.cfg: exec", ex);
+            be_free(z);
+            return NULL;
+        }
+        z->xl_quiet = o->quiet_xlate;
+    }
     if (setup_core(z, err, errlen)) { be_free(z); return NULL; }
     if (choose_sentinel(z, err, errlen) || choose_heap(z, err, errlen)) { be_free(z); return NULL; }
     z->heap_cur = z->heap_lo;
@@ -1328,6 +1451,44 @@ sim_backend *sim_backend_open(const sim_open_opts *o, char *err, size_t errlen)
         }
     }
 
+    if (z->xl_mode != RL78_XL_OFF) {
+        rl78_xl_opts xo;
+        uint64_t jobs = 0;
+        memset(&xo, 0, sizeof xo);
+        if ((s = sim_cfg_get(&z->cfg, "xlate_jobs")) && (parse_u64(s, &jobs) || jobs < 1 || jobs > 64)) {
+            snprintf(err, errlen, "sim.cfg: xlate_jobs = %s を読めません（1〜64）", s);
+            be_free(z);
+            return NULL;
+        }
+        xo.mode = z->xl_mode;
+        xo.quiet = z->xl_quiet;
+        xo.rom_size = z->cc.rom_size;
+        xo.exe_dir = o->exe_dir;
+        xo.rt_dir = getenv("SIM_XLATE_RT");
+        xo.cc = sim_cfg_get(&z->cfg, "xlate_cc");
+        xo.dir = sim_cfg_get(&z->cfg, "xlate_dir");
+        xo.abs_path = z->abs_path;
+        xo.core_desc = z->core_desc;
+        xo.jobs = (int)jobs;
+        z->xl = rl78_xl_open(z->cpu, &xo);
+        if (z->xl_mode == RL78_XL_VERIFY) {
+            z->vsnap = rl78_snapshot_create(z->cpu);
+            z->vmem = malloc(0x100000);
+            z->vmem2 = malloc(0x100000);
+            if (!z->vsnap || !z->vmem || !z->vmem2) { snprintf(err, errlen, "メモリが足りません"); be_free(z); return NULL; }
+        }
+        if (!z->xl_quiet) {
+            if (rl78_xl_why_off(z->xl)[0])
+                fprintf(stdout, "実行方式: 変換（exec = %s）は使えません: %s。解釈実行で動かします\n",
+                        z->xl_mode == RL78_XL_VERIFY ? "verify" : "xlate", rl78_xl_why_off(z->xl));
+            else if (rl78_xl_loaded(z->xl))
+                fprintf(stdout, "実行方式: %s（変換済みの関数 %u 個を使います）\n", z->xl_mode == RL78_XL_VERIFY ? "照合" : "変換", (unsigned)rl78_xl_known(z->xl));
+            else
+                fprintf(stdout, "実行方式: %s（変換結果がまだないので、今回は解釈実行で動かし、終わってから変換します）\n",
+                        z->xl_mode == RL78_XL_VERIFY ? "照合" : "変換");
+        }
+    }
+
     b = sim_xcalloc(1, sizeof *b);
     b->csv_init = z->csv_init;
     b->name = "rl78";
@@ -1350,6 +1511,7 @@ sim_backend *sim_backend_open(const sim_open_opts *o, char *err, size_t errlen)
     b->ptr_to_addr = b_ptr_to_addr;
     b->exec_stats = b_exec_stats;
     b->print_info = b_print_info;
+    if (z->xl) b->xlate_all = b_xlate_all;
     b->cpu_hz = hz;
     b->impl = z;
     if (z->w.n && !z->w.verbose) fprintf(stderr, "sim: 読み込みの警告が %d 件あります（--verbose で表示）\n", z->w.n);

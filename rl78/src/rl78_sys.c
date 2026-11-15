@@ -576,7 +576,7 @@ rl78_stop_reason rl78_run(rl78_cpu *c, uint64_t max_insns)
         lim = remaining;
         if (c->hold_irq && c->nirqs) lim = 1; /* run the instruction after a hold insn */
         c->hold_irq = 0;
-        if (c->xl_mod && lim > 1 && !c->xl_bp_inside && c->skip_bp_pc == NO_BP) {
+        if (c->xl_mod && lim > 1 && !c->xl_off && !c->xl_bp_inside && c->skip_bp_pc == NO_BP) {
             n = rl78__xl_run(c, lim, &why);
             if (n == 0 && why == -1) {
                 /* no translated code for this pc (or too close to the limit, or a breakpoint):

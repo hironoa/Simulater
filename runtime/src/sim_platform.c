@@ -179,6 +179,114 @@ void sim_sock_set_timeout(sim_sock s, int ms)
     setsockopt((SOCKET)s, SOL_SOCKET, SO_SNDTIMEO, (const char *)&t, sizeof t);
 }
 
+/* ---- 外部プログラムと共有ライブラリ（Windows） ---- */
+struct sim_proc { HANDLE h; };
+
+/* CreateProcess のコマンドライン用に 1 引数を引用符で囲む（CommandLineToArgvW の規則） */
+static void quote_arg(sim_buf *b, const char *a)
+{
+    const char *p;
+    sim_buf_addc(b, '"');
+    for (p = a; *p; p++) {
+        size_t bs = 0;
+        while (*p == '\\') { bs++; p++; }
+        if (!*p) { while (bs--) sim_buf_adds(b, "\\\\"); break; }
+        if (*p == '"') { while (bs--) sim_buf_adds(b, "\\\\"); sim_buf_adds(b, "\\\""); }
+        else { while (bs--) sim_buf_addc(b, '\\'); sim_buf_addc(b, *p); }
+    }
+    sim_buf_addc(b, '"');
+}
+
+sim_proc *sim_proc_spawn(const char *const *argv, const char *log_path)
+{
+    sim_buf cmd;
+    wchar_t *wcmd, *wlog = NULL;
+    STARTUPINFOW si;
+    PROCESS_INFORMATION pi;
+    SECURITY_ATTRIBUTES sa;
+    HANDLE hlog = INVALID_HANDLE_VALUE, hnul = INVALID_HANDLE_VALUE;
+    sim_proc *p = NULL;
+    int i;
+    sim_buf_init(&cmd);
+    for (i = 0; argv[i]; i++) { if (i) sim_buf_addc(&cmd, ' '); quote_arg(&cmd, argv[i]); }
+    wcmd = sim_win_wide(sim_buf_cstr(&cmd));
+    sim_buf_free(&cmd);
+    if (!wcmd) return NULL;
+    memset(&sa, 0, sizeof sa);
+    sa.nLength = sizeof sa;
+    sa.bInheritHandle = TRUE;
+    if (log_path && (wlog = sim_win_wide(log_path)) != NULL)
+        hlog = CreateFileW(wlog, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE, &sa, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    free(wlog);
+    hnul = CreateFileW(L"NUL", GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, &sa, OPEN_EXISTING, 0, NULL);
+    memset(&si, 0, sizeof si);
+    si.cb = sizeof si;
+    si.dwFlags = STARTF_USESTDHANDLES;
+    si.hStdInput = hnul;
+    si.hStdOutput = hlog != INVALID_HANDLE_VALUE ? hlog : hnul;
+    si.hStdError = si.hStdOutput;
+    if (CreateProcessW(NULL, wcmd, NULL, NULL, TRUE, CREATE_NO_WINDOW, NULL, NULL, &si, &pi)) {
+        CloseHandle(pi.hThread);
+        p = malloc(sizeof *p);
+        if (p) p->h = pi.hProcess; else CloseHandle(pi.hProcess);
+    }
+    if (hlog != INVALID_HANDLE_VALUE) CloseHandle(hlog);
+    if (hnul != INVALID_HANDLE_VALUE) CloseHandle(hnul);
+    free(wcmd);
+    return p;
+}
+
+int sim_proc_wait(sim_proc *p)
+{
+    DWORD code = (DWORD)-1;
+    if (!p) return -1;
+    WaitForSingleObject(p->h, INFINITE);
+    if (!GetExitCodeProcess(p->h, &code)) code = (DWORD)-1;
+    CloseHandle(p->h);
+    free(p);
+    return (int)code;
+}
+
+int sim_cpu_count(void)
+{
+    SYSTEM_INFO si;
+    GetSystemInfo(&si);
+    return si.dwNumberOfProcessors > 0 ? (int)si.dwNumberOfProcessors : 1;
+}
+
+void *sim_dl_open(const char *path, char *err, size_t errlen)
+{
+    wchar_t *w = sim_win_wide(path);
+    HMODULE h;
+    if (!w) { snprintf(err, errlen, "パスを変換できません"); return NULL; }
+    h = LoadLibraryW(w);
+    free(w);
+    if (!h) snprintf(err, errlen, "LoadLibrary のエラー %lu", (unsigned long)GetLastError());
+    return (void *)h;
+}
+
+void *sim_dl_sym(void *lib, const char *name) { return (void *)(void (*)(void))GetProcAddress((HMODULE)lib, name); }
+
+int sim_remove_file(const char *path)
+{
+    wchar_t *w = sim_win_wide(path);
+    int rc;
+    if (!w) return -1;
+    rc = DeleteFileW(w) ? 0 : -1;
+    free(w);
+    return rc;
+}
+
+int sim_remove_dir(const char *path)
+{
+    wchar_t *w = sim_win_wide(path);
+    int rc;
+    if (!w) return -1;
+    rc = RemoveDirectoryW(w) ? 0 : -1;
+    free(w);
+    return rc;
+}
+
 const char *sim_exe_dir(void)
 {
     static char dir[MAX_PATH * 4];
@@ -259,6 +367,8 @@ int sim_same_file(const char *a, const char *b)
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/time.h>
+#include <sys/wait.h>
+#include <dlfcn.h>
 #include <time.h>
 #include <unistd.h>
 #ifdef __APPLE__
@@ -425,6 +535,57 @@ void sim_sock_set_timeout(sim_sock s, int ms)
     setsockopt((int)s, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
     setsockopt((int)s, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof tv);
 }
+
+/* ---- 外部プログラムと共有ライブラリ（POSIX） ---- */
+struct sim_proc { pid_t pid; };
+
+sim_proc *sim_proc_spawn(const char *const *argv, const char *log_path)
+{
+    sim_proc *p = malloc(sizeof *p);
+    pid_t pid;
+    if (!p) return NULL;
+    pid = fork();
+    if (pid < 0) { free(p); return NULL; }
+    if (pid == 0) {
+        int fd = open(log_path ? log_path : "/dev/null", O_WRONLY | O_CREAT | O_APPEND, 0644);
+        int nul = open("/dev/null", O_RDONLY);
+        if (fd >= 0) { dup2(fd, 1); dup2(fd, 2); }
+        if (nul >= 0) dup2(nul, 0);
+        execvp(argv[0], (char *const *)argv);
+        _exit(127);
+    }
+    p->pid = pid;
+    return p;
+}
+
+int sim_proc_wait(sim_proc *p)
+{
+    int st = 0;
+    pid_t r;
+    if (!p) return -1;
+    do { r = waitpid(p->pid, &st, 0); } while (r < 0 && errno == EINTR);
+    free(p);
+    if (r < 0 || !WIFEXITED(st)) return -1;
+    return WEXITSTATUS(st);
+}
+
+int sim_cpu_count(void)
+{
+    long n = sysconf(_SC_NPROCESSORS_ONLN);
+    return n > 0 ? (int)n : 1;
+}
+
+void *sim_dl_open(const char *path, char *err, size_t errlen)
+{
+    void *h = dlopen(path, RTLD_NOW | RTLD_LOCAL);
+    if (!h) snprintf(err, errlen, "%s", dlerror());
+    return h;
+}
+
+void *sim_dl_sym(void *lib, const char *name) { return dlsym(lib, name); }
+
+int sim_remove_file(const char *path) { return unlink(path) ? -1 : 0; }
+int sim_remove_dir(const char *path) { return rmdir(path) ? -1 : 0; }
 
 const char *sim_exe_dir(void)
 {

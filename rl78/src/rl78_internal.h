@@ -84,6 +84,7 @@ struct rl78_cpu {
     uint8_t *xl_inside;  /* bitmap: instructions inside a translated block of some chunk (not its start) */
     const struct rl78_xl_module *xl_mod;
     uint64_t xl_insns;  /* instructions executed by translated code */
+    int xl_off;         /* rl78_xl_set_enabled(cpu, 0): keep the module attached but interpret */
     int xl_bp_inside;   /* breakpoints set inside translated blocks: translated code is not used while > 0 */
     unsigned xl_miss;   /* consecutive lookups that found no translated code (interpreter burst length) */
     rl78_fault fault;

@@ -249,6 +249,47 @@ if defined PERF_MIN (
     if errorlevel 1 (call :ng "speed is at least %PERF_MIN% M insns/s") else (call :ok "speed is at least %PERF_MIN% M insns/s")
 )
 
+echo == translation to C (exec = xlate / verify)
+rem the translated code is built with clang (the sim itself may be built with gcc)
+if not defined SIM_XLATE_CC (
+    clang --version >nul 2>nul
+    if errorlevel 1 if exist "C:\Program Files\LLVM\bin\clang.exe" set "SIM_XLATE_CC=C:\Program Files\LLVM\bin\clang.exe"
+)
+set "XW=%WORK%\xl"
+if not exist "%XW%" mkdir "%XW%"
+copy /y "%TP%" "%XW%\tp.abs" >nul
+"%RS%" run --abs "%XW%\tp.abs" "%R%\csv\synth_call.csv" -o "%XW%\out_i" > "%XW%\i.log" 2>&1
+"%RS%" run --exec xlate --abs "%XW%\tp.abs" "%R%\csv\synth_call.csv" -o "%XW%\out_x" > "%XW%\first.log" 2>&1
+set RC=%ERRORLEVEL%
+if "%RC%"=="0" (call :ok "xlate: first run exits 0") else (call :ng "xlate: first run exits 0" & type "%XW%\first.log")
+dir /s /b "%XW%\.simxl\current.txt" >nul 2>nul
+if errorlevel 1 (call :ng "xlate: first run builds the DLL" & type "%XW%\first.log" & for /r "%XW%\.simxl" %%F in (cc.log) do type "%%F") else (call :ok "xlate: first run builds the DLL")
+fc /b "%XW%\out_i\synth_call.csv" "%XW%\out_x\synth_call.csv" >nul
+if errorlevel 1 (call :ng "xlate: first run result equals the interpreter") else (call :ok "xlate: first run result equals the interpreter")
+"%RS%" run --exec xlate --abs "%XW%\tp.abs" "%R%\csv\synth_call.csv" -o "%XW%\out_x" > "%XW%\second.log" 2>&1
+rem "translated code ran N instructions" with N > 0 (the message is Japanese: match it by code points)
+powershell -NoProfile -Command "$t=[IO.File]::ReadAllText('%XW%\second.log',[Text.Encoding]::UTF8); if ($t -match '\u5909\u63db\u3057\u305f\u30b3\u30fc\u30c9\u3067\u5b9f\u884c: [1-9]') {exit 0} else {exit 1}"
+if errorlevel 1 (call :ng "xlate: second run uses the translated code" & type "%XW%\second.log") else (call :ok "xlate: second run uses the translated code")
+fc /b "%XW%\out_i\synth_call.csv" "%XW%\out_x\synth_call.csv" >nul
+if errorlevel 1 (call :ng "xlate: second run result equals the interpreter") else (call :ok "xlate: second run result equals the interpreter")
+"%RS%" run --exec verify --abs "%XW%\tp.abs" "%R%\csv\synth_call.csv" -o "%XW%\out_v" > "%XW%\verify.log" 2>&1
+set RC=%ERRORLEVEL%
+if "%RC%"=="0" (call :ok "verify: translated code and the interpreter agree") else (call :ng "verify: translated code and the interpreter agree" & type "%XW%\verify.log")
+fc /b "%XW%\out_i\synth_call.csv" "%XW%\out_v\synth_call.csv" >nul
+if errorlevel 1 (call :ng "verify: result equals the interpreter") else (call :ok "verify: result equals the interpreter")
+"%RS%" xlate --abs "%XW%\tp.abs" > "%XW%\all.log" 2>&1
+set RC=%ERRORLEVEL%
+if "%RC%"=="0" (call :ok "sim xlate translates every function") else (call :ng "sim xlate translates every function" & type "%XW%\all.log")
+"%RS%" run --exec verify --abs "%XW%\tp.abs" "%R%\csv\synth_types.csv" -o "%XW%\out_v" > "%XW%\verify2.log" 2>&1
+set RC=%ERRORLEVEL%
+"%RS%" run --abs "%XW%\tp.abs" "%R%\csv\synth_types.csv" -o "%XW%\out_i" > "%XW%\i2.log" 2>&1
+if "%RC%"=="%ERRORLEVEL%" (call :ok "verify after sim xlate: same exit code") else (call :ng "verify after sim xlate: same exit code" & type "%XW%\verify2.log")
+fc /b "%XW%\out_i\synth_types.csv" "%XW%\out_v\synth_types.csv" >nul
+if errorlevel 1 (call :ng "verify after sim xlate: result equals the interpreter") else (call :ok "verify after sim xlate: result equals the interpreter")
+"%RS%" run --exec fast --abs "%XW%\tp.abs" "%R%\csv\synth_call.csv" -o "%XW%\out_x" > "%XW%\bad.log" 2>&1
+set RC=%ERRORLEVEL%
+if "%RC%"=="2" (call :ok "bad --exec value exits 2") else (call :ng "bad --exec value exits 2")
+
 echo == startup diagnostics and skip poke
 "%WORK%\mkabs.exe" startup "%WORK%\startup.abs"
 set RC=%ERRORLEVEL%

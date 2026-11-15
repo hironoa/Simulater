@@ -70,4 +70,20 @@ int sim_same_file(const char *a, const char *b);
 int sim_path_kind(const char *path);
 int sim_dir_each(const char *path, void (*visit)(void *, const char *, int), void *ctx);
 
+/* ---- 外部プログラムの起動と共有ライブラリ（C への変換方式がコンパイラを呼ぶのに使う） ---- */
+/* argv（NULL 終端、argv[0] が実行ファイル。パスは UTF-8）を起動する。標準出力と標準エラーは log_path に追記する
+ * （NULL なら捨てる）。起動できなければ NULL */
+typedef struct sim_proc sim_proc;
+sim_proc *sim_proc_spawn(const char *const *argv, const char *log_path);
+/* 終わるまで待って終了コードを返し、p を解放する（異常終了は -1） */
+int sim_proc_wait(sim_proc *p);
+/* 論理 CPU の数（分からなければ 1） */
+int sim_cpu_count(void);
+/* 共有ライブラリ（DLL）を読み込む。失敗したら NULL で err に理由 */
+void *sim_dl_open(const char *path, char *err, size_t errlen);
+void *sim_dl_sym(void *lib, const char *name);
+/* ファイルを消す・名前を変える（UTF-8 のパス）。0 なら成功 */
+int sim_remove_file(const char *path);
+int sim_remove_dir(const char *path);
+
 #endif

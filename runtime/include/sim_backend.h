@@ -93,6 +93,8 @@ typedef struct {
     uint64_t clocks;         /* これまでに実行したクロック数 */
     uint64_t calls;          /* call の回数 */
     uint64_t startup_insns;  /* スタートアップ（リセットから初期設定終了まで）の命令数 */
+    uint64_t xl_insns;       /* insns のうち、C に変換したコードで実行した命令数（変換方式でなければ 0） */
+    int xl_mode;             /* 実行方式: 0 解釈実行、1 変換（exec = xlate）、2 照合（exec = verify） */
 } sim_exec_stats;
 
 /* バックエンドを開くときの指定（sim_backend_open） */
@@ -106,6 +108,8 @@ typedef struct {
     int ncdefs;
     const char *mtpj_path;   /* --mtpj: CS+ のプロジェクトファイル。NULL なら設定ファイルの mtpj= */
     const char *csv_init;    /* CLI override: auto / once / every */
+    const char *exec;        /* --exec: interp / xlate / verify。NULL なら設定ファイルの exec=（既定 interp） */
+    int quiet_xlate;         /* 1 なら変換方式の経過（実行方式、変換の進み具合）を表示しない */
     int lmf_names;
     int trace_startup;       /* スタートアップを単命令で診断 */
     unsigned trace_head, trace_tail; /* 0 は既定（50 / 100） */
@@ -155,6 +159,9 @@ struct sim_backend {
     /* CPU のクロック周波数（Hz）。0 より大きければ、結果 CSV の実行時間を call のクロック数から換算する。
      * 0 なら実時間を測る */
     double cpu_hz;
+
+    /* 省略可: すべての関数を C に変換してコンパイルしておく（sim xlate）。0 なら成功 */
+    int (*xlate_all)(sim_backend *b, char *err, size_t errlen);
 
     /* 省略可: `sim info` 用の概要を out に書く */
     void (*print_info)(sim_backend *b, FILE *out);

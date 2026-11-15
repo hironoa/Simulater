@@ -592,3 +592,78 @@ else
 fi
 kill "$GUI_PID" 2>/dev/null; wait "$GUI_PID" 2>/dev/null
 GUI_PID=""
+
+echo "== C への変換方式（exec = xlate / verify）"
+# 変換したコードは clang で作る。なければこの節は失敗（既定の解釈実行のテストは上で済んでいる）
+XLCC=${SIM_XLATE_CC:-clang}
+if ! command -v "$XLCC" >/dev/null 2>&1; then
+    ng "変換方式: clang がある" "$XLCC が見つかりません（SIM_XLATE_CC で指定できます）"
+else
+    XW="$WORK/xl"
+    mkdir -p "$XW"
+    cp "$TP" "$XW/tp.abs"
+    XCSVS="synth_call synth_core synth_fault synth_halt synth_heap_odd synth_nomdu synth_nostub synth_stub synth_stub_line synth_types"
+    # 解釈実行の結果（終了コードと結果 CSV）を控える
+    for n in $XCSVS; do
+        "$RS" run --abs "$XW/tp.abs" "$R/csv/$n.csv" -o "$XW/out_i" > "$XW/i_$n.log" 2>&1
+        echo $? > "$XW/i_$n.rc"
+    done
+    # xl_same 名前 方式: すべての CSV で、終了コードと結果 CSV が解釈実行と同じ
+    xl_same() {
+        _bad=""
+        for n in $XCSVS; do
+            "$RS" run --exec "$2" --abs "$XW/tp.abs" "$R/csv/$n.csv" -o "$XW/out_x" > "$XW/x_$n.log" 2>&1
+            _rc=$?
+            [ "$_rc" = "$(cat "$XW/i_$n.rc")" ] || _bad="$_bad $n(終了コード $_rc)"
+            if [ -f "$XW/out_i/$n.csv" ]; then cmp -s "$XW/out_i/$n.csv" "$XW/out_x/$n.csv" || _bad="$_bad $n(結果 CSV)"; fi
+            if grep -q "照合で不一致" "$XW/x_$n.log"; then _bad="$_bad $n(照合で不一致)"; fi
+        done
+        if [ -z "$_bad" ]; then ok "$1"; else ng "$1" "$_bad"; fi
+    }
+    "$RS" run --exec xlate --abs "$XW/tp.abs" "$R/csv/synth_call.csv" -o "$XW/out_x" > "$XW/first.log" 2>&1
+    check "変換方式: 初回は解釈実行で動かす" contains "$XW/first.log" "今回は解釈実行で動かし、終わってから変換します"
+    check "変換方式: 初回の終わりに変換してコンパイルする" contains "$XW/first.log" "変換: できました"
+    check "変換方式: 初回の結果 CSV は解釈実行と同じ" cmp -s "$XW/out_i/synth_call.csv" "$XW/out_x/synth_call.csv"
+    "$RS" run --exec xlate --abs "$XW/tp.abs" "$R/csv/synth_call.csv" -o "$XW/out_x" > "$XW/second.log" 2>&1
+    check "変換方式: 2 回目は変換済みの関数を使う" grep -q "実行方式: 変換（変換済みの関数 [0-9]* 個を使います）" "$XW/second.log"
+    check "変換方式: 2 回目は変換したコードで実行する" grep -q "変換したコードで実行: [1-9][0-9]* 命令" "$XW/second.log"
+    check "変換方式: 2 回目は作り直さない" sh -c "! grep -q '変換: 新しい関数' '$XW/second.log'"
+    check "変換方式: 2 回目の結果 CSV は解釈実行と同じ" cmp -s "$XW/out_i/synth_call.csv" "$XW/out_x/synth_call.csv"
+    xl_same "変換方式: どの CSV も終了コードと結果 CSV が解釈実行と同じ（通った関数だけ変換）" xlate
+    xl_same "変換方式: 2 巡目（1 巡目で通った関数を変換済み）も同じ" xlate
+    xl_same "照合（exec = verify）: 変換したコードと解釈実行が一致する" verify
+    "$RS" xlate --abs "$XW/tp.abs" > "$XW/all.log" 2>&1
+    check "sim xlate: すべての関数を変換する（終了コード 0）" test $? -eq 0
+    check "sim xlate: 変換できた" contains "$XW/all.log" "変換: できました"
+    "$RS" info --exec xlate --abs "$XW/tp.abs" > "$XW/info.log" 2>&1
+    check "sim info: 実行方式と変換済みの関数の数を表示する" grep -q "変換済みの関数: [1-9][0-9]* 個、フォルダ: " "$XW/info.log"
+    xl_same "sim xlate の後: すべての関数を変換した状態でも結果は同じ" xlate
+    xl_same "sim xlate の後: 照合でも一致する" verify
+    "$RS" run --exec xlate --abs "$XW/tp.abs" "$R/csv/synth_stub_line.csv" -o "$XW/out_x" > "$XW/stub.log" 2>&1
+    check "変換方式: CSV の % 行の置換（ブレークポイント）でも変換したコードを使う" grep -q "変換したコードで実行: [1-9][0-9]* 命令" "$XW/stub.log"
+    "$RS" xlate --abs "$XW/tp.abs" > "$XW/again.log" 2>&1
+    check "sim xlate: 変換済みなら何もしない" sh -c "! grep -q '変換: 新しい関数' '$XW/again.log'"
+    # sim.cfg の exec = と、起動できないコンパイラ
+    mkdir -p "$XW/nocc"
+    cp "$TP" "$XW/nocc/tp.abs"
+    printf 'exec = xlate\nxlate_cc = %s/no-such-clang\n' "$XW" > "$XW/nocc/sim.cfg"
+    "$RS" run --abs "$XW/nocc/tp.abs" "$R/csv/synth_call.csv" -o "$XW/out_n" > "$XW/nocc.log" 2>&1
+    check "変換方式: clang を起動できなくても実行は成功する（終了コード 0）" test $? -eq 0
+    check "変換方式: clang を起動できないことを知らせる" contains "$XW/nocc.log" "clang を起動できません"
+    check "変換方式: clang を起動できないときの結果 CSV は解釈実行と同じ" cmp -s "$XW/out_i/synth_call.csv" "$XW/out_n/synth_call.csv"
+    "$RS" run --exec fast --abs "$XW/tp.abs" "$R/csv/synth_call.csv" -o "$XW/out_x" > "$XW/badexec.log" 2>&1
+    check "--exec の値が不正ならエラー（終了コード 2）" test $? -eq 2
+    check "--exec の値が不正なら使える値を示す" contains "$XW/badexec.log" "--exec = fast は使えません"
+    printf 'exec = xlate\nxlate_jobs = 0\n' > "$XW/nocc/sim.cfg"
+    "$RS" info --abs "$XW/nocc/tp.abs" > "$XW/badjobs.log" 2>&1
+    check "xlate_jobs の値が不正ならエラー" contains "$XW/badjobs.log" "xlate_jobs = 0 を読めません"
+    # デバッグ情報だけが違うロードモジュール（コードは同じ）なら、変換結果を使い回す
+    "$WORK/mkabs" dwarf3 "$XW/tp.abs" > /dev/null 2>&1
+    "$RS" run --exec xlate --abs "$XW/tp.abs" "$R/csv/synth_call.csv" -o "$XW/out_x" > "$XW/samecode.log" 2>&1
+    check "変換方式: コードが同じなら変換結果を使い回す" grep -q "実行方式: 変換（変換済みの関数 [0-9]* 個を使います）" "$XW/samecode.log"
+    # 変換の前提（対象のメモリの範囲と中身、CPU の設定）が変われば別の変換結果になる。古いフォルダは消す
+    printf 'rom_size = 0x10000\n' > "$XW/sim.cfg"
+    "$RS" run --exec xlate --abs "$XW/tp.abs" "$R/csv/synth_types.csv" -o "$XW/out_x" > "$XW/changed.log" 2>&1
+    check "変換方式: 変換の前提（rom_size）が変わったら変換し直す" contains "$XW/changed.log" "今回は解釈実行で動かし、終わってから変換します"
+    check "変換方式: 古い変換結果のフォルダを消す" test "$(ls "$XW/.simxl" | wc -l | tr -d ' ')" = 1
+fi

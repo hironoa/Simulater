@@ -34,8 +34,10 @@ static void usage(void)
             "  sim gui --abs <X.abs> [--cfg sim.cfg] [--port 8765] [--period-ms 5] [--func 関数名] [--speed 1] [--no-browser] [--record-max N]\n"
             "  sim list --abs <X.abs> [--cfg sim.cfg] [--where] [文字列]\n"
             "  sim info --abs <X.abs> [--cfg sim.cfg] [--trace-startup] [--trace-head N] [--trace-tail N]\n"
+            "  sim xlate --abs <X.abs> [--cfg sim.cfg]    すべての関数を C に変換してコンパイルしておく（exec = xlate の準備）\n"
             "  sim --version\n"
             "  共通: --verbose（-v）で読み込みの警告と詳細を出す。--abs を省くと設定ファイルの abs= を使う\n"
+            "        --exec interp|xlate|verify で実行方式を選ぶ（解釈実行 / C に変換して実行 / 両方で実行して照合。既定は interp）\n"
             "        --defines <パス> でヘッダの直アドレス定義を読む。--cdef <名前[=値]>（複数可）と --mtpj <X.mtpj> は\n"
             "        その #if / #ifdef の評価に使う定義マクロ。sim list --where は定義元のファイル名と行番号を表示する\n");
 }
@@ -69,6 +71,10 @@ static int take_common(int *argc, char **argv)
             g_open.mtpj_path = argv[++i];
         }
         else if (!strncmp(argv[i], "--csv-init=", 11)) g_open.csv_init = argv[i] + 11;
+        else if (!strcmp(argv[i], "--exec")) {
+            if (i + 1 >= *argc) { fprintf(stderr, "エラー: --exec には interp / xlate / verify を指定してください\n"); return -1; }
+            g_open.exec = argv[++i];
+        }
         else if (strcmp(argv[i], "--trace-startup") == 0) g_open.trace_startup = 1;
         else if (!strcmp(argv[i], "--trace-head") || !strcmp(argv[i], "--trace-tail")) {
             uint64_t n;
@@ -123,7 +129,7 @@ static int cmd_run(int argc, char **argv)
         if (strcmp(argv[i], "-o") == 0 && i + 1 < argc) o.outdir = argv[++i];
         else if (strcmp(argv[i], "--expect-actual") == 0) o.expect_actual = 1;
         else if (strcmp(argv[i], "--fixed-time") == 0) o.fixed_time = 1;
-        else if (strcmp(argv[i], "--quiet") == 0) o.quiet = 1;
+        else if (strcmp(argv[i], "--quiet") == 0) { o.quiet = 1; g_open.quiet_xlate = 1; }
         else if (argv[i][0] == '-' && argv[i][1]) { fprintf(stderr, "エラー: 不明なオプション %s\n", argv[i]); usage(); free(files); return 2; }
         else files[nfiles++] = argv[i];
     }
@@ -150,6 +156,9 @@ static int cmd_run(int argc, char **argv)
             fprintf(stdout, "実行命令数: %llu（スタートアップ %llu を除く）、呼び出し %llu 回、所要時間 %.3f 秒、%.1f 百万命令/秒\n",
                     (unsigned long long)n, (unsigned long long)es.startup_insns, (unsigned long long)es.calls, sec,
                     sec > 0 ? (double)n / sec / 1e6 : 0.0);
+            if (es.xl_mode)
+                fprintf(stdout, "変換したコードで実行: %llu 命令（%.1f%%）。残りは解釈実行\n", (unsigned long long)es.xl_insns,
+                        n > 0 ? (double)es.xl_insns * 100.0 / (double)n : 0.0);
         }
         sim_ctx_free(c);
         b->close(b);
@@ -224,6 +233,7 @@ static int cmd_list(int argc, char **argv)
         else if (argv[a][0] == '-' && argv[a][1] == '-') { fprintf(stderr, "エラー: 不明なオプション %s\n", argv[a]); usage(); return 2; }
         else q = argv[a];
     }
+    g_open.quiet_xlate = 1;
     c = open_ctx();
     if (!c) return 2;
     b = sim_ctx_backend(c);
@@ -261,12 +271,39 @@ static int cmd_list(int argc, char **argv)
     return 0;
 }
 
+/* すべての関数を C に変換してコンパイルしておく（exec = xlate の準備。初回の実行から速い方式で動く） */
+static int cmd_xlate(int argc, char **argv)
+{
+    sim_ctx *c;
+    sim_backend *b;
+    char err[512];
+    int rc = 0;
+    (void)argv;
+    if (argc > 0) { fprintf(stderr, "エラー: 不明な引数 %s\n", argv[0]); usage(); return 2; }
+    if (!g_open.exec) g_open.exec = "xlate";
+    if (!strcmp(g_open.exec, "interp")) { fprintf(stderr, "エラー: sim xlate に --exec interp は指定できません\n"); return 2; }
+    c = open_ctx();
+    if (!c) return 2;
+    b = sim_ctx_backend(c);
+    if (!b->xlate_all) {
+        fprintf(stderr, "エラー: このバックエンドは C への変換に対応していません\n");
+        rc = 2;
+    } else if (b->xlate_all(b, err, sizeof err)) {
+        fprintf(stderr, "エラー: %s\n", err);
+        rc = 2;
+    }
+    sim_ctx_free(c);
+    b->close(b);
+    return rc;
+}
+
 static int cmd_info(int argc, char **argv)
 {
     sim_ctx *c;
     sim_backend *b;
     (void)argv;
     if (argc > 0) { fprintf(stderr, "エラー: 不明な引数 %s\n", argv[0]); usage(); return 2; }
+    g_open.quiet_xlate = 1;
     c = open_ctx();
     if (!c) return 2;
     b = sim_ctx_backend(c);
@@ -292,13 +329,14 @@ int main(int argc, char **argv)
     {
         int n = argc - 2;
         if (strcmp(argv[1], "run") == 0 || strcmp(argv[1], "gui") == 0 || strcmp(argv[1], "list") == 0 ||
-            strcmp(argv[1], "info") == 0) {
+            strcmp(argv[1], "info") == 0 || strcmp(argv[1], "xlate") == 0) {
             if (take_common(&n, argv + 2)) { usage(); return 2; }
         }
         if (strcmp(argv[1], "run") == 0) return cmd_run(n, argv + 2);
         if (strcmp(argv[1], "gui") == 0) return cmd_gui(n, argv + 2);
         if (strcmp(argv[1], "list") == 0) return cmd_list(n, argv + 2);
         if (strcmp(argv[1], "info") == 0) return cmd_info(n, argv + 2);
+        if (strcmp(argv[1], "xlate") == 0) return cmd_xlate(n, argv + 2);
     }
     if (strcmp(argv[1], "--version") == 0 || strcmp(argv[1], "version") == 0) {
         printf("sim %s\n", SIM_VERSION);

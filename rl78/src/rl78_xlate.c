@@ -442,6 +442,8 @@ int rl78_xl_attach(rl78_cpu *c, const rl78_xl_module *m, char *err, size_t errle
 
 uint64_t rl78_xl_insn_count(const rl78_cpu *c) { return c->xl_insns; }
 
+void rl78_xl_set_enabled(rl78_cpu *c, int on) { c->xl_off = !on; }
+
 /* Run translated code from c->pc for at most lim instructions.  Returns the
    number executed.  *why is a stop reason, or -1 when the caller should look
    again (0 executed: no translated code for this pc right now). */
