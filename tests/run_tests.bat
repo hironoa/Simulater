@@ -917,6 +917,16 @@ if errorlevel 1 (call :ng "header list mock") else (call :ok "header list mock")
 set RC=%ERRORLEVEL%
 if "%RC%"=="0" (call :ok "var and varfile mock") else (call :ng "var and varfile mock")
 
+echo == defines: value expressions mock
+"%SIM%" run "%T%\defines\value_forms.csv" --cfg "%T%\defines\value_forms.cfg" -o "%WORK%\value_good" > "%WORK%\value_good.log" 2>&1
+set RC=%ERRORLEVEL%
+if "%RC%"=="0" (call :ok "direct lvalues typed CSV and physical offsets") else (call :ng "direct lvalues typed CSV and physical offsets")
+
+"%SIM%" info -v --cfg "%T%\defines\value_forms.cfg" > "%WORK%\value_info.log" 2>&1
+set RC=%ERRORLEVEL%
+if "%RC%"=="0" (call :ok "value forms load") else (call :ng "value forms load")
+for /f "usebackq" %%A in ("%T%\defines\value_rejected.txt") do call :value_reject %%A
+
 echo == defines: declarators mock
 call :decl_run declarators declarators
 call :decl_run declarator_supported declarator_supported
@@ -1153,6 +1163,19 @@ if not "%RC%"=="0" (call :ng "%~1 must be counted as unresolved" & exit /b 0)
 >> "%WORK%\decl_bad.csv" echo #COMMENT,%~1
 >> "%WORK%\decl_bad.csv" echo ,1
 "%SIM%" run "%WORK%\decl_bad.csv" --cfg "%T%\defines\%~2.cfg" -o "%WORK%\decl_bad" > "%WORK%\decl_bad.log" 2>&1
+set RC=%ERRORLEVEL%
+if "%RC%"=="2" (call :ok "%~1 counted and unusable") else (call :ng "%~1 counted and unusable")
+exit /b 0
+
+:value_reject
+for /f "tokens=1 delims=_" %%A in ("%~1") do set "VALUEFIND=%%A"
+findstr /l /c:" %VALUEFIND%" "%WORK%\value_info.log" >nul
+set RC=%ERRORLEVEL%
+if not "%RC%"=="0" (call :ng "%~1 verbose source" & exit /b 0)
+> "%WORK%\value_bad.csv" echo mod,intr_tm00,rejected,1,0
+>> "%WORK%\value_bad.csv" echo #COMMENT,%~1
+>> "%WORK%\value_bad.csv" echo ,1
+"%SIM%" run "%WORK%\value_bad.csv" --cfg "%T%\defines\value_forms.cfg" -o "%WORK%\value_bad" > "%WORK%\value_bad.log" 2>&1
 set RC=%ERRORLEVEL%
 if "%RC%"=="2" (call :ok "%~1 counted and unusable") else (call :ng "%~1 counted and unusable")
 exit /b 0

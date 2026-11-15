@@ -163,7 +163,7 @@ check "header names and modi initializers mock" test "$RC" -eq 0
 if [ "$RC" -ne 0 ]; then cat "$WORK/header_mock.log"; fi
 "$SIM" list --cfg "$T/defines/mock.cfg" > "$WORK/header_list.log" 2>&1
 check "header names in list mock" contains "$WORK/header_list.log" "df_unit"
-check "unsupported macro postfix is not silently truncated" sh -c '! grep -F -q unsupported_index "$1"' sh "$WORK/header_list.log"
+check "constant member index is registered" sh -c 'grep -F -q unsupported_index "$1"' sh "$WORK/header_list.log"
 "$SIM" list --cfg "$T/defines/expansion.cfg" > "$WORK/expansion.log" 2>&1
 check "unparenthesized macro array has five elements" contains "$WORK/expansion.log" "u8[5]"
 "$SIM" list --cfg "$T/defines/encoding.cfg" > "$WORK/encoding.log" 2>&1
@@ -176,6 +176,22 @@ check "definition addresses counts and malformed inputs" "$WORK/check_defines_te
 # shellcheck disable=SC2086
 check "build defines text ASan UBSan" "${CC:-clang}" -std=c11 -O1 -g -Wall -Wextra -fsanitize=address,undefined -fno-omit-frame-pointer -D_DEFAULT_SOURCE -I"$ROOT/runtime/include" -I"$ROOT/runtime/src" $TEXT_SRCS -o "$WORK/check_defines_sanitize" -lpthread -lm
 check "definition text ASan UBSan 200 malformed inputs" "$WORK/check_defines_sanitize" "$T" "$WORK"
+echo "== defines: value expressions (mock)"
+"$SIM" run "$T/defines/value_forms.csv" --cfg "$T/defines/value_forms.cfg" -o "$WORK/value_good" > "$WORK/value_good.log" 2>&1
+RC=$?
+check "direct lvalues typed CSV and physical offsets" sh -c '[ "$1" -eq 0 ] && grep -F -q "総数 1, OK 1, NG 0" "$2"' sh "$RC" "$WORK/value_good.log"
+
+"$SIM" info -v --cfg "$T/defines/value_forms.cfg" > "$WORK/value_info.log" 2>&1
+RC=$?
+check "value forms load" test "$RC" -eq 0
+check "value forms counted separately" contains "$WORK/value_info.log" "value-excluded=18"
+while read -r value_name; do
+    check "$value_name verbose source" grep -E -q "対象外）: $value_name .*value_forms.h:[0-9]+" "$WORK/value_info.log"
+    printf 'mod,intr_tm00,rejected,1,0\n#COMMENT,%s\n,1\n' "$value_name" > "$WORK/value_bad.csv"
+    "$SIM" run "$WORK/value_bad.csv" --cfg "$T/defines/value_forms.cfg" -o "$WORK/value_bad" > "$WORK/value_bad.log" 2>&1
+    RC=$?
+    check "$value_name CSV unusable" test "$RC" -eq 2
+done < "$T/defines/value_rejected.txt"
 echo "== defines: declarators (mock)"
 for decl_csv in declarators declarator_supported declarator_members; do
     if [ "$decl_csv" = declarators ]; then decl_cfg=declarators; else decl_cfg=declarator_supported; fi
@@ -193,7 +209,7 @@ done < "$T/defines/declarator_types.txt"
 "$SIM" info -v --cfg "$T/defines/declarator_rejected.cfg" > "$WORK/decl_info.log" 2>&1
 RC=$?
 check "unsupported declarations are unresolved not load errors" test "$RC" -eq 0
-check "all 51 unsupported declarations counted" contains "$WORK/decl_info.log" "unresolved=51 "
+check "all 50 unsupported declarations counted" contains "$WORK/decl_info.log" "unresolved=50 "
 check "void pointer constant is skipped as a pointer" contains "$WORK/decl_info.log" "pointer-skipped=1 "
 "$SIM" list --cfg "$T/defines/declarator_rejected.cfg" > "$WORK/decl_list.log" 2>&1
 decl_reject() {

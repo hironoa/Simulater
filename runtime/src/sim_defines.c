@@ -52,6 +52,7 @@ typedef struct {
 } psym;
 typedef struct { int32_t take; int all; } cond_frame;
 typedef struct { char *name; const sim_type *type; } ext_type;
+typedef struct { const sim_type *base, *qualified; } const_type_entry;
 /* マクロの状態の読み書きの記録。あるファイルを読んだ結果は「読む前の状態のうち実際に参照したもの（reads）」
    だけで決まるので、同じ reads の状態で再び #include されたら、書き込み（writes）を再生するだけで済ませる */
 typedef struct { uint32_t sym, wtick; const char *body; unsigned char kind; } pp_read;
@@ -70,8 +71,9 @@ typedef struct {
     size_t nmacros, ntypes, macros_alloc, types_alloc;
     size_t *macro_index, *type_index, macro_cap, type_cap;
     int recursive, guess, char_unsigned, verbose, error, cond, compiler, packing;
+    const_type_entry *const_types; size_t nconst_types;
     uint64_t near_base;
-    unsigned variables, bits, arrays, guessed, unresolved, duplicates, pointers, explicit_vars;
+    unsigned variables, bits, arrays, guessed, unresolved, duplicates, pointers, values, explicit_vars;
     char *err; size_t cap;
     /* 条件付きコンパイル */
     source *src; size_t nsrc;
@@ -1080,6 +1082,7 @@ static const sim_type basic[] = {
 static const sim_type *resolve_name(defs *,const char *,unsigned);
 static const sim_type *external_type(defs *,const char *,unsigned);
 static const sim_type *parse_type(defs *,lexer *,unsigned);
+static const sim_type *unqualified_type(defs *,const sim_type *);
 static int constant_lookup(void *ctx, const char *name, size_t len, const char **body, int in_defined)
 {
     defs *d=ctx;
@@ -1164,7 +1167,7 @@ static const sim_type *record_type(defs *d,lexer *l,int un,unsigned depth)
               if (bit) {
                   if (!width) { size=align_up(size,a); unit_type=NULL; used=0; unit=0; }
                   else if (un) { off=0; unit=0; used=0; if (size<mt->size) size=mt->size; }
-                  else if (unit_type!=mt || used+width>mt->size*8) { unit=align_up(size,a); size=unit+mt->size; used=0; unit_type=mt; }
+                  else if (unqualified_type(d,unit_type)!=unqualified_type(d,mt) || used+width>mt->size*8) { unit=align_up(size,a); size=unit+mt->size; used=0; unit_type=mt; }
                   off=unit;
               } else { unit_type=NULL; used=0; off=un?0:align_up(size,a);
                   if (off>0x100000 || field->size>0x100000-off) { free(members); return NULL; }
@@ -1189,7 +1192,7 @@ static const sim_type *record_type(defs *d,lexer *l,int un,unsigned depth)
     t->members=sim_ctx_alloc(d->ctx,nm*sizeof *members); memcpy((void *)t->members,members,nm*sizeof *members); t->nmembers=(int)nm;
     free(members); return t;
 }
-static const sim_type *parse_type(defs *d,lexer *l,unsigned depth)
+static const sim_type *parse_type_impl(defs *d,lexer *l,unsigned depth)
 {
     const sim_type *t;
     while (qualifier(l->tok)) next(l);
@@ -1225,6 +1228,41 @@ static const sim_type *parse_type(defs *d,lexer *l,unsigned depth)
     if (!strcmp(l->tok,"void") || !strcmp(l->tok,"_Bool") || !strcmp(l->tok,"bool") || !strcmp(l->tok,"enum")) { skip_spec(l); return NULL; }
     t=resolve_name(d,l->tok,depth+1); if (l->tok[0]) next(l);
     while (qualifier(l->tok)) next(l);
+    return t;
+}
+/* Keep qualifiers without changing the shared backend type representation. */
+static int const_type(defs *d,const sim_type *t)
+{
+    size_t i;
+    for (i=0;i<d->nconst_types;i++) if (d->const_types[i].qualified==t) return 1;
+    return 0;
+}
+static const sim_type *unqualified_type(defs *d,const sim_type *t)
+{
+    size_t i;
+    for (i=0;i<d->nconst_types;i++) if (d->const_types[i].qualified==t) return d->const_types[i].base;
+    return t;
+}
+static const sim_type *parse_type(defs *d,lexer *l,unsigned depth)
+{
+    lexer begin=*l;
+    const sim_type *t=parse_type_impl(d,l,depth);
+    int ro=0, braces=0;
+    while (begin.start<l->start && begin.tok[0]) {
+        if (!strcmp(begin.tok,"{")) braces++;
+        if (!braces && !strcmp(begin.tok,"const")) ro=1;
+        if (!strcmp(begin.tok,"}")) braces--;
+        next(&begin);
+    }
+    if (t && ro && !const_type(d,t)) {
+        size_t i;
+        sim_type *qualified;
+        for (i=0;i<d->nconst_types;i++) if (d->const_types[i].base==t) return d->const_types[i].qualified;
+        qualified=sim_ctx_alloc(d->ctx,sizeof *qualified); *qualified=*t;
+        d->const_types=sim_xrealloc(d->const_types,(d->nconst_types+1)*sizeof *d->const_types);
+        d->const_types[d->nconst_types].base=t;
+        d->const_types[d->nconst_types++].qualified=qualified; t=qualified;
+    }
     return t;
 }
 static const sim_type *resolve_name(defs *d,const char *name,unsigned depth)
@@ -1304,74 +1342,153 @@ static const sim_member *member(const sim_type *t,const char *name,unsigned dept
     }
     return NULL;
 }
+typedef struct {
+    const sim_type *type;
+    uint64_t addr, near_addr;
+    int pointer, bit, readonly, reject_guess;
+    unsigned bits, guessed;
+} direct_ref;
+
+/* A cast consumes exactly one address primary. In particular, a binary
+   operator after a bare integer is never part of the cast operand. */
+static int address_primary(defs *d,lexer *l,uint64_t *addr)
+{
+    int ok=1;
+    if (!strcmp(l->tok,"(")) {
+        next(l); *addr=expression(d,l,0,&ok);
+        if (!ok || strcmp(l->tok,")")) return 0;
+        next(l); return 1;
+    }
+    if (isdigit((unsigned char)l->tok[0]) || sim_is_ident_start((unsigned char)l->tok[0])) {
+        sim_pp_env env={constant_lookup,d};
+        if (sim_pp_eval_constant(l->tok,&env,addr)) return 0;
+        next(l); return 1;
+    }
+    return 0;
+}
+/* Parse unary/postfix expressions with C precedence, retaining whether the
+   result is a pointer or an lvalue. Other operators are deliberately absent. */
+static int direct_expression(defs *d,lexer *l,direct_ref *r,unsigned depth,int *unresolved)
+{
+    if (depth>128) { *unresolved=1; return 0; }
+    memset(r,0,sizeof *r); r->bit=-1;
+    if (!strcmp(l->tok,"*")) {
+        next(l);
+        if (!direct_expression(d,l,r,depth+1,unresolved) || !r->pointer) return 0;
+        r->pointer=0;
+        /* The operand has already consumed its postfix operators. */
+        return 1;
+    }
+    if (strcmp(l->tok,"(")) return 0;
+    {
+        lexer cast=*l, name;
+        const sim_type *t;
+        next(&cast); name=cast;
+        t=sim_is_ident_start((unsigned char)cast.tok[0])?parse_type(d,&cast,0):NULL;
+        if (t && !strcmp(cast.tok,"(")) { *unresolved=1; return 0; }
+        if (sim_is_ident_start((unsigned char)name.tok[0]) && !strcmp(cast.tok,"*")) {
+            next(&cast); while (qualifier(cast.tok)) next(&cast);
+            if (strcmp(cast.tok,")")) { *unresolved=1; return 0; }
+            next(&cast);
+            if (!address_primary(d,&cast,&r->addr)) { *unresolved=1; return 0; }
+            r->type=t; r->pointer=1; r->readonly=const_type(d,t);
+            while (qualifier(name.tok)) next(&name);
+            r->reject_guess=!strcmp(name.tok,"struct") || !strcmp(name.tok,"union") ||
+                lookup(d,1,name.tok)!=NULL || builtin_word(name.tok) || !strcmp(name.tok,"enum");
+            if (r->addr>0xFFFFF) { *unresolved=1; return 0; }
+            if (r->addr<=0xFFFF && d->near_base) { r->addr+=d->near_base; r->near_addr=r->addr; }
+            *l=cast;
+        } else {
+            next(l);
+            if (!direct_expression(d,l,r,depth+1,unresolved)) return 0;
+            if (strcmp(l->tok,")")) return 0;
+            next(l);
+        }
+    }
+    for (;;) {
+        const sim_type *t=r->type;
+        if (!strcmp(l->tok,"[")) {
+            uint64_t n; int ok=1;
+            next(l); n=expression(d,l,0,&ok);
+            if (!ok || strcmp(l->tok,"]")) { *unresolved=1; return 0; }
+            if (!r->pointer) {
+                if (!t || t->kind!=SIM_T_ARRAY || n>=t->count) { *unresolved=1; return 0; }
+                t=t->target;
+            }
+            if (r->bit>=0 || !t || !t->size || r->addr>0xFFFFF || n>(0xFFFFF-r->addr)/t->size) {
+                *unresolved=1; return 0;
+            }
+            r->addr+=n*t->size; r->type=t; r->pointer=0;
+            r->readonly|=const_type(d,t); next(l);
+        } else if (!strcmp(l->tok,".") || !strcmp(l->tok,"->")) {
+            const sim_member *m; uint32_t parent=0;
+            int arrow=!strcmp(l->tok,"->");
+            if (arrow!=r->pointer || r->bit>=0) return 0;
+            next(l);
+            if (!t || (t->name && (!strcmp(t->name,"bits8") || !strcmp(t->name,"bits16")))) {
+                int guessed=t==NULL, bit=bit_number(l->tok,t?t->size*8:8);
+                if ((guessed && (r->reject_guess || !d->guess)) || bit<0) { *unresolved=1; return 0; }
+                r->bit=bit; r->bits=1; r->type=&basic[t && t->size==2?2:0];
+                r->guessed+=guessed;
+            } else {
+                m=member(t,l->tok,0,&parent);
+                if (!m) { *unresolved=1; return 0; }
+                r->addr+=parent+m->offset;
+                if (m->bit_offset>=0) { r->bit=m->bit_offset-(int)(m->offset*8); r->bits=m->bit_size; }
+                r->type=m->type; r->readonly|=const_type(d,m->type);
+            }
+            r->pointer=0; next(l);
+        } else break;
+    }
+    return 1;
+}
 static void resolve_macro(defs *d,definition *v)
 {
-    lexer l=lex(v->body), after={0};
-    const sim_type *t=NULL;
-    uint64_t addr;
-    int deref=0,ok=1,bit=-1,reject_guess=0,candidate=0;
-    unsigned bits=0,wrappers=0;
-    /* A cast must have one pointer star immediately before its closing ). */
-    while (l.tok[0]) {
-        if (!strcmp(l.tok,"*")) deref=1;
-        if (!strcmp(l.tok,"(")) {
-            lexer cast=l, named; int record_cast; next(&cast); named=cast;
-            while (qualifier(named.tok)) next(&named);
-            record_cast=!strcmp(named.tok,"struct") || !strcmp(named.tok,"union");
-            while (qualifier(named.tok) || !strcmp(named.tok,"struct") || !strcmp(named.tok,"union")) next(&named);
-            reject_guess=record_cast || lookup(d,1,named.tok)!=NULL || builtin_word(named.tok) || !strcmp(named.tok,"enum");
-            t=parse_type(d,&cast,0);
-            if ((t || reject_guess) && !strcmp(cast.tok,"(")) candidate=1;
-            if (!strcmp(cast.tok,"*")) {
-                candidate=1; next(&cast); while (qualifier(cast.tok)) next(&cast);
-                if (!strcmp(cast.tok,")")) { next(&cast); after=cast; break; }
+    lexer l=lex(v->body), scan=l;
+    direct_ref r;
+    int candidate=0, unresolved=0, parsed;
+    /* Identify direct-address casts even when enclosed in a value expression.
+       Unsupported pointer declarators remain type-unresolved. */
+    while (scan.tok[0]) {
+        if (!strcmp(scan.tok,"(")) {
+            lexer cast=scan, spec; const sim_type *t;
+            next(&cast); spec=cast;
+            while (qualifier(spec.tok)) next(&spec);
+            if (sim_is_ident_start((unsigned char)cast.tok[0])) {
+                t=parse_type(d,&cast,0);
+                if (!t && (!strcmp(spec.tok,"struct") || !strcmp(spec.tok,"union"))) candidate=1;
+                if (!strcmp(cast.tok,"*")) {
+                    next(&cast); while (qualifier(cast.tok)) next(&cast);
+                    if (!strcmp(cast.tok,")") || t) candidate=1;
+                } else if (t && !strcmp(cast.tok,"(")) candidate=1;
             }
         }
-        next(&l);
+        next(&scan);
     }
-    if (!after.p) { if (candidate) goto unresolved; return; } /* Ordinary constants/function macros are not lvalues. */
+    if (!candidate) return;
+    parsed=direct_expression(d,&l,&r,0,&unresolved);
+    if (!parsed || l.tok[0]) {
+        if (unresolved || (parsed && !strcmp(l.tok,")"))) goto unknown;
+        d->values++;
+        if (d->verbose) fprintf(stderr,"defines: 値の式のマクロ（対象外）: %s (%s:%u)\n",v->name,v->file,v->line);
+        return;
+    }
+    if (r.pointer) { d->pointers++; return; }
+    if (!r.type || !r.type->size || r.addr>0xFFFFF || r.type->size>0x100000-r.addr) goto unknown;
     {
-        lexer check=lex(v->body);
-        while (check.start<after.start && check.tok[0]) {
-            if (!strcmp(check.tok,"(")) wrappers++;
-            else if (!strcmp(check.tok,")")) { if (!wrappers) goto unresolved; wrappers--; }
-            next(&check);
+        int added=sim_ctx_define_at(d->ctx,v->name,r.type,r.addr,r.bit,r.bits,v->file,v->line,0);
+        if (!added) {
+            if (d->verbose) fprintf(stderr,"defines: %s はロードモジュールの同名シンボルを優先\n",v->name);
+            return;
         }
+        if (d->verbose && r.near_addr) fprintf(stderr,"defines: %s near -> 0x%05llX\n",v->name,(unsigned long long)r.near_addr);
+        sim_ctx_definition_const(d->ctx,v->name,r.readonly);
     }
-    l=after; addr=expression(d,&l,0,&ok);
-    if (!ok) goto unresolved;
-    while (!strcmp(l.tok,")")) { if (!wrappers) goto unresolved; wrappers--; next(&l); }
-    if (!strcmp(l.tok,"[")) goto unresolved;
-    if (!deref && strcmp(l.tok,"->") && strcmp(l.tok,".")) { d->pointers++; return; }
-    if (addr>0xFFFFF) goto unresolved;
-    if (addr<=0xFFFF && d->near_base) { addr+=d->near_base; if (d->verbose) fprintf(stderr,"defines: %s near -> 0x%05llX\n",v->name,(unsigned long long)addr); }
-    while (!strcmp(l.tok,"->") || !strcmp(l.tok,".")) {
-        const sim_member *m; uint32_t parent=0;
-        next(&l);
-        if (!t || (t->name && (!strcmp(t->name,"bits8") || !strcmp(t->name,"bits16")))) {
-            int guessed=t==NULL;
-            if (guessed && reject_guess) goto unresolved;
-            int b=bit_number(l.tok,t?t->size*8:8);
-            if (b<0 || (guessed && !d->guess)) goto unresolved;
-            bit=b; bits=1; t=&basic[t && t->size==2?2:0];
-            if (guessed) { d->guessed++; if (d->verbose) fprintf(stderr,"defines: %s をビット%dと推定\n",v->name,b); }
-        } else {
-            m=member(t,l.tok,0,&parent); if (!m) goto unresolved;
-            addr+=parent+m->offset;
-            if (m->bit_offset>=0) { bit=m->bit_offset-(int)(m->offset*8); bits=m->bit_size; }
-            t=m->type;
-        }
-        next(&l); while (!strcmp(l.tok,")")) { if (!wrappers) goto unresolved; wrappers--; next(&l); }
-    }
-    if (wrappers || l.tok[0] || !t || !t->size) goto unresolved;
-    if (addr>0xFFFFF || t->size>0x100000-addr) goto unresolved;
-    {
-        int added=sim_ctx_define_at(d->ctx,v->name,t,addr,bit,bits,v->file,v->line,0);
-        if (!added) { if (d->verbose) fprintf(stderr,"defines: %s はロードモジュールの同名シンボルを優先\n",v->name); return; }
-    }
-    if (bits) d->bits++; else if (t->kind==SIM_T_ARRAY) d->arrays++; else d->variables++;
+    d->guessed+=r.guessed;
+    if (r.guessed && d->verbose) fprintf(stderr,"defines: %s をビット%dと推定\n",v->name,r.bit);
+    if (r.bits) d->bits++; else if (r.type->kind==SIM_T_ARRAY) d->arrays++; else d->variables++;
     return;
-unresolved:
+unknown:
     d->unresolved++;
     if (d->verbose) fprintf(stderr,"defines: 型または番地を解決できない定義 %s (%s:%u)\n",v->name,v->file,v->line);
 }
@@ -1492,7 +1609,8 @@ int sim_defines_load(sim_ctx *c,const sim_open_opts *o,char *err,size_t cap)
     sim_buf_init(&info);
     if (!d.error && (d.nfiles || d.explicit_vars || have_mtpj || n_cfg || n_cli)) {
         size_t limit=d.verbose?(size_t)-1:20;
-        sim_buf_printf(&info,"defines files=%zu variables=%u bits=%u arrays=%u guessed=%u unresolved=%u duplicates=%u pointer-skipped=%u (%.3f s)\n",d.nfiles,d.variables,d.bits,d.arrays,d.guessed,d.unresolved,d.duplicates,d.pointers,(double)(sim_now_ns()-t0)/1e9);
+        sim_buf_printf(&info,"defines files=%zu variables=%u bits=%u arrays=%u guessed=%u unresolved=%u duplicates=%u pointer-skipped=%u value-excluded=%u (%.3f s)\n",d.nfiles,d.variables,d.bits,d.arrays,d.guessed,d.unresolved,d.duplicates,d.pointers,d.values,(double)(sim_now_ns()-t0)/1e9);
+        sim_buf_printf(&info,"値の式のマクロ（対象外）: %u 件（--verbose で名前、ファイル名と行番号を表示）\n",d.values);
         sim_buf_printf(&info,"型を解決できなかった定義: %u 件。同じ名前で内容の違う定義: %u 件（defines_exclude で除外できます。--verbose でファイル名と行番号を表示）\n",d.unresolved,d.duplicates);
         sim_buf_printf(&info,"var definitions=%u\n",d.explicit_vars);
         {
@@ -1566,6 +1684,7 @@ int sim_defines_load(sim_ctx *c,const sim_open_opts *o,char *err,size_t cap)
     free_sources(&d);
     for (k=0;k<d.nfiles;k++) free(d.files[k]);
     free(d.files);
+    free(d.const_types);
     free_definitions(d.macros,d.nmacros); free_definitions(d.types,d.ntypes); sim_cfg_free(&d.cfg);
     free(d.macro_index); free(d.type_index);
     return d.error?-1:0;

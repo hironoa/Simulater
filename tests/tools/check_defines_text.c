@@ -51,6 +51,57 @@ int main(int argc,char **argv)
     unsigned i;
     static const char *names[]={"UTF8_REG","UTF8_BLOCK","UTF8_BOM","UTF8_BOM_BLOCK","SJIS_SLASH","SJIS_BLOCK","SJIS_STRING","SJIS_CHAR","SJIS_IF","SJIS_TYPE","SJIS_INVALID_NL","SJIS_INVALID_STAR","SJIS_INVALID_SLASH","SJIS_INVALID_QUOTE","SJIS_KANA","ASCII_REG"};
     if (argc!=3) return 2;
+    snprintf(path,sizeof path,"%s/defines/value_forms.cfg",argv[1]);
+    c=load(path,&b); if (!c) return 1;
+    variable(c,"df_unit",0xFF91C,1,0);
+    variable(c,"u1g_reg_ckc",0xFFFA4,1,0);
+    variable(c,"Fs_ckc_mcm0",0xFFFA4,1,0);
+    variable(c,"GOOD_ADDR",0xF902,2,0);
+    variable(c,"GOOD_INDEX",0xF904,2,0);
+    variable(c,"GOOD_MEMBER",0xF924,2,0);
+    variable(c,"GOOD_WRAP",0xF900,2,0);
+    variable(c,"GOOD_MACRO",0xF902,2,0);
+    variable(c,"DUP_LVALUE",0xF950,1,0);
+    { const char *typed[]={"df_unit","u1g_reg_ckc","GOOD_ADDR","GOOD_INDEX","GOOD_MEMBER"}; unsigned j;
+      for (j=0;j<sizeof typed/sizeof typed[0];j++) {
+        char err[256]; sim_ref *r=sim_ref_parse(c,typed[j],err,sizeof err);
+        CHECK(r!=NULL); if (r) CHECK(sim_ref_type(r)->kind==SIM_T_UINT);
+        sim_ref_free(r);
+      }
+    }
+    info_has(c,"unresolved=2 duplicates=2");
+    info_has(c,"value-excluded=18");
+    {
+        char err[256],name[128]; FILE *f;
+        snprintf(path,sizeof path,"%s/defines/value_rejected.txt",argv[1]);
+        f=fopen(path,"rb"); CHECK(f!=NULL);
+        if (f) { while (fscanf(f,"%127s",name)==1) {
+            sim_ref *r=sim_ref_parse(c,name,err,sizeof err);
+            CHECK(r==NULL); sim_ref_free(r);
+        } fclose(f); }
+        sim_ctx_refresh_symbols(c);
+        { const char *ro[]={"READ_ONLY","READ_ALIAS","POINTER_CONST"}; unsigned j;
+          for (j=0;j<3;j++) {
+            sim_ref *r=sim_ref_parse(c,ro[j],err,sizeof err);
+            CHECK(r!=NULL); if (r) {
+                sim_cellval value; unsigned char byte=0, before=0;
+                CHECK(b->read(b,0xF940+j,&before,1,err,sizeof err)==0);
+                CHECK(sim_ref_writable(r)==(j==2));
+                CHECK(sim_parse_cell("123",3,&value,err,sizeof err)==0);
+                CHECK((sim_ref_write(c,r,&value,err,sizeof err)==0)==(j==2));
+                CHECK(b->read(b,0xF940+j,&byte,1,err,sizeof err)==0 && byte==(j==2?123:before));
+                sim_cellval_free(&value);
+            }
+            sim_ref_free(r);
+          }
+        }
+    }
+    close_ctx(c,b);
+    snprintf(path,sizeof path,"%s/defines/declarator_rejected.cfg",argv[1]);
+    c=load(path,&b); if (!c) return 1;
+    variable(c,"DECLBADINDEX",0xF802,1,0);
+    info_has(c,"unresolved=50");
+    close_ctx(c,b);
     snprintf(path,sizeof path,"%s/defines/encoding.cfg",argv[1]);
     c=load(path,&b); if (!c) return 1;
     for (i=0;i<sizeof names/sizeof names[0];i++) variable(c,names[i],0xF930+i,1,0);

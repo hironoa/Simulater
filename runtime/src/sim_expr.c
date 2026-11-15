@@ -203,6 +203,11 @@ int sim_ctx_define_at(sim_ctx *c, const char *name, const sim_type *type, uint64
     } else { c->vars[slot] = &d->var; c->var_def[slot] = d; }
     return replaced ? 2 : 1;
 }
+void sim_ctx_definition_const(sim_ctx *c, const char *name, int readonly)
+{
+    size_t slot=find_global(c,name);
+    if (slot<c->nvars && c->var_def && c->var_def[slot]) c->var_def[slot]->var.is_const=readonly;
+}
 const sim_var *sim_ctx_sym_var(sim_ctx *c, size_t i) { return i < c->nvars ? c->vars[i] : NULL; }
 const sim_type *sim_ctx_named_type(sim_ctx *c, const char *name)
 {

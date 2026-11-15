@@ -35,6 +35,8 @@ int sim_ctx_define_at(sim_ctx *c, const char *name, const sim_type *type, uint64
                       int bit_offset, unsigned bit_size, const char *file, unsigned line, int priority);
 /* i 番目のシンボル（sim_ctx_sym_*）が sim_ctx_define_at で登録した変数なら、定義元の行番号。それ以外は 0 */
 unsigned sim_ctx_sym_line(sim_ctx *c, size_t i);
+/* Set const only on a registered definition, before refreshing symbols. */
+void sim_ctx_definition_const(sim_ctx *c, const char *name, int readonly);
 void sim_ctx_refresh_symbols(sim_ctx *c);
 const sim_var *sim_ctx_sym_var(sim_ctx *c, size_t i);
 const sim_type *sim_ctx_named_type(sim_ctx *c, const char *name);
