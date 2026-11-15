@@ -16,30 +16,36 @@ jobs:
 
   windows:
     runs-on: windows-latest
+    env:
+      CC: gcc
     steps:
       - uses: actions/checkout@v4
-      - name: clang の確認
+      - name: MinGW-w64 gcc と clang の確認
         shell: cmd
         run: |
           where clang || set "PATH=C:\Program Files\LLVM\bin;%PATH%"
+          gcc --version
           clang --version
       - name: ビルド（本物のバックエンド）
         shell: cmd
         run: |
-          where clang >nul 2>nul || set "PATH=C:\Program Files\LLVM\bin;%PATH%"
           call build.bat
       - name: テスト（モックと本物のバックエンド）
         shell: cmd
         run: |
-          where clang >nul 2>nul || set "PATH=C:\Program Files\LLVM\bin;%PATH%"
           set PERF_MIN=100
           call tests\run_tests.bat
       - name: コア単体のテストとベンチマーク
         shell: cmd
         run: |
-          where clang >nul 2>nul || set "PATH=C:\Program Files\LLVM\bin;%PATH%"
           set BENCH_MIN=100
           call rl78\tests\run_tests.bat
+      - name: clang でのビルド互換性
+        shell: cmd
+        run: |
+          where clang >nul 2>nul || set "PATH=C:\Program Files\LLVM\bin;%PATH%"
+          set "CC=clang"
+          call build.bat build\sim-clang
       - name: 配布物をまとめる
         shell: cmd
         run: |

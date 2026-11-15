@@ -17,7 +17,7 @@ runtime/        シミュレータ本体（C11、外部依存なし）
   backends/rl78/  本物のバックエンド: .abs（ELF/DWARF）と .map の読み込み、CC-RL の呼び出し規約での関数呼び出し、
                   スタブ、CPU コアとの接続
   backends/mock/  共通部分のテスト用のモック
-build.bat       Windows 用ビルドスクリプト（clang を直接呼ぶ。CMake も Python も使わない）
+build.bat       Windows 用ビルドスクリプト（clang / MinGW-w64 gcc を直接呼ぶ。CMake も Python も使わない）
 build.sh        macOS / Linux 用の同じもの
 example/        sim.cfg の見本など
 gui/            リアルタイム GUI（SignalViewer2 を取り込んだ React アプリ）。単一 HTML にビルドしてコミットする
@@ -44,8 +44,9 @@ docs/
   `sim.cfg: KEY = 値 を読めません` のエラー（終了コード 2）にする。`cpu_hz` は正の 10 進の数（指数可）。
 - ビルドは `build.sh` / `build.bat`（既定は本物のバックエンド。`mock` を付けるとモック版）。
 
-シミュレータ自体のビルドに必要なのは Clang だけ（Windows は LLVM 公式配布の `clang+llvm-18.1.8-x86_64-pc-windows-msvc`、
-macOS は Apple clang）。GUI はビルド済みの単一 HTML をコミットしておく（作り直すときだけ Node が要る）。
+シミュレータ自体のビルドには、Windows の配布物は MinGW-w64 gcc（`set CC=gcc`）、macOS は Apple clang を使う。
+Windows は clang でもビルドでき、`CC` 未設定なら従来どおり clang を使う（LLVM、MSVC の C ランタイムと Windows SDK が要る）。
+GUI はビルド済みの単一 HTML をコミットしておく（作り直すときだけ Node が要る）。
 
 ## 2. 実行モデルと変数名の解決
 
@@ -324,6 +325,10 @@ CPU コアは 1 億命令/秒以上を目標にする。`sim run` は終了時�
 ビルドには必ず `-fno-unroll-loops` を付ける（`build.sh` / `build.bat` に入っている）。clang 20.1.8（x86-64）の素の `-O2` は
 ループ展開で命令実行ループを約 10 倍遅くする（GitHub の Windows ランナーで、コア単体のベンチマークが 27 → 254 百万命令/秒。
 同じ機械で `-O1` は 241、MinGW の gcc `-O2` は 318）。arm64 の macOS では差が出ないので、手元の測定だけでは気づけない。
+速度を優先し、Windows の配布物は MinGW-w64 gcc でビルドする。同じ GitHub の Windows ランナーで、
+clang `-O2 -fno-unroll-loops` の 254 に対し、gcc `-O2` は 318 百万命令/秒だった。
+gcc でも `-O2 -fno-unroll-loops` を維持する。`-static` で gcc のランタイムを静的リンクし、libgcc / libwinpthread 等の DLL は不要にする。
+clang のビルドも残し、CI では別の出力フォルダへビルドして互換性を確かめる。
 再発を見逃さないよう、CI の Windows では速度の下限を確かめる（コア単体のベンチマークは `BENCH_MIN`、配布する `sim.exe` の
 性能テストは `PERF_MIN`。どちらも 100 百万命令/秒）。
 

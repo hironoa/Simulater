@@ -74,7 +74,7 @@ static void build_text(const oprow *r, const char *rsub, const char *rpsub, int 
     snprintf(ops, sizeof ops, "%s", r->ops);
     /* bit operands first (".bit" suffix) */
     {
-        char b[8];
+        char b[16];
         snprintf(b, sizeof b, ".%d", bit);
         while (strstr(ops, ".bit")) {
             char *q = strstr(ops, ".bit");
@@ -85,7 +85,7 @@ static void build_text(const oprow *r, const char *rsub, const char *rpsub, int 
     }
     hexh(t, sizeof t, mc.base, 4);
     {
-        char a16[32], w[32], wc[32];
+        char a16[33], w[32], wc[32];
         snprintf(a16, sizeof a16, "!%s", t);
         hexh(w, sizeof w, mc.base, 4);
         hexh(wc, sizeof wc, (mc.base - 0x10u) & 0xFFFFu, 4);
@@ -150,7 +150,7 @@ static void build_text(const oprow *r, const char *rsub, const char *rpsub, int 
     subst(ops, sizeof ops, "sfr", "0FFF10H");
     subst(ops, sizeof ops, "[addr5]", "[0080H]");
     {
-        char c[8];
+        char c[16];
         snprintf(c, sizeof c, "%d", cnt);
         subst(ops, sizeof ops, "cnt", c);
         snprintf(c, sizeof c, "RB%d", bank);

@@ -18,7 +18,9 @@ void sim_buf_reserve(sim_buf *b, size_t extra);
 void sim_buf_add(sim_buf *b, const void *data, size_t n);
 void sim_buf_adds(sim_buf *b, const char *s);
 void sim_buf_addc(sim_buf *b, char c);
-#if defined(__GNUC__) || defined(__clang__)
+#if defined(__MINGW32__) && !defined(__clang__)
+void sim_buf_printf(sim_buf *b, const char *fmt, ...) __attribute__((format(gnu_printf, 2, 3)));
+#elif defined(__GNUC__) || defined(__clang__)
 void sim_buf_printf(sim_buf *b, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
 #else
 void sim_buf_printf(sim_buf *b, const char *fmt, ...);

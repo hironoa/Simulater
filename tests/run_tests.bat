@@ -11,6 +11,8 @@ rem Messages are ASCII only so that cmd.exe parses this file the same on any cod
 rem Japanese error messages are checked through their ASCII parts.
 setlocal EnableExtensions
 if not defined CC set "CC=clang"
+set "GCC_FLAGS="
+for %%C in ("%CC%") do if /i "%%~nC"=="gcc" set "GCC_FLAGS=-D__USE_MINGW_ANSI_STDIO=1"
 
 set "ROOT=%~dp0.."
 for %%I in ("%ROOT%") do set "ROOT=%%~fI"
@@ -213,7 +215,7 @@ call :gui_opt "--port 8765x is not read as 8765" "8765x" --port 8765x
 call :gui_opt "--period-ms 1e400 (inf) is rejected" "1e400" --period-ms 1e400
 
 rem C11 contract helper: curl + runtime JSON parser, no shell JSON matching.
-clang -std=c11 -O2 -Wall -Wextra -I"%ROOT%\runtime\src" "%T%\tools\check_symbols.c" "%ROOT%\runtime\src\sim_json.c" "%ROOT%\runtime\src\sim_util.c" -o "%WORK%\check_symbols.exe" > "%WORK%\check_symbols_build.log" 2>&1
+"%CC%" %GCC_FLAGS% -std=c11 -O2 -Wall -Wextra -I"%ROOT%\runtime\src" "%T%\tools\check_symbols.c" "%ROOT%\runtime\src\sim_json.c" "%ROOT%\runtime\src\sim_util.c" -o "%WORK%\check_symbols.exe" > "%WORK%\check_symbols_build.log" 2>&1
 if errorlevel 1 (call :ng "build symbols contract helper" & type "%WORK%\check_symbols_build.log") else (call :ok "build symbols contract helper")
 
 echo == GUI server API
@@ -879,13 +881,13 @@ curl -s --max-time 2 -X POST --data-binary "@%T%\gui\reset.json" "%U%/api/contro
 taskkill /f /im sim_guitest.exe >nul 2>nul
 
 :after_gui
-"%CC%" -std=c11 -O2 -Wall -Wextra -D_DEFAULT_SOURCE -I"%ROOT%\runtime\include" -I"%ROOT%\runtime\src" "%T%\tools\check_csv_table.c" "%ROOT%\runtime\src\sim_csv.c" "%ROOT%\runtime\src\sim_expr.c" "%ROOT%\runtime\src\sim_util.c" "%ROOT%\runtime\src\sim_platform.c" "%ROOT%\runtime\src\sim_cfg.c" "%ROOT%\runtime\backends\mock\mock_backend.c" -o "%WORK%\csv_table.exe" -lws2_32
+"%CC%" %GCC_FLAGS% -std=c11 -O2 -Wall -Wextra -D_DEFAULT_SOURCE -I"%ROOT%\runtime\include" -I"%ROOT%\runtime\src" "%T%\tools\check_csv_table.c" "%ROOT%\runtime\src\sim_csv.c" "%ROOT%\runtime\src\sim_expr.c" "%ROOT%\runtime\src\sim_util.c" "%ROOT%\runtime\src\sim_platform.c" "%ROOT%\runtime\src\sim_cfg.c" "%ROOT%\runtime\backends\mock\mock_backend.c" -o "%WORK%\csv_table.exe" -lws2_32 -lshell32
 set RC=%ERRORLEVEL%
 if "%RC%"=="0" (call :ok "build GUI CSV table checks") else (call :ng "build GUI CSV table checks")
 "%WORK%\csv_table.exe"
 set RC=%ERRORLEVEL%
 if "%RC%"=="0" (call :ok "GUI CSV initialization expansion") else (call :ng "GUI CSV initialization expansion")
-"%CC%" -std=c11 -O2 -Wall -Wextra -D_DEFAULT_SOURCE -I"%ROOT%\runtime\include" -I"%ROOT%\runtime\src" "%T%\tools\check_const_refs.c" "%ROOT%\runtime\src\sim_expr.c" "%ROOT%\runtime\src\sim_util.c" "%ROOT%\runtime\src\sim_platform.c" "%ROOT%\runtime\src\sim_cfg.c" "%ROOT%\runtime\backends\mock\mock_backend.c" -o "%WORK%\const_refs.exe" -lws2_32
+"%CC%" %GCC_FLAGS% -std=c11 -O2 -Wall -Wextra -D_DEFAULT_SOURCE -I"%ROOT%\runtime\include" -I"%ROOT%\runtime\src" "%T%\tools\check_const_refs.c" "%ROOT%\runtime\src\sim_expr.c" "%ROOT%\runtime\src\sim_util.c" "%ROOT%\runtime\src\sim_platform.c" "%ROOT%\runtime\src\sim_cfg.c" "%ROOT%\runtime\backends\mock\mock_backend.c" -o "%WORK%\const_refs.exe" -lws2_32 -lshell32
 set RC=%ERRORLEVEL%
 if "%RC%"=="0" (call :ok "build const argument checks") else (call :ng "build const argument checks")
 "%WORK%\const_refs.exe"
@@ -893,7 +895,7 @@ set RC=%ERRORLEVEL%
 if "%RC%"=="0" (call :ok "mock const argument preparation and symbol writable") else (call :ng "mock const argument preparation and symbol writable")
 for /f "usebackq delims=" %%N in ("%T%\defines\type_contract_ro.txt") do call :const_csv "%%N"
 echo == definition text contracts
-"%CC%" -std=c11 -O2 -Wall -Wextra -D_DEFAULT_SOURCE -I"%ROOT%\runtime\include" -I"%ROOT%\runtime\src" "%T%\tools\check_defines_text.c" "%ROOT%\runtime\src\sim_defines.c" "%ROOT%\runtime\src\sim_ppexpr.c" "%ROOT%\runtime\src\sim_mtpj.c" "%ROOT%\runtime\src\sim_expr.c" "%ROOT%\runtime\src\sim_cfg.c" "%ROOT%\runtime\src\sim_util.c" "%ROOT%\runtime\src\sim_platform.c" "%ROOT%\runtime\backends\mock\mock_backend.c" -o "%WORK%\check_defines_text.exe" -lws2_32
+"%CC%" %GCC_FLAGS% -std=c11 -O2 -Wall -Wextra -D_DEFAULT_SOURCE -I"%ROOT%\runtime\include" -I"%ROOT%\runtime\src" "%T%\tools\check_defines_text.c" "%ROOT%\runtime\src\sim_defines.c" "%ROOT%\runtime\src\sim_ppexpr.c" "%ROOT%\runtime\src\sim_mtpj.c" "%ROOT%\runtime\src\sim_expr.c" "%ROOT%\runtime\src\sim_cfg.c" "%ROOT%\runtime\src\sim_util.c" "%ROOT%\runtime\src\sim_platform.c" "%ROOT%\runtime\backends\mock\mock_backend.c" -o "%WORK%\check_defines_text.exe" -lws2_32 -lshell32
 set RC=%ERRORLEVEL%
 if "%RC%"=="0" (call :ok "build defines text checks") else (call :ng "build defines text checks")
 "%WORK%\check_defines_text.exe" "%T%" "%WORK%" > "%WORK%\defines_text.log" 2>&1
@@ -965,7 +967,7 @@ call :decl_reject SIGNEDWIDE declarator_lmf
 echo == defines: compile switches (mock)
 rem findstr patterns are plain substrings (letters, digits, spaces, underscores). Macro values such as
 rem PRODUCT=2 go into the cfg file, not onto a call line, because cmd splits arguments at "=".
-"%CC%" -std=c11 -O2 -Wall -Wextra -I"%ROOT%\runtime\src" "%T%\tools\check_ppexpr.c" "%ROOT%\runtime\src\sim_ppexpr.c" -o "%WORK%\check_ppexpr.exe" > "%WORK%\ppexpr_build.log" 2>&1
+"%CC%" %GCC_FLAGS% -std=c11 -O2 -Wall -Wextra -I"%ROOT%\runtime\src" "%T%\tools\check_ppexpr.c" "%ROOT%\runtime\src\sim_ppexpr.c" -o "%WORK%\check_ppexpr.exe" > "%WORK%\ppexpr_build.log" 2>&1
 set RC=%ERRORLEVEL%
 if "%RC%"=="0" (call :ok "build check_ppexpr") else (call :ng "build check_ppexpr" & type "%WORK%\ppexpr_build.log")
 "%WORK%\check_ppexpr.exe" > "%WORK%\ppexpr.log" 2>&1
