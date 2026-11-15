@@ -26,6 +26,8 @@ WORK=$(mktemp -d "${TMPDIR:-/tmp}/simwin.XXXXXX")
 trap 'rm -rf "$WORK"' EXIT
 OUT="$WORK/$NAME"
 mkdir -p "$OUT/xlate" "$DIST"
+# zip は作業用フォルダへ移ってから作るので、出力先を絶対パスにしておく（相対パスで渡されても呼び出し元から見た場所に作る）
+DIST=$(cd "$DIST" && pwd)
 
 echo "build_windows_cross.sh: $CC で sim.exe をビルドします"
 "$CC" -static -D__USE_MINGW_ANSI_STDIO=1 -std=c11 -O2 -fno-unroll-loops -Wall -Wextra \
