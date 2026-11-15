@@ -1,3 +1,4 @@
+import { displaySignalName } from "../../utils/displaySignalName";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { X, Lock, Unlock } from "lucide-react";
@@ -23,6 +24,7 @@ const field = "px-1.5 py-0.5 text-xs rounded border border-gray-300 dark:border-
 
 interface InputCardProps {
   item: InputItem;
+  names: readonly string[];
   /** メモリの現在値 */
   current: number | null | undefined;
   /** 反映待ちの値（書いたセルの文字列）。無ければ undefined */
@@ -34,7 +36,7 @@ interface InputCardProps {
   key?: React.Key;
 }
 
-function InputCard({ item, current, pending, held, base }: InputCardProps) {
+function InputCard({ item, names, current, pending, held, base }: InputCardProps) {
   const live = liveController();
   // 数値入力は書いた文字列のまま持つ（Number に通すと 2^53 を超える整数が丸まる）
   const [text, setText] = useState(item.value !== undefined ? String(item.value) : "");
@@ -119,7 +121,7 @@ function InputCard({ item, current, pending, held, base }: InputCardProps) {
   return (
     <div className="rounded border border-gray-200 dark:border-slate-700 p-1.5 flex flex-col gap-1 bg-white dark:bg-slate-800">
       <div className="flex items-center gap-1">
-        <span className="font-mono text-xs font-bold truncate flex-1" title={item.name}>{item.name}</span>
+        <span className="font-mono text-xs font-bold truncate flex-1" title={item.name}>{displaySignalName(item.name, names)}</span>
         <span className="font-mono text-xs text-gray-500 dark:text-gray-400"
           title={unmonitored ? "今の対象関数では解決できないため監視から外れています。書き込めると監視に戻ります" : "現在値"}>
           = {unmonitored ? "—" : formatValue(current, "dec")}
@@ -210,13 +212,14 @@ export function InputPanel() {
   const { inputs, values, pending, holds, needReset } = useLiveStore(useShallow((s) => ({
     inputs: s.inputs, values: s.values, pending: s.sim.pending, holds: s.sim.holds, needReset: s.sim.needReset,
   })));
+  const names = inputs.map(item => item.name);
   return (
     <fieldset disabled={needReset} className="flex flex-col gap-1.5 min-w-0" title={needReset ? "リセットが必要です" : undefined}>
       <SymbolSearch placeholder="入力にする変数を検索"
         actions={[{ label: "入力に追加", title: "入力パネルに追加", enabled: (s) => s.writable, onPick: (s) => live.addInput(s.name) }]} />
       {inputs.length === 0 && <div className="text-[11px] text-gray-400 px-1">変数を検索して入力に追加してください。</div>}
       {inputs.map((item) => (
-        <InputCard key={item.name} item={item} current={values[item.name]}
+        <InputCard key={item.name} item={item} names={names} current={values[item.name]}
           pending={pending.find((p) => p.name === item.name)?.value}
           held={heldValue(holds, item.name)}
           base={inputValue(item.name, { pending, holds }, values[item.name])} />
