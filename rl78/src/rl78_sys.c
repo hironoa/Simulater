@@ -305,9 +305,11 @@ rl78_cpu *rl78_create(const rl78_config *cfg)
 {
     rl78_cpu *c = (rl78_cpu *)calloc(1, sizeof(rl78_cpu));
     if (!c) return NULL;
-    c->mem = (uint8_t *)calloc(1, RL78_MEM_SIZE + RL78_MEM_PAD);
-    c->bptrap = (uint8_t *)calloc(1, RL78_MEM_SIZE + RL78_MEM_PAD);
-    if (!c->mem || !c->bptrap) { free(c->mem); free(c->bptrap); free(c); return NULL; }
+    /* One block: the trap mask sits right after the memory image, so the
+       interpreter reaches both through one base pointer (RL78_TRAP_OFFSET). */
+    c->mem = (uint8_t *)calloc(2, RL78_MEM_SIZE + RL78_MEM_PAD);
+    if (!c->mem) { free(c); return NULL; }
+    c->bptrap = c->mem + RL78_TRAP_OFFSET;
     memset(c->mem + RL78_MEM_SIZE, 0xFF, RL78_MEM_PAD); /* run-off traps as undefined */
     if (cfg) c->cfg = *cfg;
     else rl78_default_config(&c->cfg, RL78_CORE_S3);
@@ -325,7 +327,6 @@ void rl78_destroy(rl78_cpu *c)
     free(c->mem);
     free(c->bplist);
     free(c->bpbits);
-    free(c->bptrap);
     free(c);
 }
 
@@ -545,7 +546,7 @@ static void fill_fault(rl78_cpu *c)
     }
     rl78_disasm(c, c->pc, dis, sizeof dis);
     snprintf(c->fault.text, sizeof c->fault.text,
-             "undefined instruction at %05X: %02X %02X %02X %02X (%s)",
+             "undefined instruction at %05X: %02X %02X %02X %02X (%.40s)",
              (unsigned)c->pc, c->fault.bytes[0], c->fault.bytes[1], c->fault.bytes[2],
              c->fault.bytes[3], dis);
 }

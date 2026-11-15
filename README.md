@@ -17,7 +17,7 @@ RL78 向け組み込みソフトを、CC-RL の `.abs` または CA78K0R の `.l
   - 自分でビルドする: MinGW-w64 gcc を PATH に入れ、`set CC=gcc` のあと `build.bat`（`build\sim\sim.exe` ができる）
 
 Windows の配布物は速度を優先して MinGW-w64 gcc でビルドする（gcc のランタイムは静的リンク）。
-GitHub の Windows ランナーで、コア単体のベンチマークは clang `-O2 -fno-unroll-loops` が 254、gcc `-O2` が 318 百万命令/秒。
+GitHub のランナーの遅い機種で、コア単体のベンチマークは clang が 272、gcc が 350 百万命令/秒（速い機種ではほぼ同じ）。
 どちらのビルドにも `-O2 -fno-unroll-loops` を付ける（[速度](docs/DESIGN.md#41-速度) を参照）。
 LLVM の clang でもビルドできる。`CC` 未設定の既定は従来どおり clang（MSVC の C ランタイムと Windows SDK も要る）。
 
