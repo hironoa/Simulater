@@ -20,6 +20,11 @@ typedef struct {
     const sim_pp_env *env;
     token tok[MAX_TOKENS + 1];
     size_t ntok, pos;
+    int prefix;
+    unsigned parens;
+    const char *end;
+    int strict;
+    unsigned steps;
     int error;                      /* 構文の誤り・上限超過: 式全体が判定不能 */
     const char *hide[MAX_EXPAND];   /* 展開中のマクロ名（自己参照を展開しない） */
     size_t hide_len[MAX_EXPAND];
@@ -58,15 +63,21 @@ static void expand(pp *p, const char *s, unsigned depth)
     while (!p->error) {
         const char *b;
         size_t n, k;
+        if (++p->steps > 16384) { p->error = 1; return; }
         s = skip_space(s);
-        if (!*s) return;
+        if (!*s) { if (!depth) p->end=s; return; }
+        if (p->prefix && !p->parens && strchr(")];,}",*s)) {
+            if (depth) p->error=1;
+            else p->end=s;
+            return;
+        }
         b = s;
         if (ident_start((unsigned char)*s)) {
             const char *body = NULL;
             int kind;
             while (ident_char((unsigned char)*s)) s++;
             n = (size_t)(s - b);
-            if (n == 7 && !memcmp(b, "defined", 7)) {
+            if (!p->strict && n == 7 && !memcmp(b, "defined", 7)) {
                 int paren = 0;
                 s = skip_space(s);
                 if (*s == '(') { paren = 1; s = skip_space(s + 1); }
@@ -81,8 +92,10 @@ static void expand(pp *p, const char *s, unsigned depth)
             }
             for (k = 0; k < depth; k++)
                 if (p->hide_len[k] == n && !memcmp(p->hide[k], b, n)) break;
-            if (k < depth) { push(p, T_NUM, 0, "0", 1); continue; }   /* 自己参照は識別子のまま = 0 */
+            if (k < depth && p->strict) { p->error = 1; return; }
+            if (k < depth) { push(p, p->strict ? T_BAD : T_NUM, 0, "0", 1); continue; }   /* 自己参照は識別子のまま = 0 */
             kind = p->env && p->env->lookup ? p->env->lookup(p->env->ctx, b, n, &body, 0) : SIM_PP_UNDEF;
+            if (p->strict && kind != SIM_PP_OBJECT) { p->error = 1; return; }
             if (kind == SIM_PP_FUNCTION) {
                 const char *q = skip_space(s);
                 if (*q == '(') {
@@ -97,7 +110,7 @@ static void expand(pp *p, const char *s, unsigned depth)
                     push(p, T_BAD, 0, b, n);
                 } else push(p, T_NUM, 0, "0", 1);
             } else if (kind == SIM_PP_OBJECT && body) {
-                if (depth >= MAX_EXPAND) { push(p, T_BAD, 0, b, n); continue; }
+                if (depth >= MAX_EXPAND) { p->error=1; return; }
                 p->hide[depth] = b; p->hide_len[depth] = n;
                 expand(p, body, depth + 1);
             } else push(p, T_NUM, 0, "0", 1);
@@ -127,6 +140,11 @@ static void expand(pp *p, const char *s, unsigned depth)
         {
             const char *o = strchr(one, *s);
             if (!o) { p->error = 1; return; }   /* = , # や非 ASCII など */
+            if (p->prefix && *s=='(') p->parens++;
+            if (p->prefix && *s==')') {
+                if (!p->parens) { p->error=1; return; }
+                p->parens--;
+            }
             push(p, T_OP, one_op[o - one], b, 1); s++;
         }
     }
@@ -377,9 +395,10 @@ static int parse(pp *p, int bits, val *out)
     return out->bad ? -1 : 0;
 }
 
-static int prepare(pp *p, const char *expr, const sim_pp_env *env)
+static int prepare(pp *p, const char *expr, const sim_pp_env *env, int strict, int prefix)
 {
-    p->env = env; p->ntok = 0; p->error = 0;
+    p->env = env; p->ntok = 0; p->error = 0; p->strict = strict; p->steps = 0;
+    p->prefix=prefix; p->parens=0; p->end=NULL;
     expand(p, expr, 0);
     if (p->error || !p->ntok) return -1;
     p->tok[p->ntok].type = T_END; p->tok[p->ntok].op = 0;
@@ -391,7 +410,7 @@ int sim_pp_eval_width(const char *expr, const sim_pp_env *env, int bits, sim_pp_
     pp p;
     val v;
     if (bits != 32 && bits != 64) return -1;
-    if (prepare(&p, expr, env) || parse(&p, bits, &v)) return -1;
+    if (prepare(&p, expr, env, 0, 0) || parse(&p, bits, &v)) return -1;
     if (out) { out->value = (int64_t)v.v; out->is_unsigned = v.uns; }
     return 0;
 }
@@ -400,8 +419,28 @@ int sim_pp_eval(const char *expr, const sim_pp_env *env)
 {
     pp p;
     val a, b;
-    if (prepare(&p, expr, env)) return -1;
+    if (prepare(&p, expr, env, 0, 0)) return -1;
     if (parse(&p, 32, &a) || parse(&p, 64, &b)) return -1;
     if (!(a.v & UINT64_C(0xFFFFFFFF)) != !b.v) return -1;   /* 幅で真偽が変わる式 */
     return b.v != 0;
+}
+
+/* Direct-address/type expressions must never turn an unknown identifier into zero. */
+int sim_pp_eval_constant(const char *expr, const sim_pp_env *env, uint64_t *out)
+{
+    pp p;
+    val v;
+    if (prepare(&p, expr, env, 1, 0) || parse(&p, 64, &v) || (!v.uns && (int64_t)v.v < 0)) return -1;
+    *out = v.v;
+    return 0;
+}
+
+int sim_pp_eval_constant_prefix(const char *expr, const sim_pp_env *env, uint64_t *out, const char **end)
+{
+    pp p;
+    val v;
+    if (prepare(&p, expr, env, 1, 1) || parse(&p, 64, &v) ||
+        !p.end || (!v.uns && (int64_t)v.v < 0)) return -1;
+    *out=v.v; *end=p.end;
+    return 0;
 }

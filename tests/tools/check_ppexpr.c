@@ -7,6 +7,7 @@
 
 static const struct { const char *name, *body; int kind; } macros[] = {
     {"ONE", "1", SIM_PP_OBJECT}, {"TWO", "(ONE + ONE)", SIM_PP_OBJECT}, {"EMPTY", "", SIM_PP_OBJECT},
+    {"OPEN", "(1 + 2", SIM_PP_OBJECT}, {"CLOSE", "1 + 2)", SIM_PP_OBJECT},
     {"SUM", "1 + 1", SIM_PP_OBJECT},            /* 括弧なし: トークン列として展開する */
     {"SELF", "SELF", SIM_PP_OBJECT},            /* 自己参照は展開せず 0 */
     {"PING", "PONG", SIM_PP_OBJECT}, {"PONG", "PING", SIM_PP_OBJECT},
@@ -16,12 +17,18 @@ static const struct { const char *name, *body; int kind; } macros[] = {
     {"D0", "D1", SIM_PP_OBJECT}, {"D1", "D2", SIM_PP_OBJECT}, {"D2", "D3", SIM_PP_OBJECT}, {"D3", "7", SIM_PP_OBJECT}
 };
 static int lookups;
+static char ladder[36][64];
 
 static int lookup(void *ctx, const char *name, size_t len, const char **body, int in_defined)
 {
     size_t i;
     (void)ctx; (void)in_defined;
     lookups++;
+    for (i=0;i<36;i++) {
+        char key[16];
+        snprintf(key,sizeof key,"LIMIT%zu",i);
+        if (strlen(key)==len && !memcmp(key,name,len)) { *body=ladder[i]; return SIM_PP_OBJECT; }
+    }
     for (i = 0; i < sizeof macros / sizeof macros[0]; i++)
         if (strlen(macros[i].name) == len && !memcmp(macros[i].name, name, len)) {
             *body = macros[i].body;
@@ -97,6 +104,10 @@ static const struct { const char *expr; int bits, ok; long long value; int uns; 
     {"FN(1)", 0, BAD, 0, 0}, {"FN (1) + 1", 0, BAD, 0, 0}, {"FN(", 0, BAD, 0, 0},
     {"PRODUCT == TYPE_B", 0, 1, 0, 0}, {"PRODUCT == 1", 0, 0, 0, 0}, {"PRODUCT >= 2 && PRODUCT < 4", 0, 1, 0, 0},
     {"ADDR", 64, 0, 0xFF91CLL, 1}, {"ADDR > 0xFFFFF", 0, 0, 0, 0}, {"(ADDR & 0xF) == 0xC", 0, 1, 0, 0},
+    {"SUM * 3 == 4", 0, 1, 0, 0}, {"HALF 2 * 3", 64, 0, 7, 0},
+    {"SUM )", 0, BAD, 0, 0}, {"SUM 2", 0, BAD, 0, 0},
+    {"OPEN) * 2 == 6", 0, 1, 0, 0}, {"(CLOSE * 2 == 6", 0, 1, 0, 0},
+    {"LIMIT0", 0, BAD, 0, 0}, {"1 || LIMIT0", 0, BAD, 0, 0},
     /* defined */
     {"defined(ONE)", 0, 1, 0, 0}, {"defined ONE", 0, 1, 0, 0}, {"defined ( ONE )", 0, 1, 0, 0},
     {"defined(UNDEFINED)", 0, 0, 0, 0}, {"!defined(UNDEFINED)", 0, 1, 0, 0}, {"defined(EMPTY)", 0, 1, 0, 0},
@@ -112,6 +123,8 @@ int main(void)
     size_t i, n = sizeof cases / sizeof cases[0];
     int failed = 0;
     env.lookup = lookup; env.ctx = NULL;
+    for (i=0;i<35;i++) snprintf(ladder[i],sizeof ladder[i],"LIMIT%zu",i+1);
+    strcpy(ladder[35],"1");
     for (i = 0; i < n; i++) {
         int bad = 0;
         if (!cases[i].bits) {
@@ -145,6 +158,22 @@ int main(void)
         if (sim_pp_eval_width("1", &env, 16, NULL) != -1) { printf("FAIL  bad width\n"); failed++; }
     }
     n += 5;
+    {
+        static const struct { const char *expr; int ok; uint64_t value; } strict[] = {
+            {"SUM*3",0,4}, {"OPEN)*2",0,6}, {"(CLOSE*2",0,6},
+            {"SELF",-1,0}, {"PING",-1,0}, {"FN(1)",-1,0}, {"UNDEFINED",-1,0},
+            {"0 && SELF",-1,0}, {"HALF",-1,0}, {"ONE TWO",-1,0}, {"OPEN",-1,0}
+        };
+        size_t k;
+        for (k=0;k<sizeof strict/sizeof strict[0];k++) {
+            uint64_t v=0;
+            int r=sim_pp_eval_constant(strict[k].expr,&env,&v);
+            if (r!=strict[k].ok || (!r && v!=strict[k].value)) {
+                printf("FAIL strict %s\n",strict[k].expr); failed++;
+            }
+            n++;
+        }
+    }
     printf("ppexpr: %zu cases, %d failed, %d lookups\n", n, failed, lookups);
     return failed || !lookups;
 }

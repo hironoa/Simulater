@@ -28,6 +28,7 @@ typedef struct {
     char *lower;        /* '/' 区切り・小文字のパス（#include の照合用） */
     char *text;         /* コメントを除いた内容。行ごとに NUL で終端 */
     size_t len;
+    unsigned bad_line; /* first lexical/structural failure, physical line */
     uint32_t *line_off; /* 論理行の先頭の位置 */
     unsigned *line_no;  /* 論理行の、元のファイルでの行番号 */
     size_t nlines;
@@ -90,6 +91,7 @@ typedef struct {
     size_t memo_cells;
     unsigned root_includes, memo_hits;
     unsigned roots, includes, include_missing, include_cut, if_evaluated, if_indeterminate, undefined, collections;
+    unsigned enc_ascii, enc_utf8, enc_sjis, enc_utf16;
     size_t bytes, ndirectives;
     uint64_t t_scan, t_read, t_cond;
 } defs;
@@ -105,9 +107,18 @@ static void next(lexer *l)
         l->p++; while (sim_is_ident_char((unsigned char)*l->p)) l->p++;
     } else if (isdigit((unsigned char)*s)) {
         l->p++; while (isalnum((unsigned char)*l->p)) l->p++;
+    } else if (*s=='"' || *s=='\'') {
+        char quote=*l->p++;
+        while (*l->p && *l->p!=quote) {
+            if (*l->p=='\\' && l->p[1]) l->p++;
+            l->p++;
+        }
+        if (*l->p) l->p++;
     } else if (*s) {
+        static const char *const pairs[]={"->","<<",">>","<=",">=","==","!=","&&","||","++","--","##"};
+        size_t i;
         l->p++;
-        if ((!strncmp(s, "->", 2)) || !strncmp(s, "<<", 2)) l->p++;
+        for (i=0;i<sizeof pairs/sizeof pairs[0];i++) if (!strncmp(s,pairs[i],2)) { l->p++; break; }
     }
     n = (size_t)(l->p - s); if (n >= sizeof l->tok) n = sizeof l->tok - 1;
     memcpy(l->tok, s, n); l->tok[n] = 0;
@@ -194,21 +205,63 @@ static void collect_path(defs *d, const char *s)
 }
 static int path_cmp(const void *a,const void *b) { return strcmp(*(char *const *)a,*(char *const *)b); }
 
-/* Byte-oriented comment removal. A Shift_JIS lead byte consumes its trail
-   byte before interpreting slash, star or backslash, including in comments. */
-static char *clean_source(const char *s,size_t n,unsigned **lines,size_t *outlen)
+/* Detect each complete file independently. Reject overlong UTF-8, surrogates,
+   truncated sequences and code points beyond U+10FFFF. */
+enum { ENC_ASCII, ENC_UTF8, ENC_SJIS, ENC_UTF16 };
+static int source_encoding(const unsigned char *s,size_t n)
+{
+    size_t i=0,zeros=0;
+    int multi=0;
+    if (n>=2 && ((s[0]==0xFF && s[1]==0xFE) || (s[0]==0xFE && s[1]==0xFF))) return ENC_UTF16;
+    if (n>=3 && s[0]==0xEF && s[1]==0xBB && s[2]==0xBF) return ENC_UTF8;
+    for (i=0;i<n;i++) if (!s[i]) zeros++;
+    if (zeros && zeros>=n/4+(n%4!=0)) return ENC_UTF16;
+    for (i=0;i<n;) {
+        unsigned c=s[i++],cp,min;
+        size_t more,j;
+        if (c<0x80) continue;
+        multi=1;
+        if (c>=0xC2 && c<=0xDF) { more=1; cp=c&31; min=0x80; }
+        else if (c>=0xE0 && c<=0xEF) { more=2; cp=c&15; min=0x800; }
+        else if (c>=0xF0 && c<=0xF4) { more=3; cp=c&7; min=0x10000; }
+        else return ENC_SJIS;
+        if (more>n-i) return ENC_SJIS;
+        for (j=0;j<more;j++) {
+            c=s[i++]; if (c<0x80 || c>0xBF) return ENC_SJIS;
+            cp=(cp<<6)|(c&63);
+        }
+        if (cp<min || cp>0x10FFFF || (cp>=0xD800 && cp<=0xDFFF)) return ENC_SJIS;
+    }
+    return multi?ENC_UTF8:ENC_ASCII;
+}
+static int sjis_pair(const char *s,size_t n,size_t i,int enc)
+{
+    unsigned c=(unsigned char)s[i],t;
+    if (enc!=ENC_SJIS || i+1>=n) return 0;
+    t=(unsigned char)s[i+1];
+    return ((c>=0x81 && c<=0x9F) || (c>=0xE0 && c<=0xFC)) &&
+        ((t>=0x40 && t<=0x7E) || (t>=0x80 && t<=0xFC));
+}
+static void bad_source(source *s,unsigned line)
+{
+    if (!s->bad_line || line<s->bad_line) s->bad_line=line;
+}
+/* Splicing precedes comment removal. Mask Shift_JIS pairs outside comments
+   too, so subsequent lexers never see a trail byte as an escape/operator. */
+static char *clean_source(const char *s,size_t n,unsigned **lines,size_t *outlen,int enc,source *src)
 {
     char *out=sim_xmalloc(n+1);
     size_t i=0,k=0,ln=0,cap=64;
-    unsigned physical=1;
+    unsigned physical=1,block_line=0,quote_line=0;
     int block=0,line=0,quote=0;
     *lines=sim_xmalloc(cap*sizeof **lines); (*lines)[0]=1;
+    if (n>=3 && enc==ENC_UTF8 && !memcmp(s,"\xEF\xBB\xBF",3)) i=3;
     while (i<n) {
         unsigned char c=(unsigned char)s[i];
-        if ((c>=0x81 && c<=0x9F) || (c>=0xE0 && c<=0xFC)) {
-            out[k++]=(block||line)?' ':s[i]; i++;
-            if (i<n) { out[k++]=(block||line)?' ':s[i]; i++; }
-            continue;
+        if (sjis_pair(s,n,i,enc)) {
+            out[k++]=(block||line)?' ':(char)0x80;
+            out[k++]=(block||line)?' ':(char)0x80;
+            i+=2; continue;
         }
         if (c=='\\' && i+1<n && (s[i+1]=='\n' || (s[i+1]=='\r' && i+2<n && s[i+2]=='\n'))) {
             i+=s[i+1]=='\r'?3:2; physical++; out[k++]=' '; continue;
@@ -220,15 +273,40 @@ static char *clean_source(const char *s,size_t n,unsigned **lines,size_t *outlen
         }
         if (block) { if (c=='*' && i+1<n && s[i+1]=='/') { block=0; i+=2; out[k++]=' '; } else { out[k++]=' '; i++; } continue; }
         if (line) { out[k++]=' '; i++; continue; }
-        if (!quote && c=='/' && i+1<n && s[i+1]=='*') { block=1; i+=2; out[k++]=' '; continue; }
+        if (!quote && c=='/' && i+1<n && s[i+1]=='*') { block=1; block_line=physical; i+=2; out[k++]=' '; continue; }
         if (!quote && c=='/' && i+1<n && s[i+1]=='/') { line=1; i+=2; out[k++]=' '; continue; }
-        if (quote && c=='\\' && i+1<n) { out[k++]=s[i++]; out[k++]=s[i++]; continue; }
-        if (c=='"' || c=='\'') { if (!quote) quote=c; else if (quote==c) quote=0; }
+        if (quote && c=='\\' && i+1<n && s[i+1]!='\r' && s[i+1]!='\n') { out[k++]=s[i++]; out[k++]=s[i++]; continue; }
+        if (c=='"' || c=='\'') { if (!quote) { quote=c; quote_line=physical; } else if (quote==c) quote=0; }
         out[k++]=s[i++];
     }
-    /* NUL は空白にする（行と字句の切り出しが途中で止まらないように） */
+    if (block) bad_source(src,block_line);
+    if (quote) bad_source(src,quote_line);
     for (i=0;i<k;i++) if (!out[i]) out[i]=' ';
     out[k]=0; *outlen=k; return out;
+}
+/* Diagnose unmatched delimiters without interpreting strings as C syntax.
+   This is a lexical warning, not a replacement for the compiler's parser. */
+static void check_delimiters(source *s)
+{
+    char *stack=sim_xmalloc(s->len+1);
+    unsigned *at=sim_xmalloc((s->len+1)*sizeof *at);
+    size_t i,top=0,line=0;
+    int quote=0;
+    for (i=0;i<s->len;i++) {
+        char c=s->text[i];
+        if (c=='\n') line++;
+        if (quote && c=='\\' && i+1<s->len) { i++; continue; }
+        if (c=='"' || c=='\'') { if (!quote) quote=c; else if (quote==c) quote=0; continue; }
+        if (quote) continue;
+        if (c=='(' || c=='{' || c=='[') { stack[top]=c; at[top++]=s->line_no[line]; }
+        if (c==')' || c=='}' || c==']') {
+            char want=c==')'?'(':c=='}'?'{':'[';
+            if (!top || stack[top-1]!=want) bad_source(s,s->line_no[line]);
+            else top--;
+        }
+    }
+    if (top) bad_source(s,at[0]);
+    free(stack); free(at);
 }
 static char *normalized(const char *s)
 {
@@ -401,9 +479,17 @@ static void load_source(defs *d, source *s)
     char *raw = sim_read_file(s->path, &n);
     uint32_t *open = NULL;
     if (!raw) { snprintf(d->err, d->cap, "defines: %s を読めません", s->path); d->error = 1; return; }
-    s->text = clean_source(raw, n, &s->line_no, &s->len);
-    free(raw);
     d->bytes += n;
+    {
+        int enc=source_encoding((const unsigned char *)raw,n);
+        if (enc==ENC_UTF16) { d->enc_utf16++; n=0; }
+        else if (enc==ENC_UTF8) d->enc_utf8++;
+        else if (enc==ENC_SJIS) d->enc_sjis++;
+        else d->enc_ascii++;
+        s->text = clean_source(raw, n, &s->line_no, &s->len,enc,s);
+        check_delimiters(s);
+    }
+    free(raw);
     if (strstr(s->text,"__packed") || strstr(s->text,"__attribute__")) d->packing=1;
     s->has_types = strstr(s->text, "typedef") || strstr(s->text, "struct") || strstr(s->text, "union");
     for (k = 0, s->nlines = 1; k < s->len; k++) if (s->text[k] == '\n') s->nlines++;
@@ -454,6 +540,7 @@ static void load_source(defs *d, source *s)
         if (s->ndirs == cap_dirs) { cap_dirs = cap_dirs ? cap_dirs * 2 : 16; s->dirs = sim_xrealloc(s->dirs, cap_dirs * sizeof *s->dirs); }
         s->dirs[s->ndirs++] = x;
     }
+    if (nopen) bad_source(s,s->line_no[s->dirs[open[0]].line]);
     free(open);
     for (k = 0; k < s->ndirs; k++) {
         directive *x = &s->dirs[k];
@@ -635,7 +722,7 @@ static void scan_types(defs *d, const source *s, size_t base)
                 const char *begin=l.start,*name_at=NULL,*name_end=NULL;
                 char name[128]="";
                 int depth=0;
-                while (l.tok[0] && (depth || (strcmp(l.tok,",") && strcmp(l.tok,";")))) {
+                while (l.tok[0] && strcmp(l.tok,";") && (depth || strcmp(l.tok,","))) {
                     if (!name_at && sim_is_ident_start((unsigned char)l.tok[0]) && !qualifier(l.tok)) {
                         name_at=l.start; name_end=l.p; snprintf(name,sizeof name,"%s",l.tok);
                     }
@@ -993,54 +1080,32 @@ static const sim_type basic[] = {
 static const sim_type *resolve_name(defs *,const char *,unsigned);
 static const sim_type *external_type(defs *,const char *,unsigned);
 static const sim_type *parse_type(defs *,lexer *,unsigned);
-static uint64_t expression(defs *,lexer *,unsigned,int *);
-static uint64_t atom(defs *d,lexer *l,unsigned depth,int *ok)
+static int constant_lookup(void *ctx, const char *name, size_t len, const char **body, int in_defined)
 {
-    uint64_t v=0;
-    size_t n;
-    if (depth>16) { *ok=0; return 0; }
-    if (!strcmp(l->tok,"(")) { next(l); v=expression(d,l,depth+1,ok); if (strcmp(l->tok,")")) *ok=0; else next(l); return v; }
-    if (!strcmp(l->tok,"+") || !strcmp(l->tok,"-")) { int neg=l->tok[0]=='-'; next(l); v=atom(d,l,depth+1,ok); if (neg && v) *ok=0; return neg?0-v:v; }
-    n=strlen(l->tok);
-    if (isdigit((unsigned char)l->tok[0])) {
-        while (n && (l->tok[n-1]=='U' || l->tok[n-1]=='u' || l->tok[n-1]=='L' || l->tok[n-1]=='l')) n--;
-        if (sim_parse_uint_n(l->tok,n,UINT64_MAX,&v)) *ok=0;
-        next(l); return v;
-    }
-    { definition *macro=lookup(d,0,l->tok); if (macro) {
-        lexer m=lex(macro->body); v=expression(d,&m,depth+1,ok); if (m.tok[0]) *ok=0; next(l); return v;
-    } }
-    *ok=0; if (l->tok[0]) next(l); return 0;
+    defs *d=ctx;
+    char key[128];
+    definition *m;
+    (void)in_defined;
+    if (len>=sizeof key) return SIM_PP_UNDEF;
+    memcpy(key,name,len); key[len]=0;
+    m=lookup(d,0,key);
+    if (!m) return SIM_PP_UNDEF;
+    *body=m->body;
+    return SIM_PP_OBJECT;
 }
-static uint64_t product_expr(defs *d,lexer *l,unsigned depth,int *ok)
-{
-    uint64_t v=atom(d,l,depth,ok);
-    while (!strcmp(l->tok,"*") || !strcmp(l->tok,"/") || !strcmp(l->tok,"%")) {
-        int op=l->tok[0]; uint64_t r; next(l); r=atom(d,l,depth,ok);
-        if (op=='*') { if (r && v>UINT64_MAX/r) *ok=0; else v*=r; }
-        else if (!r) *ok=0;
-        else v=op=='/'?v/r:v%r;
-    }
-    return v;
-}
-static uint64_t sum_expr(defs *d,lexer *l,unsigned depth,int *ok)
-{
-    uint64_t v=product_expr(d,l,depth,ok);
-    while (!strcmp(l->tok,"+") || !strcmp(l->tok,"-")) { int add=l->tok[0]=='+'; uint64_t r; next(l); r=product_expr(d,l,depth,ok); if (add ? v>UINT64_MAX-r : v<r) *ok=0; v=add?v+r:v-r; }
-    return v;
-}
-static uint64_t shift_expr(defs *d,lexer *l,unsigned depth,int *ok)
-{
-    uint64_t v=sum_expr(d,l,depth,ok);
-    while (!strcmp(l->tok,"<<")) { uint64_t r; next(l); r=sum_expr(d,l,depth,ok); if (r>=64 || v>(UINT64_MAX>>r)) *ok=0; else v<<=r; }
-    return v;
-}
+/* The caller owns the enclosing delimiter. Evaluate the complete expression,
+   with the same token expansion and bounded parser used by #if. */
 static uint64_t expression(defs *d,lexer *l,unsigned depth,int *ok)
 {
-    uint64_t v=shift_expr(d,l,depth,ok);
-    while (!strcmp(l->tok,"|")) { next(l); v|=shift_expr(d,l,depth,ok); }
+    const char *end;
+    uint64_t v=0;
+    sim_pp_env env={constant_lookup,d};
+    (void)depth;
+    if (sim_pp_eval_constant_prefix(l->start,&env,&v,&end)) *ok=0;
+    else { l->p=end; next(l); }
     return v;
 }
+
 static unsigned align_up(unsigned n,unsigned a) { return (n+a-1)/a*a; }
 static unsigned type_alignment(const sim_type *t,unsigned depth)
 {
@@ -1245,7 +1310,7 @@ static void resolve_macro(defs *d,definition *v)
     const sim_type *t=NULL;
     uint64_t addr;
     int deref=0,ok=1,bit=-1,reject_guess=0,candidate=0;
-    unsigned bits=0;
+    unsigned bits=0,wrappers=0;
     /* A cast must have one pointer star immediately before its closing ). */
     while (l.tok[0]) {
         if (!strcmp(l.tok,"*")) deref=1;
@@ -1265,9 +1330,17 @@ static void resolve_macro(defs *d,definition *v)
         next(&l);
     }
     if (!after.p) { if (candidate) goto unresolved; return; } /* Ordinary constants/function macros are not lvalues. */
+    {
+        lexer check=lex(v->body);
+        while (check.start<after.start && check.tok[0]) {
+            if (!strcmp(check.tok,"(")) wrappers++;
+            else if (!strcmp(check.tok,")")) { if (!wrappers) goto unresolved; wrappers--; }
+            next(&check);
+        }
+    }
     l=after; addr=expression(d,&l,0,&ok);
     if (!ok) goto unresolved;
-    while (!strcmp(l.tok,")")) next(&l);
+    while (!strcmp(l.tok,")")) { if (!wrappers) goto unresolved; wrappers--; next(&l); }
     if (!strcmp(l.tok,"[")) goto unresolved;
     if (!deref && strcmp(l.tok,"->") && strcmp(l.tok,".")) { d->pointers++; return; }
     if (addr>0xFFFFF) goto unresolved;
@@ -1288,9 +1361,9 @@ static void resolve_macro(defs *d,definition *v)
             if (m->bit_offset>=0) { bit=m->bit_offset-(int)(m->offset*8); bits=m->bit_size; }
             t=m->type;
         }
-        next(&l); while (!strcmp(l.tok,")")) next(&l);
+        next(&l); while (!strcmp(l.tok,")")) { if (!wrappers) goto unresolved; wrappers--; next(&l); }
     }
-    if (l.tok[0] || !t || !t->size) goto unresolved;
+    if (wrappers || l.tok[0] || !t || !t->size) goto unresolved;
     if (addr>0xFFFFF || t->size>0x100000-addr) goto unresolved;
     {
         int added=sim_ctx_define_at(d->ctx,v->name,t,addr,bit,bits,v->file,v->line,0);
@@ -1422,6 +1495,16 @@ int sim_defines_load(sim_ctx *c,const sim_open_opts *o,char *err,size_t cap)
         sim_buf_printf(&info,"defines files=%zu variables=%u bits=%u arrays=%u guessed=%u unresolved=%u duplicates=%u pointer-skipped=%u (%.3f s)\n",d.nfiles,d.variables,d.bits,d.arrays,d.guessed,d.unresolved,d.duplicates,d.pointers,(double)(sim_now_ns()-t0)/1e9);
         sim_buf_printf(&info,"型を解決できなかった定義: %u 件。同じ名前で内容の違う定義: %u 件（defines_exclude で除外できます。--verbose でファイル名と行番号を表示）\n",d.unresolved,d.duplicates);
         sim_buf_printf(&info,"var definitions=%u\n",d.explicit_vars);
+        {
+            unsigned bad=0;
+            for (k=0;k<d.nsrc;k++) if (d.src[k].bad_line) bad++;
+            sim_buf_printf(&info,"UTF-16 のため読まなかったファイル: %u 件\n構文を追えなかったファイル: %u 件\n",d.enc_utf16,bad);
+            if (d.verbose) {
+                sim_buf_printf(&info,"defines encoding: UTF8=%u ShiftJIS=%u ASCII=%u\n",d.enc_utf8,d.enc_sjis,d.enc_ascii);
+                for (k=0;k<d.nsrc;k++) if (d.src[k].bad_line)
+                    sim_buf_printf(&info,"  構文を追えなかったファイル: %s:%u\n",d.src[k].path,d.src[k].bad_line);
+            }
+        }
         if (d.nfiles) {
             sim_buf_printf(&info,"defines time: scan=%.3f s read=%.3f s cond=%.3f s resolve=%.3f s (%.1f MB, %zu directives)\n",
                 (double)d.t_scan/1e9,(double)d.t_read/1e9,(double)d.t_cond/1e9,(double)(sim_now_ns()-t1)/1e9,(double)d.bytes/1048576.0,d.ndirectives);

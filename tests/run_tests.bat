@@ -880,6 +880,17 @@ if "%RC%"=="0" (call :ok "build GUI CSV table checks") else (call :ng "build GUI
 "%WORK%\csv_table.exe"
 set RC=%ERRORLEVEL%
 if "%RC%"=="0" (call :ok "GUI CSV initialization expansion") else (call :ng "GUI CSV initialization expansion")
+echo == definition text contracts
+"%CC%" -std=c11 -O2 -Wall -Wextra -D_DEFAULT_SOURCE -I"%ROOT%\runtime\include" -I"%ROOT%\runtime\src" "%T%\tools\check_defines_text.c" "%ROOT%\runtime\src\sim_defines.c" "%ROOT%\runtime\src\sim_ppexpr.c" "%ROOT%\runtime\src\sim_mtpj.c" "%ROOT%\runtime\src\sim_expr.c" "%ROOT%\runtime\src\sim_cfg.c" "%ROOT%\runtime\src\sim_util.c" "%ROOT%\runtime\src\sim_platform.c" "%ROOT%\runtime\backends\mock\mock_backend.c" -o "%WORK%\check_defines_text.exe" -lws2_32
+set RC=%ERRORLEVEL%
+if "%RC%"=="0" (call :ok "build defines text checks") else (call :ng "build defines text checks")
+"%WORK%\check_defines_text.exe" "%T%" "%WORK%" > "%WORK%\defines_text.log" 2>&1
+set RC=%ERRORLEVEL%
+if "%RC%"=="0" (call :ok "definition addresses counts and malformed inputs") else (call :ng "definition addresses counts and malformed inputs" & type "%WORK%\defines_text.log")
+findstr /l /c:"200 malformed inputs" "%WORK%\defines_text.log" >nul
+set RC=%ERRORLEVEL%
+if "%RC%"=="0" (call :ok "definition text ran nonzero checks") else (call :ng "definition text ran nonzero checks")
+
 echo == modi and configured definitions
 call :run_cmp modi_every.csv 0
 call :run_cmp modi_auto_once.csv 0

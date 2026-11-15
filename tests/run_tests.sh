@@ -164,6 +164,18 @@ if [ "$RC" -ne 0 ]; then cat "$WORK/header_mock.log"; fi
 "$SIM" list --cfg "$T/defines/mock.cfg" > "$WORK/header_list.log" 2>&1
 check "header names in list mock" contains "$WORK/header_list.log" "df_unit"
 check "unsupported macro postfix is not silently truncated" sh -c '! grep -F -q unsupported_index "$1"' sh "$WORK/header_list.log"
+"$SIM" list --cfg "$T/defines/expansion.cfg" > "$WORK/expansion.log" 2>&1
+check "unparenthesized macro array has five elements" contains "$WORK/expansion.log" "u8[5]"
+"$SIM" list --cfg "$T/defines/encoding.cfg" > "$WORK/encoding.log" 2>&1
+check "UTF8 comment preserves next definition" contains "$WORK/encoding.log" "UTF8_REG"
+echo "== defines: text and malformed input contracts"
+TEXT_SRCS="$T/tools/check_defines_text.c $ROOT/runtime/src/sim_defines.c $ROOT/runtime/src/sim_ppexpr.c $ROOT/runtime/src/sim_mtpj.c $ROOT/runtime/src/sim_expr.c $ROOT/runtime/src/sim_cfg.c $ROOT/runtime/src/sim_util.c $ROOT/runtime/src/sim_platform.c $ROOT/runtime/backends/mock/mock_backend.c"
+# shellcheck disable=SC2086
+check "build defines text checks" "${CC:-clang}" -std=c11 -O2 -Wall -Wextra -D_DEFAULT_SOURCE -I"$ROOT/runtime/include" -I"$ROOT/runtime/src" $TEXT_SRCS -o "$WORK/check_defines_text" -lpthread -lm
+check "definition addresses counts and malformed inputs" "$WORK/check_defines_text" "$T" "$WORK"
+# shellcheck disable=SC2086
+check "build defines text ASan UBSan" "${CC:-clang}" -std=c11 -O1 -g -Wall -Wextra -fsanitize=address,undefined -fno-omit-frame-pointer -D_DEFAULT_SOURCE -I"$ROOT/runtime/include" -I"$ROOT/runtime/src" $TEXT_SRCS -o "$WORK/check_defines_sanitize" -lpthread -lm
+check "definition text ASan UBSan 200 malformed inputs" "$WORK/check_defines_sanitize" "$T" "$WORK"
 echo "== defines: declarators (mock)"
 for decl_csv in declarators declarator_supported declarator_members; do
     if [ "$decl_csv" = declarators ]; then decl_cfg=declarators; else decl_cfg=declarator_supported; fi

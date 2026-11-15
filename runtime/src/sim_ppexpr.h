@@ -36,4 +36,10 @@ int sim_pp_eval(const char *expr, const sim_pp_env *env);
 /* bits（32 か 64）の幅で値を求める。求まれば 0、判定不能なら -1 */
 int sim_pp_eval_width(const char *expr, const sim_pp_env *env, int bits, sim_pp_value *out);
 
+/* 未定義・自己参照・関数形式マクロと負の結果を拒否する定数式。展開規則は #if と共通。 */
+int sim_pp_eval_constant(const char *expr, const sim_pp_env *env, uint64_t *out);
+
+/* 展開後の括弧深さで呼び出し側の区切り ) ] ; , } を検出。end は元の入力内。 */
+int sim_pp_eval_constant_prefix(const char *expr, const sim_pp_env *env, uint64_t *out, const char **end);
+
 #endif
