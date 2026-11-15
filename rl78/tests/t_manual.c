@@ -53,7 +53,8 @@ static void subst(char *s, size_t n, const char *from, const char *to)
         }
     }
     out[o] = 0;
-    snprintf(s, n, "%s", out);
+    /* the result is used so that gcc does not warn about a possible truncation; it is cut at n - 1 */
+    if (snprintf(s, n, "%s", out) >= (int)n) s[n - 1] = 0;
 }
 
 static int isalnum_c(char c)
@@ -158,7 +159,7 @@ static void build_text(const oprow *r, const char *rsub, const char *rpsub, int 
     }
     if (rsub) subst(ops, sizeof ops, "r", rsub);
     if (rpsub) subst(ops, sizeof ops, "rp", rpsub);
-    if (ops[0]) snprintf(out, n, "%s %s", r->mn, ops);
+    if (ops[0]) { if (snprintf(out, n, "%s %s", r->mn, ops) >= (int)n) out[n - 1] = 0; }
     else snprintf(out, n, "%s", r->mn);
 }
 
@@ -218,7 +219,7 @@ static void check_row(const oprow *r)
     const char *regs16[4] = {"AX", "BC", "DE", "HL"};
     int has_r = 0, has_rp = 0, has_cnt = 0, has_bank = 0;
     int ri, pi, ci, bi, instances = 0;
-    int c1a, c1b, c2a = -1, c2b = -1;
+    int c1a = -1, c1b = -1, c2a = -1, c2b = -1;
     int maxcnt = 7;
     char ops[128];
     snprintf(ops, sizeof ops, " %s ", r->ops);
@@ -275,7 +276,7 @@ static void check_row(const oprow *r)
                             static const unsigned psws[4] = {0x06, 0x47, 0x06, 0x47};
                             uint64_t c0;
                             uint32_t pc_after;
-                            int got, want;
+                            int got, want = -1;
                             rl78_load(cpu, CODE, b, (size_t)len);
                             setup(cpu, &mc, psws[cond], cond >= 2, bit, text);
                             rl78_set_reg(cpu, RL78_REG_PC, CODE);
