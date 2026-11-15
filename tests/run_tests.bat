@@ -45,6 +45,10 @@ call :run_cmp ng_case.csv 1
 call :run_cmp sjis_comment.csv 0
 call :run_cmp cycle_2000.csv 0
 
+echo == Japanese folder and file names
+powershell -NoProfile -ExecutionPolicy Bypass -File "%T%\tools\check_jp_path.ps1" "%SIM%" "%T%\csv\unit_all.csv" "%WORK%" > "%WORK%\jp_path.log" 2>&1
+if errorlevel 1 (call :ng "CSV with a Japanese path runs and its name is printed as UTF-8" & type "%WORK%\jp_path.log") else (call :ok "CSV with a Japanese path runs and its name is printed as UTF-8")
+
 echo == 2000-row periodic run
 "%SIM%" run "%T%\csv\cycle_2000.csv" -o "%WORK%\o_cycle" --quiet > "%WORK%\cycle.log" 2>&1
 findstr /l /c:"OK 2100, NG 0" "%WORK%\cycle.log" >nul

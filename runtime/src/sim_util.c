@@ -11,10 +11,106 @@
 
 #ifdef _WIN32
 #include <direct.h>
-#define sim_mkdir_one(p) _mkdir(p)
+#include <wchar.h>
+#include <windows.h>
 #else
 #define sim_mkdir_one(p) mkdir((p), 0777)
 #endif
+
+int sim_utf8_valid(const char *s, size_t n)
+{
+    const unsigned char *p = (const unsigned char *)s, *e = p + n;
+    while (p < e) {
+        unsigned c = *p++;
+        int k;
+        unsigned min;
+        if (c < 0x80) continue;
+        if (c >= 0xC2 && c <= 0xDF) { k = 1; min = 0x80; c &= 0x1F; }
+        else if (c >= 0xE0 && c <= 0xEF) { k = 2; min = 0x800; c &= 0x0F; }
+        else if (c >= 0xF0 && c <= 0xF4) { k = 3; min = 0x10000; c &= 0x07; }
+        else return 0;
+        if (e - p < k) return 0;
+        while (k--) { if ((*p & 0xC0) != 0x80) return 0; c = (c << 6) | (*p++ & 0x3F); }
+        if (c < min || c > 0x10FFFF || (c >= 0xD800 && c <= 0xDFFF)) return 0;
+    }
+    return 1;
+}
+
+#ifdef _WIN32
+wchar_t *sim_win_wide(const char *path)
+{
+    UINT cp = sim_utf8_valid(path, strlen(path)) ? CP_UTF8 : CP_ACP;
+    int n = MultiByteToWideChar(cp, 0, path, -1, NULL, 0);
+    wchar_t *w;
+    if (n <= 0) return NULL;
+    w = malloc((size_t)n * sizeof *w);
+    if (!w) return NULL;
+    if (MultiByteToWideChar(cp, 0, path, -1, w, n) <= 0) { free(w); return NULL; }
+    return w;
+}
+
+char *sim_win_utf8(const wchar_t *w)
+{
+    int n = WideCharToMultiByte(CP_UTF8, 0, w, -1, NULL, 0, NULL, NULL);
+    char *s;
+    if (n <= 0) return NULL;
+    s = malloc((size_t)n);
+    if (!s) return NULL;
+    if (WideCharToMultiByte(CP_UTF8, 0, w, -1, s, n, NULL, NULL) <= 0) { free(s); return NULL; }
+    return s;
+}
+
+static int sim_mkdir_one(const char *p)
+{
+    wchar_t *w = sim_win_wide(p);
+    int rc = w ? _wmkdir(w) : -1;
+    free(w);
+    return rc;
+}
+#endif
+
+FILE *sim_fopen(const char *path, const char *mode)
+{
+#ifdef _WIN32
+    wchar_t *w = sim_win_wide(path), wm[8];
+    FILE *fp;
+    size_t i;
+    if (!w) return NULL;
+    for (i = 0; mode[i] && i + 1 < sizeof wm / sizeof wm[0]; i++) wm[i] = (wchar_t)(unsigned char)mode[i];
+    wm[i] = 0;
+    fp = _wfopen(w, wm);
+    free(w);
+    return fp;
+#else
+    return fopen(path, mode);
+#endif
+}
+
+char *sim_ansi_to_utf8(const char *text, size_t len, size_t *outlen)
+{
+#ifdef _WIN32
+    int wn, n;
+    wchar_t *w;
+    char *s;
+    if (!len || len > 0x3FFFFFFF || sim_utf8_valid(text, len)) return NULL;
+    wn = MultiByteToWideChar(CP_ACP, 0, text, (int)len, NULL, 0);
+    if (wn <= 0) return NULL;
+    w = malloc((size_t)wn * sizeof *w);
+    if (!w) return NULL;
+    MultiByteToWideChar(CP_ACP, 0, text, (int)len, w, wn);
+    n = WideCharToMultiByte(CP_UTF8, 0, w, wn, NULL, 0, NULL, NULL);
+    s = n > 0 ? malloc((size_t)n + 1) : NULL;
+    if (!s) { free(w); return NULL; }
+    WideCharToMultiByte(CP_UTF8, 0, w, wn, s, n, NULL, NULL);
+    s[n] = 0;
+    free(w);
+    if (outlen) *outlen = (size_t)n;
+    return s;
+#else
+    (void)text; (void)len; (void)outlen;
+    return NULL;
+#endif
+}
 
 static void oom(void)
 {
@@ -142,7 +238,7 @@ void sim_buf_json_num(sim_buf *b, double v)
 
 char *sim_read_file(const char *path, size_t *len)
 {
-    FILE *fp = fopen(path, "rb");
+    FILE *fp = sim_fopen(path, "rb");
     sim_buf b;
     char tmp[65536];
     size_t n;
@@ -158,7 +254,7 @@ char *sim_read_file(const char *path, size_t *len)
 
 int sim_write_file(const char *path, const void *data, size_t len)
 {
-    FILE *fp = fopen(path, "wb");
+    FILE *fp = sim_fopen(path, "wb");
     if (!fp) return -1;
     if (len && fwrite(data, 1, len, fp) != len) { fclose(fp); return -1; }
     return fclose(fp) == 0 ? 0 : -1;
@@ -203,7 +299,9 @@ char *sim_path_join(const char *dir, const char *name)
 int sim_mkdir_p(const char *path)
 {
     char *p = sim_xstrdup(path), *q;
+#ifndef _WIN32
     struct stat st;
+#endif
     for (q = p + 1; *q; q++) {
         if (*q == '/' || *q == '\\') {
             char c = *q;
@@ -213,7 +311,16 @@ int sim_mkdir_p(const char *path)
         }
     }
     sim_mkdir_one(p);
+#ifdef _WIN32
+    {
+        wchar_t *w = sim_win_wide(p);
+        DWORD a = w ? GetFileAttributesW(w) : INVALID_FILE_ATTRIBUTES;
+        free(w);
+        if (a == INVALID_FILE_ATTRIBUTES || !(a & FILE_ATTRIBUTE_DIRECTORY)) { free(p); return -1; }
+    }
+#else
     if (stat(p, &st) != 0 || !(st.st_mode & S_IFDIR)) { free(p); return -1; }
+#endif
     free(p);
     return 0;
 }

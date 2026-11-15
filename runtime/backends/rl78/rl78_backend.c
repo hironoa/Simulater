@@ -1080,7 +1080,7 @@ sim_backend *sim_backend_open(const sim_open_opts *o, char *err, size_t errlen)
     }
     {
         unsigned char magic[4] = {0};
-        FILE *fp = fopen(z->abs_path, "rb");
+        FILE *fp = sim_fopen(z->abs_path, "rb");
         size_t n;
         if (!fp) { snprintf(err, errlen, "%s を読めません", z->abs_path); be_free(z); return NULL; }
         n = fread(magic, 1, 4, fp); fclose(fp);

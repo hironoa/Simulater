@@ -282,6 +282,7 @@ static int cmd_info(int argc, char **argv)
 int main(int argc, char **argv)
 {
     sim_console_utf8();
+    sim_utf8_args(&argc, &argv);
 #ifdef _WIN32
     setvbuf(stdout, NULL, _IONBF, 0);
 #else

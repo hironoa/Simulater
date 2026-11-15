@@ -1769,7 +1769,7 @@ int sim_gui_run(sim_ctx *c, const sim_gui_opts *o)
     fprintf(stdout, "sim gui: %s で待ち受けています（周期 %g ms、関数 %s）。止めるには Ctrl+C\n", url, G.period_ms,
             G.func[0] ? G.func : "未設定");
     {
-        FILE *probe = fopen(G.html_path, "rb");
+        FILE *probe = sim_fopen(G.html_path, "rb");
         if (probe) fclose(probe);
         else fprintf(stdout, "sim gui: %s がないので「GUI が未ビルド」のページを返します\n", G.html_path);
     }

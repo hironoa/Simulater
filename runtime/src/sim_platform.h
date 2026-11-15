@@ -58,6 +58,8 @@ const char *sim_exe_dir(void);
 void sim_open_browser(const char *url);
 /* 標準出力を UTF-8 で表示できるようにする（Windows のコンソール） */
 void sim_console_utf8(void);
+/* Windows: コマンドライン引数を UTF-8 で取り直す（プログラム内のパスは UTF-8）。ほかの OS では何もしない */
+void sim_utf8_args(int *argc, char ***argv);
 
 /* a と b が同じファイルを指すなら 1、違う（またはどちらかが存在しない・開けない）なら 0。
  * パスの表記（./、..、相対・絶対、シンボリックリンク、ハードリンク、大文字小文字）ではなく
