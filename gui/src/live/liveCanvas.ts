@@ -53,11 +53,14 @@ export function niceTicks(min: number, max: number, target: number): number[] {
   const mag = Math.pow(10, Math.floor(Math.log10(raw)));
   const norm = raw / mag;
   const step = (norm <= 1 ? 1 : norm <= 2 ? 2 : norm <= 5 ? 5 : 10) * mag;
-  const first = Math.ceil(min / step - 1e-9) * step;
+  // 目盛りは「整数 × 間隔」で作る（足し込むと誤差がたまる）。0.1 × 3 のような誤差は、間隔の小数の桁数で丸めて消す。
+  // 有効桁数で丸めると、大きな基準値の近くの小さな間隔（1e12 + 1, 1e12 + 2）がつぶれる
+  const decimals = step < 1 ? Math.min(20, Math.ceil(-Math.log10(step) - 1e-9)) : 0;
+  const k0 = Math.ceil(min / step - 1e-9), k1 = Math.floor(max / step + 1e-9);
   const out: number[] = [];
-  for (let v = first; v <= max + step * 1e-9 && out.length < 100; v += step) {
-    // 0.1 + 0.2 のような誤差を目盛りの値に残さない
-    out.push(Number(v.toPrecision(12)));
+  for (let k = k0; k <= k1 && out.length < 100; k++) {
+    const v = k === 0 ? 0 : k * step;   // -0 を出さない
+    out.push(decimals > 0 ? Number(v.toFixed(decimals)) : v);
   }
   return out;
 }
@@ -67,7 +70,7 @@ export function niceTicks(min: number, max: number, target: number): number[] {
  * （小数 6 桁で切ると、1e-6 未満の間隔の目盛りがすべて同じ表記になる）。大きな値は桁区切りを付ける。
  */
 export function formatTick(v: number, step?: number): string {
-  const r = Number(v.toPrecision(12));
+  const r = v;
   const a = Math.abs(r);
   // 間隔から決まる小数の桁数（間隔 0.5 → 1 桁、0.0000002 → 7 桁）
   const digits = step && step > 0 && Number.isFinite(step) ? Math.max(0, Math.ceil(-Math.log10(step) - 1e-9)) : 6;

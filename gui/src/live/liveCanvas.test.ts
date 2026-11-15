@@ -13,6 +13,12 @@ describe("niceTicks", () => {
   it("小数の誤差を値に残さない", () => {
     expect(niceTicks(0, 0.3, 3)).toEqual([0, 0.1, 0.2, 0.3]);
   });
+  it("大きな基準値の近くの小さな間隔もつぶさない", () => {
+    const t = niceTicks(1e12 + 1, 1e12 + 2, 3);
+    expect(t).toEqual([1e12 + 1, 1e12 + 1.5, 1e12 + 2]);
+    expect(new Set(formatTicks(t)).size).toBe(3);
+    expect(niceTicks(1e12 + 1, 1e12 + 5, 4)).toEqual([1e12 + 1, 1e12 + 2, 1e12 + 3, 1e12 + 4, 1e12 + 5]);
+  });
   it("幅のない範囲は 1 本、数でない範囲は空", () => {
     expect(niceTicks(5, 5, 3)).toEqual([5]);
     expect(niceTicks(NaN, 1, 3)).toEqual([]);
