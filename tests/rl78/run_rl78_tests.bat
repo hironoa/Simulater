@@ -8,6 +8,8 @@ set "FX=%T%\fixtures\renesas"
 set "G22=%FX%\g22_adc\r01an6640-rl78g22-adc.abs"
 set "G23=%FX%\g23_spi\r01an5890_rl78g23_serial_slave.abs"
 if not defined CC set "CC=clang"
+set "GCC_FLAGS="
+for %%C in ("%CC%") do if /i "%%~nC"=="gcc" set "GCC_FLAGS=-D__USE_MINGW_ANSI_STDIO=1"
 
 echo == real backend: build
 if not defined SIM_RL78 (
@@ -27,7 +29,7 @@ if not exist "%SIM_RL78%" (
     exit /b 0
 )
 set "RS=%SIM_RL78%"
-"%CC%" -std=c11 -O2 -Wall -Wextra -o "%WORK%\mkabs.exe" "%T%\tools\mkabs.c" > "%WORK%\mkabs.log" 2>&1
+"%CC%" %GCC_FLAGS% -std=c11 -O2 -Wall -Wextra -o "%WORK%\mkabs.exe" "%T%\tools\mkabs.c" > "%WORK%\mkabs.log" 2>&1
 if errorlevel 1 (call :ng "build tests\tools\mkabs.c" & type "%WORK%\mkabs.log") else (call :ok "build tests\tools\mkabs.c")
 for %%K in (dwarf2 dwarf3 dwarf4 nodwarf) do (
     "%WORK%\mkabs.exe" %%K "%WORK%\tp_%%K.abs"
@@ -96,7 +98,7 @@ copy /y "%R%\cfg\stub.cfg" "%WORK%\autocfg\sim.cfg" >nul
 call :run "sim.cfg next to the .abs is read" 0 "OK 3, NG 0" --abs "%WORK%\autocfg\prog.abs" "%R%\csv\synth_stub.csv"
 
 echo == LMF CA78K0R
-"%CC%" -std=c11 -O2 -Wall -Wextra -o "%WORK%\mklmf.exe" "%T%\tools\mklmf.c" > "%WORK%\mklmf.log" 2>&1
+"%CC%" %GCC_FLAGS% -std=c11 -O2 -Wall -Wextra -o "%WORK%\mklmf.exe" "%T%\tools\mklmf.c" > "%WORK%\mklmf.log" 2>&1
 set RC=%ERRORLEVEL%
 if "%RC%"=="0" (call :ok "build mklmf") else (call :ng "build mklmf")
 "%WORK%\mklmf.exe" normal "%WORK%\test.lmf"
@@ -156,7 +158,7 @@ call :run "LMF no debug SYM addresses" 0 "OK 1" --abs "%WORK%\nodbg.lmf" "%WORK%
 echo == CA78K0R probe types and calls
 set "PROBE=%T%\ca78k0r_probe\DefaultBuild\ca78k0r_probe.lmf"
 set "B=%ROOT%\runtime\backends\rl78"
-"%CC%" -std=c11 -O2 -Wall -Wextra -D_DEFAULT_SOURCE -I"%B%" -I"%ROOT%\runtime\include" -I"%ROOT%\runtime\src" "%T%\tools\check_lmf_types.c" "%B%\rl78_lmf.c" "%B%\rl78_elf.c" "%B%\rl78_dwarf.c" "%B%\rl78_map.c" "%ROOT%\runtime\src\sim_util.c" -o "%WORK%\lmf_types.exe" > "%WORK%\types_build.log" 2>&1
+"%CC%" %GCC_FLAGS% -std=c11 -O2 -Wall -Wextra -D_DEFAULT_SOURCE -I"%B%" -I"%ROOT%\runtime\include" -I"%ROOT%\runtime\src" "%T%\tools\check_lmf_types.c" "%B%\rl78_lmf.c" "%B%\rl78_elf.c" "%B%\rl78_dwarf.c" "%B%\rl78_map.c" "%ROOT%\runtime\src\sim_util.c" -o "%WORK%\lmf_types.exe" > "%WORK%\types_build.log" 2>&1
 set RC=%ERRORLEVEL%
 if "%RC%"=="0" (call :ok "LMF type checker build") else (call :ng "LMF type checker build" & type "%WORK%\types_build.log")
 "%WORK%\lmf_types.exe" "%WORK%\test.lmf" constargs > "%WORK%\const_types.txt" 2>&1

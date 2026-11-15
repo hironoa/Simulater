@@ -243,8 +243,8 @@ static const char *const ALU[8] = {"ADD", "ADDC", "SUB", "SUBC", "CMP", "AND", "
 static void add_entry(const char *pat, const char *bytes)
 {
     g_tab = (entry *)realloc(g_tab, sizeof(entry) * (size_t)(g_ntab + 1));
-    snprintf(g_tab[g_ntab].pat, sizeof g_tab[g_ntab].pat, "%s", pat);
-    snprintf(g_tab[g_ntab].bytes, sizeof g_tab[g_ntab].bytes, "%s", bytes);
+    snprintf(g_tab[g_ntab].pat, sizeof g_tab[g_ntab].pat, "%.*s", (int)sizeof g_tab[g_ntab].pat - 1, pat);
+    snprintf(g_tab[g_ntab].bytes, sizeof g_tab[g_ntab].bytes, "%.*s", (int)sizeof g_tab[g_ntab].bytes - 1, bytes);
     g_ntab++;
 }
 
@@ -326,7 +326,7 @@ static void expand_rec(const char *line, int *vars)
         else if (!strcmp(var, "c15")) { lo = 1; hi = 15; vname = 'c'; }
         else if (!strcmp(var, "b")) { lo = 0; hi = 3; vname = 'b'; }
         for (i = lo; i <= hi; i++) {
-            char line2[160], num[8];
+            char line2[160], num[16];
             if (i == skip) continue;
             snprintf(num, sizeof num, "%d", i);
             snprintf(line2, sizeof line2, "%.*s%s%s", (int)(lb - line), line,
@@ -573,8 +573,8 @@ int tasm_one(const char *text, uint32_t pc, uint8_t *out, char *err, size_t errn
     trim(line);
     upcase(line);
     sp = strchr(line, ' ');
-    if (sp) { *sp = 0; snprintf(mn, sizeof mn, "%s", line); nops = split_ops(sp + 1, ops, 4); }
-    else { snprintf(mn, sizeof mn, "%s", line); nops = 0; }
+    if (sp) { *sp = 0; snprintf(mn, sizeof mn, "%.*s", (int)sizeof mn - 1, line); nops = split_ops(sp + 1, ops, 4); }
+    else { snprintf(mn, sizeof mn, "%.*s", (int)sizeof mn - 1, line); nops = 0; }
 
     if (!strcmp(mn, "CALLT")) {
         long v;
@@ -600,7 +600,7 @@ int tasm_one(const char *text, uint32_t pc, uint8_t *out, char *err, size_t errn
         psp = strchr(pat, ' ');
         if (psp) { *psp = 0; pn = split_ops(psp + 1, pops, 4); }
         else pn = 0;
-        snprintf(pmn, sizeof pmn, "%s", pat);
+        snprintf(pmn, sizeof pmn, "%.*s", (int)sizeof pmn - 1, pat);
         if (strcmp(pmn, mn) || pn != nops) continue;
         for (k = 0; k < pn && ok; k++) ok = match_opnd(pops[k], ops[k], &fl);
         if (!ok) continue;
@@ -672,7 +672,7 @@ int tasm_program(const char *src, uint8_t *mem, uint32_t *end, char *err, size_t
                 *colon = 0;
                 if (pass == 0) {
                     if (g_nlab >= MAXLAB) { snprintf(err, errn, "too many labels"); return -1; }
-                    snprintf(g_labname[g_nlab], sizeof g_labname[0], "%s", line);
+                    snprintf(g_labname[g_nlab], sizeof g_labname[0], "%.*s", (int)sizeof g_labname[0] - 1, line);
                     upcase(g_labname[g_nlab]);
                     g_labval[g_nlab++] = (long)pc;
                 }
@@ -685,7 +685,7 @@ int tasm_program(const char *src, uint8_t *mem, uint32_t *end, char *err, size_t
                 if (colon && sp && colon < sp && colon[1] == ' ') {
                     *colon = 0;
                     if (pass == 0) {
-                        snprintf(g_labname[g_nlab], sizeof g_labname[0], "%s", line);
+                        snprintf(g_labname[g_nlab], sizeof g_labname[0], "%.*s", (int)sizeof g_labname[0] - 1, line);
                         upcase(g_labname[g_nlab]);
                         g_labval[g_nlab++] = (long)pc;
                     }
@@ -697,7 +697,7 @@ int tasm_program(const char *src, uint8_t *mem, uint32_t *end, char *err, size_t
             if (!strncmp(line, ".org", 4)) {
                 long v;
                 char t[32];
-                snprintf(t, sizeof t, "%s", line + 4);
+                snprintf(t, sizeof t, "%.*s", (int)sizeof t - 1, line + 4);
                 trim(t);
                 upcase(t);
                 if (parse_num(t, &v)) { snprintf(err, errn, "line %d: bad .org", lineno); return -1; }

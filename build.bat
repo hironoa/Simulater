@@ -1,10 +1,11 @@
 @echo off
-rem build.bat - Windows build script (clang only; no CMake / Python / make)
+rem build.bat - Windows build script (clang or MinGW-w64 gcc; no CMake / Python / make)
 rem
 rem   build.bat [outdir]         build sim.exe with the real RL78 backend (default outdir: build\sim)
 rem   build.bat mock [outdir]    build sim.exe with the mock backend, for testing the common part (default: build\mock)
 rem
-rem Needs LLVM clang for Windows (e.g. 18.1.8) plus the MSVC C runtime and Windows SDK.
+rem Default: LLVM clang plus the MSVC C runtime and Windows SDK.
+rem Set CC=gcc to use MinGW-w64 gcc (static runtime, no extra runtime DLLs).
 rem Messages in this file are ASCII only so that cmd.exe parses it the same on any code page.
 setlocal
 
@@ -23,11 +24,17 @@ if "%OUT%"=="" set "OUT=%ROOT%\build\sim"
 if not defined CC set "CC=clang"
 "%CC%" --version >nul 2>nul
 if errorlevel 1 (
-    if defined LLVM_DIR set "CC=%LLVM_DIR%\bin\clang.exe"
+    for %%C in ("%CC%") do if /i "%%~nC"=="clang" if defined LLVM_DIR set "CC=%LLVM_DIR%\bin\clang.exe"
+)
+set "GCC_FLAGS="
+set "LIBS=-lws2_32"
+for %%C in ("%CC%") do if /i "%%~nC"=="gcc" (
+    set "GCC_FLAGS=-static -D__USE_MINGW_ANSI_STDIO=1"
+    set "LIBS=-lws2_32 -lshell32"
 )
 "%CC%" --version >nul 2>nul
 if errorlevel 1 (
-    echo build.bat: clang not found. Add LLVM\bin to PATH, or set LLVM_DIR or CC. 1>&2
+    echo build.bat: compiler %CC% not found. Add its bin directory to PATH, or set LLVM_DIR or CC. 1>&2
     exit /b 2
 )
 
@@ -51,9 +58,9 @@ if "%MODE%"=="mock" (
 
 echo build.bat: building %OUT%\sim.exe with %CC% (backend: %MODE%)
 rem -fno-unroll-loops: clang 20 at plain -O2 makes the instruction loop about 10x slower on x86-64
-"%CC%" -std=c11 -O2 -fno-unroll-loops -Wall -Wextra %INC% %SRCS% -o "%OUT%\sim.exe" -lws2_32
+"%CC%" %GCC_FLAGS% -std=c11 -O2 -fno-unroll-loops -Wall -Wextra %INC% %SRCS% -o "%OUT%\sim.exe" %LIBS%
 if errorlevel 1 (
-    echo build.bat: compile failed. clang for Windows also needs the MSVC C runtime and the Windows SDK, e.g. Visual Studio Build Tools. 1>&2
+    echo build.bat: compile failed. Use MinGW-w64 gcc, or clang with the MSVC C runtime and Windows SDK. 1>&2
     exit /b 1
 )
 

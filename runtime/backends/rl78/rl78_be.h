@@ -44,7 +44,9 @@ typedef struct {
 } rl78_warns;
 void rl78_lmf_print_summary(const rl78_warns *w, FILE *out);
 
-#if defined(__GNUC__) || defined(__clang__)
+#if defined(__MINGW32__) && !defined(__clang__)
+void rl78_warn(rl78_warns *w, const char *fmt, ...) __attribute__((format(gnu_printf, 2, 3)));
+#elif defined(__GNUC__) || defined(__clang__)
 void rl78_warn(rl78_warns *w, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
 #else
 void rl78_warn(rl78_warns *w, const char *fmt, ...);

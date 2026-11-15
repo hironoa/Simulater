@@ -83,8 +83,13 @@ void sim_sleep_ms(int ms) { Sleep(ms < 0 ? 0 : (DWORD)ms); }
 #endif
 void sim_sleep_until_ns(uint64_t deadline)
 {
+#ifdef _MSC_VER
     static __declspec(thread) HANDLE timer;
     static __declspec(thread) int tried;
+#else
+    static _Thread_local HANDLE timer;
+    static _Thread_local int tried;
+#endif
     for (;;) {
         uint64_t now = sim_now_ns();
         int64_t left;
@@ -201,7 +206,9 @@ void sim_console_utf8(void)
     SetConsoleOutputCP(CP_UTF8);
 }
 
+#ifdef _MSC_VER
 #pragma comment(lib, "shell32.lib")
+#endif
 #include <shellapi.h>
 
 /* main の argv は ANSI コードページ。コマンドラインをワイド文字で取り直して UTF-8 にする（失敗したら元のまま） */
