@@ -17,11 +17,11 @@ if not exist "%BUILD%" mkdir "%BUILD%"
 set STATUS=0
 
 echo == build (%CC% %CFLAGS%)
-"%CC%" %CFLAGS% -I"%ROOT%\include" -I"%HERE%." "%ROOT%\src\rl78_exec.c" "%ROOT%\src\rl78_sys.c" "%ROOT%\src\rl78_disasm.c" "%HERE%tasm.c" "%HERE%test_main.c" "%HERE%t_decode.c" "%HERE%t_manual.c" "%HERE%t_alu.c" "%HERE%t_insn.c" "%HERE%t_prog.c" "%HERE%t_api.c" "%HERE%t_regress.c" -o "%BUILD%\rl78_tests.exe"
+"%CC%" %CFLAGS% -I"%ROOT%\include" -I"%HERE%." "%ROOT%\src\rl78_exec.c" "%ROOT%\src\rl78_sys.c" "%ROOT%\src\rl78_disasm.c" "%ROOT%\src\rl78_xlate.c" "%HERE%tasm.c" "%HERE%test_main.c" "%HERE%t_decode.c" "%HERE%t_manual.c" "%HERE%t_alu.c" "%HERE%t_insn.c" "%HERE%t_prog.c" "%HERE%t_api.c" "%HERE%t_regress.c" -o "%BUILD%\rl78_tests.exe"
 if errorlevel 1 exit /b 1
-"%CC%" %CFLAGS% -I"%ROOT%\include" -I"%HERE%." "%ROOT%\src\rl78_exec.c" "%ROOT%\src\rl78_sys.c" "%ROOT%\src\rl78_disasm.c" "%HERE%tasm.c" "%HERE%bench.c" -o "%BUILD%\rl78_bench.exe"
+"%CC%" %CFLAGS% -I"%ROOT%\include" -I"%HERE%." "%ROOT%\src\rl78_exec.c" "%ROOT%\src\rl78_sys.c" "%ROOT%\src\rl78_disasm.c" "%ROOT%\src\rl78_xlate.c" "%HERE%tasm.c" "%HERE%bench.c" -o "%BUILD%\rl78_bench.exe"
 if errorlevel 1 exit /b 1
-"%CC%" %CFLAGS% -I"%ROOT%\include" -I"%HERE%." "%ROOT%\src\rl78_exec.c" "%ROOT%\src\rl78_sys.c" "%ROOT%\src\rl78_disasm.c" "%HERE%tasm.c" "%HERE%difftest\rl78dt.c" -o "%BUILD%\rl78dt.exe"
+"%CC%" %CFLAGS% -I"%ROOT%\include" -I"%HERE%." "%ROOT%\src\rl78_exec.c" "%ROOT%\src\rl78_sys.c" "%ROOT%\src\rl78_disasm.c" "%ROOT%\src\rl78_xlate.c" "%HERE%tasm.c" "%HERE%difftest\rl78dt.c" -o "%BUILD%\rl78dt.exe"
 if errorlevel 1 exit /b 1
 
 echo == tests
@@ -31,6 +31,37 @@ if errorlevel 1 set STATUS=1
 echo == benchmark
 "%BUILD%\rl78_bench.exe" %BENCH_INSNS% %BENCH_MIN%
 if errorlevel 1 set STATUS=1
+
+echo == translation to C ^(needs clang^)
+set "XLCC=%XLCC%"
+if "%XLCC%"=="" set "XLCC=clang"
+"%XLCC%" --version >nul 2>nul
+if errorlevel 1 if defined LLVM_DIR set "XLCC=%LLVM_DIR%\bin\clang.exe"
+"%XLCC%" --version >nul 2>nul
+if errorlevel 1 set "XLCC=C:\Program Files\LLVM\bin\clang.exe"
+"%XLCC%" --version >nul 2>nul
+if errorlevel 1 (
+  echo translation: FAIL ^(clang not found; set XLCC^)
+  set STATUS=1
+  goto after_xl
+)
+if not exist "%BUILD%\xl" mkdir "%BUILD%\xl"
+"%CC%" %CFLAGS% -I"%ROOT%\include" -I"%HERE%." "%ROOT%\src\rl78_exec.c" "%ROOT%\src\rl78_sys.c" "%ROOT%\src\rl78_disasm.c" "%ROOT%\src\rl78_xlate.c" "%HERE%tasm.c" "%HERE%xlgen.c" -o "%BUILD%\xlgen.exe"
+if errorlevel 1 exit /b 1
+"%CC%" %CFLAGS% -I"%ROOT%\include" -I"%HERE%." "%ROOT%\src\rl78_exec.c" "%ROOT%\src\rl78_sys.c" "%ROOT%\src\rl78_disasm.c" "%ROOT%\src\rl78_xlate.c" "%HERE%tasm.c" "%HERE%xlrun.c" -o "%BUILD%\xlrun.exe"
+if errorlevel 1 exit /b 1
+"%BUILD%\xlgen.exe" "%BUILD%\xl"
+if errorlevel 1 set STATUS=1
+rem freestanding DLL: no C runtime and no Windows SDK (only clang and lld-link from the LLVM package)
+"%XLCC%" -O2 -fno-unroll-loops -ffreestanding -nostdlib -shared -fuse-ld=lld -Wl,/noentry -mno-stack-arg-probe -DRL78_XL_DLL -I"%ROOT%\include" -I"%ROOT%\src" "%BUILD%\xl\xl_unit.c" "%BUILD%\xl\xl_main.c" -o "%BUILD%\xl\xl.dll"
+if errorlevel 1 (
+  echo translation: FAIL ^(cannot build the DLL^)
+  set STATUS=1
+  goto after_xl
+)
+"%BUILD%\xlrun.exe" "%BUILD%\xl" "%BUILD%\xl\xl.dll"
+if errorlevel 1 set STATUS=1
+:after_xl
 
 if "%RL78_GNU_BIN%"=="" (
   echo == difftest: SKIP ^(RL78_GNU_BIN not set^)

@@ -29,6 +29,30 @@ echo "== tests"
 echo "== benchmark"
 "$BUILD/rl78_bench" "${BENCH_INSNS:-300000000}" ${BENCH_MIN:-} || status=1
 
+echo "== translation to C (needs clang)"
+XLCC=${XLCC:-clang}
+if ! command -v "$XLCC" >/dev/null 2>&1; then
+    echo "translation: FAIL ($XLCC not found; set XLCC)"
+    status=1
+else
+    mkdir -p "$BUILD/xl"
+    XLLIBS=""
+    case "$(uname -s)" in
+        Darwin*) XLDLL="$BUILD/xl/xl.dylib"; XLLINK="-dynamiclib" ;;             # libSystem is part of the OS
+        *) XLDLL="$BUILD/xl/xl.so"; XLLINK="-shared -nostdlib"; XLLIBS="-ldl" ;;
+    esac
+    $CC $CFLAGS -Werror -I"$ROOT/include" -I"$HERE" "$ROOT"/src/*.c "$HERE"/tasm.c "$HERE"/xlgen.c -o "$BUILD/xlgen" || exit 1
+    $CC $CFLAGS -Werror -I"$ROOT/include" -I"$HERE" "$ROOT"/src/*.c "$HERE"/tasm.c "$HERE"/xlrun.c -o "$BUILD/xlrun" $XLLIBS || exit 1
+    if "$BUILD/xlgen" "$BUILD/xl" &&
+       "$XLCC" -O2 -fno-unroll-loops -ffreestanding -fPIC $XLLINK -DRL78_XL_DLL -I"$ROOT/include" -I"$ROOT/src" \
+           "$BUILD/xl/xl_unit.c" "$BUILD/xl/xl_main.c" -o "$XLDLL"; then
+        "$BUILD/xlrun" "$BUILD/xl" "$XLDLL" || status=1
+    else
+        echo "translation: FAIL (cannot translate or build the DLL)"
+        status=1
+    fi
+fi
+
 if [ -n "${RL78_GNU_BIN:-}" ]; then
     echo "== difftest vs GNU rl78-elf-run"
     RL78DT="$BUILD/rl78dt" python3 -I "$HERE/difftest/difftest.py" ${DIFFTEST_ARGS:-} || status=1

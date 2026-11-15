@@ -52,7 +52,7 @@ if "%MODE%"=="mock" (
     set "SRCS=%COMMON% "%ROOT%\runtime\backends\mock\mock_backend.c""
     set "INC=-I"%ROOT%\runtime\include" -I"%S%""
 ) else (
-    set "SRCS=%COMMON% "%B%\rl78_backend.c" "%B%\rl78_abi.c" "%B%\rl78_lmf.c" "%B%\rl78_sym.c" "%B%\rl78_elf.c" "%B%\rl78_dwarf.c" "%B%\rl78_map.c" "%C%\rl78_exec.c" "%C%\rl78_sys.c" "%C%\rl78_disasm.c""
+    set "SRCS=%COMMON% "%B%\rl78_backend.c" "%B%\rl78_abi.c" "%B%\rl78_lmf.c" "%B%\rl78_sym.c" "%B%\rl78_elf.c" "%B%\rl78_dwarf.c" "%B%\rl78_map.c" "%C%\rl78_exec.c" "%C%\rl78_sys.c" "%C%\rl78_disasm.c" "%C%\rl78_xlate.c""
     set "INC=-I"%ROOT%\runtime\include" -I"%S%" -I"%ROOT%\rl78\include" -I"%B%""
 )
 

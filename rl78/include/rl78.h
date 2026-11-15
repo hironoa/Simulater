@@ -225,6 +225,49 @@ int rl78_disasm_buf(rl78_core core, const uint8_t *buf, size_t avail, uint32_t p
 /* Disassemble from simulator memory (breakpoints hidden). */
 int rl78_disasm(rl78_cpu *cpu, uint32_t pc, char *text, size_t textlen);
 
+/* ---- translation to C (rl78_xlate.c) -----------------------------------------
+ *
+ * A faster way to run code in the code flash: translate it to C, compile the C
+ * with clang and attach the result.  rl78_run() then runs translated code where
+ * there is some and interprets everywhere else; the results are the same.
+ *
+ *   rl78_set_call_profile(cpu, 1); run ...; rl78_call_profile(cpu)  -> which functions were called
+ *   rl78_xlate_unit() for each group of functions, then rl78_xlate_main()      -> C source
+ *   (compile; see rl78_xlate_rt.h for what the source needs)
+ *   rl78_xl_attach(cpu, rl78_xl_module_get(rl78_xl_host_get()))
+ *
+ * Requires rom_size > 0 (the translated code must not change).  Loading other
+ * code into the flash after translating needs a new translation.
+ */
+typedef struct rl78_xl_host rl78_xl_host;
+typedef struct rl78_xl_module rl78_xl_module;
+typedef void (*rl78_xl_put)(void *ctx, const char *text, size_t n);
+
+/* translated addresses, collected by rl78_xlate_unit for rl78_xlate_main */
+typedef struct { uint32_t pc, entry; int leader; } rl78_xl_addr;
+typedef struct { rl78_xl_addr *v; size_t n, cap; int failed; } rl78_xl_leaders;
+void rl78_xl_leaders_init(rl78_xl_leaders *ld);
+void rl78_xl_leaders_free(rl78_xl_leaders *ld);
+int rl78_xl_leaders_add(rl78_xl_leaders *ld, uint32_t pc, uint32_t entry, int leader);
+
+/* Record the targets of CALL instructions: a bitmap, bit (addr & 7) of byte addr >> 3. */
+int rl78_set_call_profile(rl78_cpu *cpu, int on);         /* 0 ok, -1 out of memory */
+const uint8_t *rl78_call_profile(const rl78_cpu *cpu);    /* NULL when off */
+
+/* Write one C source file with the functions unit[0..nunit).  entries is a bitmap
+   (same layout as the call profile) of every function entry of the translation:
+   a function ends where another one begins.  The same input gives the same text.
+   *ninsns receives the number of instructions translated.  0 ok, -1 out of memory. */
+int rl78_xlate_unit(rl78_cpu *cpu, const uint32_t *unit, size_t nunit, const uint8_t *entries,
+                    rl78_xl_put put, void *ctx, rl78_xl_leaders *ld, size_t *ninsns);
+/* Write the source file that ties the units together (exports rl78_xl_module_get). */
+int rl78_xlate_main(rl78_cpu *cpu, rl78_xl_leaders *ld, rl78_xl_put put, void *ctx);
+
+const rl78_xl_host *rl78_xl_host_get(void);
+/* Use translated code (NULL: stop using it).  0 ok, -1 and a message when it does not fit this CPU. */
+int rl78_xl_attach(rl78_cpu *cpu, const rl78_xl_module *m, char *err, size_t errlen);
+uint64_t rl78_xl_insn_count(const rl78_cpu *cpu);         /* instructions run by translated code */
+
 const char *rl78_stop_reason_name(rl78_stop_reason r);
 
 #ifdef __cplusplus
