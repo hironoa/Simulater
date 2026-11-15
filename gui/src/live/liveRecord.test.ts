@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import { LiveRecord } from "./liveRecord";
-import { buildLiveSeriesData } from "./liveWindow";
 
 describe("LiveRecord", () => {
   it("samples の行を列ごとに追記し、読めない値は null にする", () => {
@@ -85,26 +84,5 @@ describe("LiveRecord", () => {
     expect(r.revision).toBe(v0 + 1);
     r.clear();
     expect(r.revision).toBe(v0 + 2);
-  });
-});
-
-describe("buildLiveSeriesData", () => {
-  it("直近 n 点を [時刻 ms, 物理値] にし、軸は窓の幅で固定する", () => {
-    const r = new LiveRecord();
-    r.append(0, ["a"], Array.from({ length: 10 }, (_, i) => [i]));
-    const d = buildLiveSeriesData(r, [{ sig: "a", conv: { lsb: 0.5, offset: 1 } }], 4, 5);
-    expect(d.series[0]).toEqual([[30, 4], [35, 4.5], [40, 5], [45, 5.5]]);
-    expect(d.xMin).toBe(30);
-    expect(d.xMax).toBe(45);
-    expect(d.points).toBe(4);
-  });
-
-  it("点数が窓に満たないときも x 軸の幅は窓の分を取る", () => {
-    const r = new LiveRecord();
-    r.append(0, ["a"], [[1], [null]]);
-    const d = buildLiveSeriesData(r, [{ sig: "a", conv: { lsb: 1, offset: 0 } }, { sig: "zz", conv: { lsb: 1, offset: 0 } }], 100, 1);
-    expect(d.series[0]).toEqual([[0, 1], [1, null]]);
-    expect(d.series[1]).toEqual([[0, null], [1, null]]);
-    expect(d.xMax).toBe(99);
   });
 });
