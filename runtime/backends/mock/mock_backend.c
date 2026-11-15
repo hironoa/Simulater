@@ -28,65 +28,65 @@ typedef struct {
 
 /* ---------------------------------------------------------------- 型 */
 
-static const sim_type t_u8 = {SIM_T_UINT, "uint8", 1, NULL, 0, NULL, 0};
-static const sim_type t_char = {SIM_T_UINT, "char", 1, NULL, 0, NULL, 0};
-static const sim_type t_u16 = {SIM_T_UINT, "uint16", 2, NULL, 0, NULL, 0};
-static const sim_type t_s16 = {SIM_T_INT, "sint16", 2, NULL, 0, NULL, 0};
-static const sim_type t_int = {SIM_T_INT, "int", 2, NULL, 0, NULL, 0};
-static const sim_type t_u32 = {SIM_T_UINT, "uint32", 4, NULL, 0, NULL, 0};
-static const sim_type t_float = {SIM_T_FLOAT, "float", 4, NULL, 0, NULL, 0};
-static const sim_type t_enum_state = {SIM_T_INT, "eng_state_t", 2, NULL, 0, NULL, 0};
+static const sim_type t_u8 = {SIM_T_UINT, "uint8", 1, NULL, 0, NULL, 0,0};
+static const sim_type t_char = {SIM_T_UINT, "char", 1, NULL, 0, NULL, 0,0};
+static const sim_type t_u16 = {SIM_T_UINT, "uint16", 2, NULL, 0, NULL, 0,0};
+static const sim_type t_s16 = {SIM_T_INT, "sint16", 2, NULL, 0, NULL, 0,0};
+static const sim_type t_int = {SIM_T_INT, "int", 2, NULL, 0, NULL, 0,0};
+static const sim_type t_u32 = {SIM_T_UINT, "uint32", 4, NULL, 0, NULL, 0,0};
+static const sim_type t_float = {SIM_T_FLOAT, "float", 4, NULL, 0, NULL, 0,0};
+static const sim_type t_enum_state = {SIM_T_INT, "eng_state_t", 2, NULL, 0, NULL, 0,0};
 
 static const sim_member m_bitf[] = {
     {"no0", 0, 0, 1, &t_u8}, {"no1", 0, 1, 1, &t_u8}, {"no2", 0, 2, 1, &t_u8}, {"no3", 0, 3, 1, &t_u8},
     {"no4", 0, 4, 1, &t_u8}, {"no5", 0, 5, 1, &t_u8}, {"no6", 0, 6, 1, &t_u8}, {"no7", 0, 7, 1, &t_u8},
 };
-static const sim_type t_bitf = {SIM_T_STRUCT, "__bitf_T", 1, NULL, 0, m_bitf, 8};
+static const sim_type t_bitf = {SIM_T_STRUCT, "__bitf_T", 1, NULL, 0, m_bitf, 8,0};
 
 static const sim_member m_flag[] = {
     {"warm", 0, 0, 1, &t_u8}, {"over_rev", 0, 1, 1, &t_u8}, {"overheat", 0, 2, 1, &t_u8},
     {"fan_req", 0, 3, 1, &t_u8}, {"reserved", 0, 4, 4, &t_u8},
 };
-static const sim_type t_flag = {SIM_T_STRUCT, "struct eng_flag", 1, NULL, 0, m_flag, 5};
+static const sim_type t_flag = {SIM_T_STRUCT, "struct eng_flag", 1, NULL, 0, m_flag, 5,0};
 
 /* typedef struct { uint16 rpm; sint16 water_temp; eng_state_t state; uint8 gear; struct eng_flag flag; } eng_status_t; */
 static const sim_member m_eng[] = {
     {"rpm", 0, -1, 0, &t_u16}, {"water_temp", 2, -1, 0, &t_s16}, {"state", 4, -1, 0, &t_enum_state},
     {"gear", 6, -1, 0, &t_u8}, {"flag", 7, -1, 0, &t_flag},
 };
-static const sim_type t_eng = {SIM_T_STRUCT, "eng_status_t", 8, NULL, 0, m_eng, 5};
-static const sim_type t_eng_ptr = {SIM_T_PTR, "eng_status_t *", 2, &t_eng, 0, NULL, 0};
-static const sim_type t_u16_ptr = {SIM_T_PTR, "uint16 *", 2, &t_u16, 0, NULL, 0};
-static const sim_type t_char_ptr = {SIM_T_PTR, "char *", 2, &t_char, 0, NULL, 0};
+static const sim_type t_eng = {SIM_T_STRUCT, "eng_status_t", 8, NULL, 0, m_eng, 5,0};
+static const sim_type t_eng_ptr = {SIM_T_PTR, "eng_status_t *", 2, &t_eng, 0, NULL, 0,0};
+static const sim_type t_u16_ptr = {SIM_T_PTR, "uint16 *", 2, &t_u16, 0, NULL, 0,0};
+static const sim_type t_char_ptr = {SIM_T_PTR, "char *", 2, &t_char, 0, NULL, 0,0};
 
-static const sim_type t_u16x5 = {SIM_T_ARRAY, "uint16[5]", 10, &t_u16, 5, NULL, 0};
-static const sim_type t_u16x4 = {SIM_T_ARRAY, "uint16[4]", 8, &t_u16, 4, NULL, 0};
-static const sim_type t_u16x8 = {SIM_T_ARRAY, "uint16[8]", 16, &t_u16, 8, NULL, 0};
-static const sim_type t_charx16 = {SIM_T_ARRAY, "char[16]", 16, &t_char, 16, NULL, 0};
-static const sim_type t_u8x3 = {SIM_T_ARRAY, "uint8[3]", 3, &t_u8, 3, NULL, 0};
-static const sim_type t_u8x2x3 = {SIM_T_ARRAY, "uint8[2][3]", 6, &t_u8x3, 2, NULL, 0};
+static const sim_type t_u16x5 = {SIM_T_ARRAY, "uint16[5]", 10, &t_u16, 5, NULL, 0,0};
+static const sim_type t_u16x4 = {SIM_T_ARRAY, "uint16[4]", 8, &t_u16, 4, NULL, 0,0};
+static const sim_type t_u16x8 = {SIM_T_ARRAY, "uint16[8]", 16, &t_u16, 8, NULL, 0,0};
+static const sim_type t_charx16 = {SIM_T_ARRAY, "char[16]", 16, &t_char, 16, NULL, 0,0};
+static const sim_type t_u8x3 = {SIM_T_ARRAY, "uint8[3]", 3, &t_u8, 3, NULL, 0,0};
+static const sim_type t_u8x2x3 = {SIM_T_ARRAY, "uint8[2][3]", 6, &t_u8x3, 2, NULL, 0,0};
 
 /* 匿名共用体を含む構造体 */
 static const sim_member m_bytes[] = {{"lo", 0, -1, 0, &t_u8}, {"hi", 1, -1, 0, &t_u8}};
-static const sim_type t_bytes = {SIM_T_STRUCT, NULL, 2, NULL, 0, m_bytes, 2};
+static const sim_type t_bytes = {SIM_T_STRUCT, NULL, 2, NULL, 0, m_bytes, 2,0};
 static const sim_member m_cal_u[] = {{"word", 0, -1, 0, &t_u16}, {"", 0, -1, 0, &t_bytes}};
-static const sim_type t_cal_u = {SIM_T_UNION, NULL, 2, NULL, 0, m_cal_u, 2};
+static const sim_type t_cal_u = {SIM_T_UNION, NULL, 2, NULL, 0, m_cal_u, 2,0};
 static const sim_member m_cal[] = {{"", 0, -1, 0, &t_cal_u}, {"offset", 2, -1, 0, &t_s16}};
-static const sim_type t_cal = {SIM_T_STRUCT, "cal_t", 4, NULL, 0, m_cal, 2};
+static const sim_type t_cal = {SIM_T_STRUCT, "cal_t", 4, NULL, 0, m_cal, 2,0};
 
 static const sim_member m_hist[] = {{"rpm", 0, -1, 0, &t_u16}, {"temp", 2, -1, 0, &t_s16}};
-static const sim_type t_hist = {SIM_T_STRUCT, "hist_t", 4, NULL, 0, m_hist, 2};
-static const sim_type t_histx3 = {SIM_T_ARRAY, "hist_t[3]", 12, &t_hist, 3, NULL, 0};
+static const sim_type t_hist = {SIM_T_STRUCT, "hist_t", 4, NULL, 0, m_hist, 2,0};
+static const sim_type t_histx3 = {SIM_T_ARRAY, "hist_t[3]", 12, &t_hist, 3, NULL, 0,0};
 
 /* GUI 検索の境界: 匿名内の配列・ビット、構造体配列、深さと要素数の上限。 */
-static const sim_type t_calx2 = {SIM_T_ARRAY, "cal_t[2]", 8, &t_cal, 2, NULL, 0};
-static const sim_type t_cal_ptr = {SIM_T_PTR, "cal_t *", 2, &t_cal, 0, NULL, 0};
+static const sim_type t_calx2 = {SIM_T_ARRAY, "cal_t[2]", 8, &t_cal, 2, NULL, 0,0};
+static const sim_type t_cal_ptr = {SIM_T_PTR, "cal_t *", 2, &t_cal, 0, NULL, 0,0};
 static const sim_member m_search_union[] = {{"bytes", 0, -1, 0, &t_u8x3}, {"", 0, -1, 0, &t_flag}};
-static const sim_type t_search_union = {SIM_T_UNION, NULL, 3, NULL, 0, m_search_union, 2};
+static const sim_type t_search_union = {SIM_T_UNION, NULL, 3, NULL, 0, m_search_union, 2,0};
 static const sim_member m_search[] = {{"", 0, -1, 0, &t_search_union}};
-static const sim_type t_search = {SIM_T_STRUCT, "search_t", 3, NULL, 0, m_search, 1};
-static const sim_type t_big = {SIM_T_ARRAY, "uint8[258]", 258, &t_u8, 258, NULL, 0};
-#define DEEP(n, target) static const sim_type t_deep##n = {SIM_T_ARRAY, "deep" #n, 1, target, 1, NULL, 0}
+static const sim_type t_search = {SIM_T_STRUCT, "search_t", 3, NULL, 0, m_search, 1,0};
+static const sim_type t_big = {SIM_T_ARRAY, "uint8[258]", 258, &t_u8, 258, NULL, 0,0};
+#define DEEP(n, target) static const sim_type t_deep##n = {SIM_T_ARRAY, "deep" #n, 1, target, 1, NULL, 0,0}
 DEEP(1, &t_u8);
 DEEP(2, &t_deep1);
 DEEP(3, &t_deep2);

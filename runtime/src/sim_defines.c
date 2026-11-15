@@ -67,7 +67,8 @@ typedef struct {
     sim_cfg cfg;
     char **files;
     size_t nfiles;
-    definition *macros, *types;
+    definition *macros, *types, *tags;
+    size_t ntags, tags_alloc, *tag_index, tag_cap;
     size_t nmacros, ntypes, macros_alloc, types_alloc;
     size_t *macro_index, *type_index, macro_cap, type_cap;
     int recursive, guess, char_unsigned, verbose, error, cond, compiler, packing;
@@ -320,9 +321,9 @@ static uint32_t name_hash(const char *s)
 { uint32_t h=2166136261u; while (*s) { h^=(unsigned char)*s++; h*=16777619u; } return h; }
 static definition *lookup(defs *d,int type,const char *name)
 {
-    size_t cap=type?d->type_cap:d->macro_cap;
-    size_t *index=type?d->type_index:d->macro_index, slot;
-    definition *list=type?d->types:d->macros;
+    size_t cap=type==2?d->tag_cap:type?d->type_cap:d->macro_cap;
+    size_t *index=type==2?d->tag_index:type?d->type_index:d->macro_index, slot;
+    definition *list=type==2?d->tags:type?d->types:d->macros;
     if (!cap) return NULL;
     slot=name_hash(name)&(cap-1);
     while (index[slot]) {
@@ -333,10 +334,10 @@ static definition *lookup(defs *d,int type,const char *name)
 }
 static void index_definition(defs *d,int type)
 {
-    size_t **index=type?&d->type_index:&d->macro_index;
-    size_t *cap=type?&d->type_cap:&d->macro_cap;
-    size_t count=type?d->ntypes:d->nmacros,i,slot;
-    definition *list=type?d->types:d->macros;
+    size_t **index=type==2?&d->tag_index:type?&d->type_index:&d->macro_index;
+    size_t *cap=type==2?&d->tag_cap:type?&d->type_cap:&d->macro_cap;
+    size_t count=type==2?d->ntags:type?d->ntypes:d->nmacros,i,slot;
+    definition *list=type==2?d->tags:type?d->types:d->macros;
     if (count*2>=*cap) {
         *cap=*cap?*cap*2:128; free(*index); *index=sim_xcalloc(*cap,sizeof **index);
         for (i=0;i<count;i++) {
@@ -352,9 +353,19 @@ static void index_definition(defs *d,int type)
 }
 static void add_definition(defs *d, int type, const char *name, const char *body,const char *file,unsigned line)
 {
-    definition **list=type?&d->types:&d->macros;
-    size_t *count=type?&d->ntypes:&d->nmacros;
+    definition **list=type==2?&d->tags:type?&d->types:&d->macros;
+    size_t *count=type==2?&d->ntags:type?&d->ntypes:&d->nmacros;
     definition *previous=lookup(d,type,name);
+    if (previous && type==2) {
+        lexer a=lex(previous->body), b=lex(body);
+        while (qualifier(a.tok)) next(&a);
+        while (qualifier(b.tok)) next(&b);
+        if (strcmp(a.tok,b.tok)) { previous->state=3; d->duplicates++; return; }
+        if (!strchr(body,'{')) return; /* 同じ種類の前方宣言 */
+        if (!strchr(previous->body,'{') && previous->state!=3) {
+            free(previous->body); previous->body=sim_xstrdup(body); return;
+        }
+    }
     if (previous) {
         char *norm=normalized(body), *old=normalized(previous->body);
         if (strcmp(old,norm)) {
@@ -364,7 +375,7 @@ static void add_definition(defs *d, int type, const char *name, const char *body
         free(old); free(norm); return;
     }
     /* 1 件ずつ伸ばさない（realloc が毎回コピーする処理系では、定義が数万件あると遅くなる） */
-    { size_t *alloc=type?&d->types_alloc:&d->macros_alloc;
+    { size_t *alloc=type==2?&d->tags_alloc:type?&d->types_alloc:&d->macros_alloc;
       if (*count==*alloc) { *alloc=*alloc?*alloc*2:256; *list=sim_xrealloc(*list,*alloc*sizeof **list); } }
     { definition *v=&(*list)[(*count)++]; memset(v,0,sizeof *v); v->name=sim_xstrdup(name); v->body=sim_xstrdup(body); v->file=sim_xstrdup(file); v->line=line; }
     index_definition(d,type);
@@ -703,7 +714,7 @@ static void scan_types(defs *d, const source *s, size_t base)
     l=lex(t);
     while (l.tok[0]) {
         int td=!strcmp(l.tok,"typedef");
-        if (td || !strcmp(l.tok,"struct") || !strcmp(l.tok,"union")) {
+        if (td || !strcmp(l.tok,"struct") || !strcmp(l.tok,"union") || !strcmp(l.tok,"enum")) {
             const char *body,*end;
             lexer spec,taglex;
             char tag[128]="";
@@ -713,12 +724,12 @@ static void scan_types(defs *d, const source *s, size_t base)
             body=l.start; taglex=l;
             while (qualifier(taglex.tok)) next(&taglex);
             skip_layout(&taglex);
-            record=!strcmp(taglex.tok,"struct") || !strcmp(taglex.tok,"union");
+            record=!strcmp(taglex.tok,"struct") || !strcmp(taglex.tok,"union") || !strcmp(taglex.tok,"enum");
             if (record) { next(&taglex); skip_layout(&taglex); if (sim_is_ident_start((unsigned char)taglex.tok[0])) snprintf(tag,sizeof tag,"%s",taglex.tok); }
             skip_spec(&l); spec=l; end=l.start;
-            if (record && tag[0] && memchr(body,'{',(size_t)(end-body))) {
+            if (record && tag[0]) {
                 char *text=sim_xstrndup(body,(size_t)(end-body));
-                add_definition(d,1,tag,packed?"__unsupported_packed":text,s->path,line); free(text);
+                add_definition(d,2,tag,packed?"__unsupported_packed":text,s->path,line); free(text);
             }
             if (td) do {
                 const char *begin=l.start,*name_at=NULL,*name_end=NULL;
@@ -1073,13 +1084,14 @@ static void list_undefined(defs *d, sim_buf *b, int hidden, size_t limit)
 }
 
 static const sim_type basic[] = {
-    {SIM_T_UINT,"u8",1,NULL,0,NULL,0},{SIM_T_INT,"s8",1,NULL,0,NULL,0},
-    {SIM_T_UINT,"u16",2,NULL,0,NULL,0},{SIM_T_INT,"s16",2,NULL,0,NULL,0},
-    {SIM_T_UINT,"u32",4,NULL,0,NULL,0},{SIM_T_INT,"s32",4,NULL,0,NULL,0},
-    {SIM_T_FLOAT,"f32",4,NULL,0,NULL,0},
-    {SIM_T_UINT,"u64",8,NULL,0,NULL,0},{SIM_T_INT,"s64",8,NULL,0,NULL,0}
+    {SIM_T_UINT,"u8",1,NULL,0,NULL,0,0},{SIM_T_INT,"s8",1,NULL,0,NULL,0,0},
+    {SIM_T_UINT,"u16",2,NULL,0,NULL,0,0},{SIM_T_INT,"s16",2,NULL,0,NULL,0,0},
+    {SIM_T_UINT,"u32",4,NULL,0,NULL,0,0},{SIM_T_INT,"s32",4,NULL,0,NULL,0,0},
+    {SIM_T_FLOAT,"f32",4,NULL,0,NULL,0,0},
+    {SIM_T_UINT,"u64",8,NULL,0,NULL,0,0},{SIM_T_INT,"s64",8,NULL,0,NULL,0,0}
 };
 static const sim_type *resolve_name(defs *,const char *,unsigned);
+static const sim_type *resolve_tag(defs *,const char *,sim_kind,unsigned);
 static const sim_type *external_type(defs *,const char *,unsigned);
 static const sim_type *parse_type(defs *,lexer *,unsigned);
 static const sim_type *unqualified_type(defs *,const sim_type *);
@@ -1200,7 +1212,7 @@ static const sim_type *parse_type_impl(defs *d,lexer *l,unsigned depth)
         int un=!strcmp(l->tok,"union"); char tag[128]=""; next(l);
         if (sim_is_ident_start((unsigned char)l->tok[0])) { snprintf(tag,sizeof tag,"%s",l->tok); next(l); }
         if (!strcmp(l->tok,"{")) { t=record_type(d,l,un,depth); return d->packing?NULL:t; }
-        return tag[0]?resolve_name(d,tag,depth+1):NULL;
+        return tag[0]?resolve_tag(d,tag,un?SIM_T_UNION:SIM_T_STRUCT,depth+1):NULL;
     }
     {
         int uns=0,sgn=0,chr=0,lng=0,flt=0,dbl=0,shrt=0,ints=0,seen=0;
@@ -1230,12 +1242,11 @@ static const sim_type *parse_type_impl(defs *d,lexer *l,unsigned depth)
     while (qualifier(l->tok)) next(l);
     return t;
 }
-/* Keep qualifiers without changing the shared backend type representation. */
+/* 修飾付きの写しもコンテキストが所有し、参照の寿命中有効にする。 */
 static int const_type(defs *d,const sim_type *t)
 {
-    size_t i;
-    for (i=0;i<d->nconst_types;i++) if (d->const_types[i].qualified==t) return 1;
-    return 0;
+    (void)d;
+    return t && t->is_const;
 }
 static const sim_type *unqualified_type(defs *d,const sim_type *t)
 {
@@ -1258,12 +1269,39 @@ static const sim_type *parse_type(defs *d,lexer *l,unsigned depth)
         size_t i;
         sim_type *qualified;
         for (i=0;i<d->nconst_types;i++) if (d->const_types[i].base==t) return d->const_types[i].qualified;
-        qualified=sim_ctx_alloc(d->ctx,sizeof *qualified); *qualified=*t;
+        qualified=sim_ctx_alloc(d->ctx,sizeof *qualified); *qualified=*t; qualified->is_const=1;
         d->const_types=sim_xrealloc(d->const_types,(d->nconst_types+1)*sizeof *d->const_types);
         d->const_types[d->nconst_types].base=t;
         d->const_types[d->nconst_types++].qualified=qualified; t=qualified;
     }
     return t;
+}
+static const sim_type *resolve_tag(defs *d,const char *name,sim_kind kind,unsigned depth)
+{
+    definition *v=lookup(d,2,name);
+    const sim_type *t;
+    char full[160];
+    if (depth>32) return NULL;
+    if (v) {
+        lexer l=lex(v->body);
+        if (v->state==1 || v->state==3 || !strchr(v->body,'{')) return NULL;
+        if (!v->state) {
+            v->state=1; v->type=parse_type(d,&l,depth+1);
+            v->state=v->type?2:3;
+        }
+        t=v->type;
+    } else {
+        snprintf(full,sizeof full,"%s %s",kind==SIM_T_UNION?"union":"struct",name);
+        t=sim_ctx_named_type(d->ctx,full);
+        /* デバッグ変数自身の修飾はタグの定義に含めない。メンバの修飾は残す。 */
+        if (t && t->is_const) {
+            sim_type *plain=sim_ctx_alloc(d->ctx,sizeof *plain);
+            *plain=*t; plain->is_const=0;
+            if (plain->name && !strncmp(plain->name,"const ",6)) plain->name+=6;
+            t=plain;
+        }
+    }
+    return t && t->kind==kind?t:NULL;
 }
 static const sim_type *resolve_name(defs *d,const char *name,unsigned depth)
 {
@@ -1331,14 +1369,14 @@ static int bit_number(const char *s,unsigned limit)
     if (sim_parse_uint(p,limit-1,&n)) return -1;
     return (int)n;
 }
-static const sim_member *member(const sim_type *t,const char *name,unsigned depth,uint32_t *offset)
+static const sim_member *member(const sim_type *t,const char *name,unsigned depth,uint32_t *offset,int *readonly)
 {
     int k;
     if (!t || depth>16) return NULL;
-    for (k=0;k<t->nmembers;k++) if (!strcmp(t->members[k].name,name)) { *offset=0; return &t->members[k]; }
+    for (k=0;k<t->nmembers;k++) if (!strcmp(t->members[k].name,name)) { *offset=0; *readonly|=const_type(NULL,t); return &t->members[k]; }
     for (k=0;k<t->nmembers;k++) if (!t->members[k].name[0]) {
-        uint32_t off; const sim_member *m=member(t->members[k].type,name,depth+1,&off);
-        if (m) { *offset=off+t->members[k].offset; return m; }
+        uint32_t off; const sim_member *m=member(t->members[k].type,name,depth+1,&off,readonly);
+        if (m) { *offset=off+t->members[k].offset; *readonly|=const_type(NULL,t); return m; }
     }
     return NULL;
 }
@@ -1431,7 +1469,7 @@ static int direct_expression(defs *d,lexer *l,direct_ref *r,unsigned depth,int *
                 r->bit=bit; r->bits=1; r->type=&basic[t && t->size==2?2:0];
                 r->guessed+=guessed;
             } else {
-                m=member(t,l->tok,0,&parent);
+                m=member(t,l->tok,0,&parent,&r->readonly);
                 if (!m) { *unresolved=1; return 0; }
                 r->addr+=parent+m->offset;
                 if (m->bit_offset>=0) { r->bit=m->bit_offset-(int)(m->offset*8); r->bits=m->bit_size; }
@@ -1687,5 +1725,6 @@ int sim_defines_load(sim_ctx *c,const sim_open_opts *o,char *err,size_t cap)
     free(d.const_types);
     free_definitions(d.macros,d.nmacros); free_definitions(d.types,d.ntypes); sim_cfg_free(&d.cfg);
     free(d.macro_index); free(d.type_index);
+    free_definitions(d.tags,d.ntags); free(d.tag_index);
     return d.error?-1:0;
 }

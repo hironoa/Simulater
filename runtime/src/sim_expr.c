@@ -209,18 +209,32 @@ void sim_ctx_definition_const(sim_ctx *c, const char *name, int readonly)
     if (slot<c->nvars && c->var_def && c->var_def[slot]) c->var_def[slot]->var.is_const=readonly;
 }
 const sim_var *sim_ctx_sym_var(sim_ctx *c, size_t i) { return i < c->nvars ? c->vars[i] : NULL; }
+static const sim_type *named_type(const sim_type *t,const char *name,const sim_type **path,unsigned depth)
+{
+    const sim_type *found;
+    int i;
+    unsigned k;
+    if (!t || depth>=32) return NULL;
+    for (k=0;k<depth;k++) if (path[k]==t) return NULL;
+    path[depth]=t;
+    if (t->name && (!strcmp(t->name,name) ||
+        ((!strncmp(name,"struct ",7) || !strncmp(name,"union ",6)) &&
+         !strncmp(t->name,"const ",6) && !strcmp(t->name+6,name)))) return t;
+    found=named_type(t->target,name,path,depth+1);
+    if (found) return found;
+    for (i=0;i<t->nmembers;i++) {
+        found=named_type(t->members[i].type,name,path,depth+1);
+        if (found) return found;
+    }
+    return NULL;
+}
 const sim_type *sim_ctx_named_type(sim_ctx *c, const char *name)
 {
     size_t i;
-    for (i = 0; i < c->nvars; i++) {
-        const sim_type *t = c->vars[i]->type;
-        unsigned depth = 0;
-        while (t && depth++ < 16) {
-            const char *s = t->name ? t->name : "";
-            if (!strcmp(s, name) || (!strncmp(s, "struct ", 7) && !strcmp(s + 7, name)) ||
-                (!strncmp(s, "union ", 6) && !strcmp(s + 6, name))) return t;
-            t = t->target;
-        }
+    for (i=0;i<c->nvars;i++) {
+        const sim_type *path[32];
+        const sim_type *t=named_type(c->vars[i]->type,name,path,0);
+        if (t) return t;
     }
     return NULL;
 }
@@ -375,6 +389,13 @@ void sim_type_display(const sim_type *t, char *buf, size_t n)
 {
     char in[256];
     if (!t) { snprintf(buf, n, "void"); return; }
+    if (t->is_const && (!t->name || strncmp(t->name,"const ",6))) {
+        sim_type plain=*t; plain.is_const=0;
+        sim_type_display(&plain,in,sizeof in);
+        snprintf(buf,n,"%s%s",plain.kind==SIM_T_PTR?"":"const ",in);
+        if (plain.kind==SIM_T_PTR) { size_t k=strlen(buf); if (k<n) snprintf(buf+k,n-k," const"); }
+        return;
+    }
     if (t->name && t->name[0]) { snprintf(buf, n, "%s", t->name); return; }
     switch (t->kind) {
     case SIM_T_PTR: sim_type_display(t->target, in, sizeof in); snprintf(buf, n, "%s *", in); break;
@@ -427,6 +448,18 @@ int sim_ref_prefix(const sim_ref *r) { return r->prefix; }
 int sim_ref_is_multi(const sim_ref *r) { return r->multi; }
 int sim_ref_is_return(const sim_ref *r) { return r->base == RB_RET && r->nsteps == 0; }
 const sim_type *sim_ref_type(const sim_ref *r) { return r->multi ? r->elem : r->type; }
+
+/* 配列自身の修飾と、要素型の修飾は同じオブジェクトの制限になる。 */
+static int object_const(const sim_type *t)
+{
+    unsigned depth=0;
+    while (t && depth++<32) {
+        if (t->is_const) return 1;
+        if (t->kind!=SIM_T_ARRAY) break;
+        t=t->target;
+    }
+    return 0;
+}
 
 int sim_ref_writable(const sim_ref *r)
 {
@@ -542,12 +575,13 @@ static int param_index(const sim_func *f, const char *name)
 }
 
 /* 匿名メンバを含めてメンバを探す。見つかれば 1 と累積オフセット */
-static int find_member(const sim_type *t, const char *name, uint32_t base, const sim_member **out, uint32_t *off)
+static int find_member(const sim_type *t, const char *name, uint32_t base, const sim_member **out, uint32_t *off, int *readonly)
 {
     int i;
     for (i = 0; i < t->nmembers; i++) {
         const sim_member *m = &t->members[i];
         if (m->name && m->name[0] && strcmp(m->name, name) == 0) {
+            *readonly |= t->is_const || (m->type && m->type->is_const);
             *out = m;
             *off = base + m->offset;
             return 1;
@@ -556,7 +590,7 @@ static int find_member(const sim_type *t, const char *name, uint32_t base, const
     for (i = 0; i < t->nmembers; i++) {
         const sim_member *m = &t->members[i];
         if ((!m->name || !m->name[0]) && m->type && (m->type->kind == SIM_T_STRUCT || m->type->kind == SIM_T_UNION))
-            if (find_member(m->type, name, base + m->offset, out, off)) return 1;
+            if (find_member(m->type, name, base + m->offset, out, off, readonly)) { *readonly |= t->is_const; return 1; }
     }
     return 0;
 }
@@ -583,10 +617,10 @@ static int add_step(sim_ref *r, int op, int64_t v, char *err, size_t errlen)
 
 /* `:バイト数` で使う大きさだけの符号なし整数型 */
 static const sim_type g_sized_types[8] = {
-    {SIM_T_UINT, "1 バイト", 1, NULL, 0, NULL, 0}, {SIM_T_UINT, "2 バイト", 2, NULL, 0, NULL, 0},
-    {SIM_T_UINT, "3 バイト", 3, NULL, 0, NULL, 0}, {SIM_T_UINT, "4 バイト", 4, NULL, 0, NULL, 0},
-    {SIM_T_UINT, "5 バイト", 5, NULL, 0, NULL, 0}, {SIM_T_UINT, "6 バイト", 6, NULL, 0, NULL, 0},
-    {SIM_T_UINT, "7 バイト", 7, NULL, 0, NULL, 0}, {SIM_T_UINT, "8 バイト", 8, NULL, 0, NULL, 0},
+    {SIM_T_UINT, "1 バイト", 1, NULL, 0, NULL, 0,0}, {SIM_T_UINT, "2 バイト", 2, NULL, 0, NULL, 0,0},
+    {SIM_T_UINT, "3 バイト", 3, NULL, 0, NULL, 0,0}, {SIM_T_UINT, "4 バイト", 4, NULL, 0, NULL, 0,0},
+    {SIM_T_UINT, "5 バイト", 5, NULL, 0, NULL, 0,0}, {SIM_T_UINT, "6 バイト", 6, NULL, 0, NULL, 0,0},
+    {SIM_T_UINT, "7 バイト", 7, NULL, 0, NULL, 0,0}, {SIM_T_UINT, "8 バイト", 8, NULL, 0, NULL, 0,0},
 };
 
 /* 末尾の ":数字" を取り除いてバイト数を返す。なければ 0、範囲外なら -1 */
@@ -741,6 +775,7 @@ static sim_ref *ref_parse(sim_ctx *c, const char *text, char *err, size_t errlen
             }
         }
     }
+    if (r->type) r->is_const |= object_const(r->type);
     for (;;) {
         while (*p == ' ') p++;
         if (!*p) break;
@@ -760,12 +795,13 @@ static sim_ref *ref_parse(sim_ctx *c, const char *text, char *err, size_t errlen
                 if (!st || st->kind != SIM_T_PTR) FAIL("'%s': '->' の左がポインタではありません", buf);
                 if (add_step_t(r, ST_DEREF, 0, st, err, errlen)) { sim_ref_free(r); return NULL; }
                 st = st->target;
+                r->is_const = st && st->is_const;
             } else if (at_slot(r)) {
                 FAIL("'%s': 構造体の値渡しの引数/戻り値のメンバには対応していません", buf);
             }
             if (!st || (st->kind != SIM_T_STRUCT && st->kind != SIM_T_UNION))
                 FAIL("'%s': メンバ '%s' の左が構造体/共用体ではありません", buf, mn);
-            if (!find_member(st, mn, 0, &m, &off)) {
+            if (!find_member(st, mn, 0, &m, &off, &r->is_const)) {
                 sim_buf b;
                 int i;
                 sim_buf_init(&b);
@@ -823,12 +859,14 @@ static sim_ref *ref_parse(sim_ctx *c, const char *text, char *err, size_t errlen
                 if (add_step_t(r, ST_DEREF, 0, t, err, errlen)) { sim_ref_free(r); return NULL; }
                 if (idx && add_step(r, ST_ADD, (int64_t)(idx * t->target->size), err, errlen)) { sim_ref_free(r); return NULL; }
                 r->type = t->target;
+                r->is_const = object_const(r->type);
             } else {
                 FAIL("'%s': 添字の左が配列でもポインタでもありません", buf);
             }
         } else {
             FAIL("'%s': '%s' の部分が読めません", buf, p);
         }
+        if (r->type) r->is_const |= object_const(r->type);
     }
 
     /* ":バイト数" で型を上書きする（型の分からないシンボルや、型と違う幅で読みたいとき） */
@@ -858,6 +896,7 @@ static sim_ref *ref_parse(sim_ctx *c, const char *text, char *err, size_t errlen
         if (add_step_t(r, ST_DEREF, 0, r->type, err, errlen)) { sim_ref_free(r); return NULL; }
         r->multi = 1;
         r->elem = r->type->target;
+        r->is_const = r->elem->is_const;
         r->count = 0;
         break;
     default:
@@ -871,6 +910,14 @@ static sim_ref *ref_parse(sim_ctx *c, const char *text, char *err, size_t errlen
             FAIL("'%s': 型が分かりません（デバッグ情報がありません）。'%s:2' のようにバイト数を付けてください", buf, buf);
         } else if (!describe && (!r->type || r->type->kind == SIM_T_VOID || r->type->kind == SIM_T_FUNC)) {
             FAIL("'%s': 値として読めない型です", buf);
+        }
+    }
+    if (r->multi) {
+        const sim_type *e=r->elem;
+        while (e) {
+            r->is_const |= e->is_const;
+            if (e->kind!=SIM_T_ARRAY) break;
+            e=e->target;
         }
     }
     if (r->multi && !describe) {
@@ -1304,7 +1351,7 @@ int sim_parse_cell(const char *text, size_t len, sim_cellval *out, char *err, si
 
 /* ================================================================ 書き込みと比較 */
 
-static const sim_type g_byte_type = {SIM_T_UINT, "unsigned char", 1, NULL, 0, NULL, 0};
+static const sim_type g_byte_type = {SIM_T_UINT, "unsigned char", 1, NULL, 0, NULL, 0,0};
 
 /* 値が書き込める形か（const・戻り値・'$' の値・要素数・型に収まるか）をメモリに触れずに確かめる。
  * ポインタの先（NULL など）のようにその時のメモリで決まるものは確かめない */

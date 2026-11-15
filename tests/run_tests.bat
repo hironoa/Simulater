@@ -222,7 +222,7 @@ set /a PORT=20000 + %RANDOM% %% 20000
 set "U=http://127.0.0.1:%PORT%"
 mkdir "%WORK%\gui"
 copy /y "%SIM%" "%WORK%\gui\sim_guitest.exe" >nul
-start "" /b "%WORK%\gui\sim_guitest.exe" gui --no-browser --port %PORT% --period-ms 2 > "%WORK%\gui.log" 2>&1
+start "" /b "%WORK%\gui\sim_guitest.exe" gui --no-browser --cfg "%T%\defines\type_contract.cfg" --port %PORT% --period-ms 2 > "%WORK%\gui.log" 2>&1
 set TRIES=0
 :wait_up
 curl -s "%U%/api/info" > "%WORK%\info.json" 2>nul
@@ -232,6 +232,7 @@ if %TRIES% geq 20 goto up
 ping -n 2 127.0.0.1 >nul
 goto wait_up
 :up
+for /f "usebackq delims=" %%N in ("%T%\defines\type_contract_ro.txt") do call :const_api "%%N"
 findstr /l /c:"\"func\":\"TEST_cycle\",\"functions\":[" "%WORK%\info.json" >nul
 if errorlevel 1 (call :ng "/api/info") else (call :ok "/api/info")
 curl -s "%U%/api/symbols?q=flag.fan&limit=10" > "%WORK%\sym.json"
@@ -880,6 +881,7 @@ if "%RC%"=="0" (call :ok "build GUI CSV table checks") else (call :ng "build GUI
 "%WORK%\csv_table.exe"
 set RC=%ERRORLEVEL%
 if "%RC%"=="0" (call :ok "GUI CSV initialization expansion") else (call :ng "GUI CSV initialization expansion")
+for /f "usebackq delims=" %%N in ("%T%\defines\type_contract_ro.txt") do call :const_csv "%%N"
 echo == definition text contracts
 "%CC%" -std=c11 -O2 -Wall -Wextra -D_DEFAULT_SOURCE -I"%ROOT%\runtime\include" -I"%ROOT%\runtime\src" "%T%\tools\check_defines_text.c" "%ROOT%\runtime\src\sim_defines.c" "%ROOT%\runtime\src\sim_ppexpr.c" "%ROOT%\runtime\src\sim_mtpj.c" "%ROOT%\runtime\src\sim_expr.c" "%ROOT%\runtime\src\sim_cfg.c" "%ROOT%\runtime\src\sim_util.c" "%ROOT%\runtime\src\sim_platform.c" "%ROOT%\runtime\backends\mock\mock_backend.c" -o "%WORK%\check_defines_text.exe" -lws2_32
 set RC=%ERRORLEVEL%
@@ -1179,3 +1181,29 @@ if not "%RC%"=="0" (call :ng "%~1 verbose source" & exit /b 0)
 set RC=%ERRORLEVEL%
 if "%RC%"=="2" (call :ok "%~1 counted and unusable") else (call :ng "%~1 counted and unusable")
 exit /b 0
+
+:const_csv
+> "%WORK%\const_path.csv" echo mod,TEST_cycle,const path,1,0
+>> "%WORK%\const_path.csv" echo #COMMENT,%~1
+>> "%WORK%\const_path.csv" echo ,123
+"%SIM%" run "%WORK%\const_path.csv" --cfg "%T%\defines\type_contract.cfg" -o "%WORK%\const_path" > "%WORK%\const_path.log" 2>&1
+set RC=%ERRORLEVEL%
+if "%RC%"=="2" (call :ok "const CSV %~1") else (call :ng "const CSV %~1")
+exit /b
+
+:const_api
+curl -s -G --data-urlencode "q=%~1" "%U%/api/symbols" > "%WORK%\const_symbol.json"
+set RC=%ERRORLEVEL%
+if not "%RC%"=="0" (call :ng "const symbols HTTP %~1" & exit /b)
+rem The shared symbols helper also checks exact writable metadata and members.
+findstr /l /c:"false" "%WORK%\const_symbol.json" >nul
+set RC=%ERRORLEVEL%
+if "%RC%"=="0" (call :ok "const symbol %~1 readonly") else (call :ng "const symbol %~1 readonly")
+> "%WORK%\const_write.json" echo {"name":"%~1","value":"123"}
+curl -s -o "%WORK%\const_write.out" -w "%%{http_code}" -X POST --data-binary "@%WORK%\const_write.json" "%U%/api/write" > "%WORK%\const_status.txt"
+set RC=%ERRORLEVEL%
+if not "%RC%"=="0" (call :ng "const write HTTP %~1" & exit /b)
+findstr /l /c:"400" "%WORK%\const_status.txt" >nul
+set RC=%ERRORLEVEL%
+if "%RC%"=="0" (call :ok "const API rejects %~1") else (call :ng "const API rejects %~1")
+exit /b

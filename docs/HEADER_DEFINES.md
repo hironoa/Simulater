@@ -62,7 +62,19 @@ char=1、short/int=2、long/float/double=4バイト。charの符号はchar_unsig
 long long / unsigned long long はCC-RLで8バイト（s64/u64）。CA78K0Rでは未解決。
 ロードモジュールのないモックでも8バイトとして扱う。
 全ファイルの収集後に型とマクロを解決するため、typedefが別フォルダにあっても読み込み順に依存しない。
-基本型、ヘッダのtypedef（別名の別名、限定的なstruct/union）、変数のデバッグ型から到達できる同名タグ、ctypeの順。
+基本型、ヘッダのtypedef（別名の別名、限定的なstruct/union）、デバッグ型、ctypeの順。
+タグとtypedef名は別の表で管理する。`struct X` / `union X` はタグだけを検索し、
+ヘッダになければ変数のデバッグ型（メンバ・配列要素・指す先を含む）の同名・同種類のタグを使う。
+キーワードなしの `X` はtypedef名として検索し、同名タグへ置き換えない。
+`typedef struct X { ... } X;`、`typedef struct X X;` と後からの本体、無名タグのtypedefに対応する。
+本体のないタグ、struct/union/enumの種類が食い違うタグは未解決。enumの宣言自体の取り込みは対象外。
+条件の別々の枝にある内容の違う重複も、タグとtypedef名を分けて数える。
+
+constは共通の型記述に保持する。constの構造体のメンバ、constの配列とconst要素型の配列の要素は読み取り専用。
+親からの参照とメンバを直接指すマクロで書き込み可否は同じになる。
+ポインタ自身のconstは指す先に伝播せず、間接参照後は指す先の型のconstに従う。
+CSV入力はエラー、GUIの `/api/write` は400、`/api/symbols` の子の `writable` もfalseとなる。
+volatileは書き込み可否に影響しない。型表示はconstを含む。
 
 構造体は基本型・別名・固定長配列・ビットフィールド・入れ子のstruct/union・無名メンバを扱う。
 char系の整列は1、他は2。配列は要素の整列、構造体はメンバの最大整列。

@@ -21,6 +21,19 @@ for k in dwarf2 dwarf3 dwarf4 nodwarf; do
     check "mkabs $k" "$WORK/mkabs" "$k" "$WORK/tp_$k.abs"
 done
 TP="$WORK/tp_dwarf2.abs"
+for version in dwarf2 dwarf3 dwarf4; do
+    for const_name in g_const_mixed.ro 'g_const_elements[0]' g_const_record.w; do
+        printf 'mod,f_bits,const path,1,0\n#COMMENT,%s\n,1\n' "$const_name" > "$WORK/dwarf_const.csv"
+        "$RS" run --abs "$WORK/tp_$version.abs" "$WORK/dwarf_const.csv" -o "$WORK/dwarf_const" > "$WORK/dwarf_const.log" 2>&1
+        rc=$?
+        check "$version const input $const_name rejected" test "$rc" -eq 2
+    done
+    printf 'mod,f_bits,const path,1,1\n#COMMENT,g_const_mixed.rw,g_const_mixed.rw\n,123,123\n' > "$WORK/dwarf_mutable.csv"
+    "$RS" run --abs "$WORK/tp_$version.abs" "$WORK/dwarf_mutable.csv" -o "$WORK/dwarf_mutable" > "$WORK/dwarf_const.log" 2>&1
+    rc=$?
+    check "$version mutable sibling writable" test "$rc" -eq 0
+done
+
 
 # 結果の合計行を確かめる: rl78_run 名前 期待する終了コード 期待する合計 -- sim run の引数...
 rl78_run() {

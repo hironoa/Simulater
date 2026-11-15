@@ -152,6 +152,13 @@ int main(int argc, char **argv)
     visit(exact(all, "g_cal.hi"), 0);
     sj_free(all);
     if (strcmp(argv[3], "mock") == 0) {
+        expect_symbol("CONST_ARRAY[0]", "const u8", 1, 0);
+        expect_symbol("MIXED.field", "const u8", 1, 0);
+        expect_symbol("DIRECT_FIELD", "const u8", 1, 0);
+        expect_symbol("CONST_STRUCT.mutable", "u8", 1, 0);
+        expect_symbol("CONST_STRUCT.data[0]", "u8", 1, 0);
+        expect_symbol("DIRECT_NEST", "u8", 1, 0);
+        expect_symbol("MIXED.mutable", "u8", 1, 1);
         expect_symbol("g_cal_const.lo", "uint8", 1, 0);
         expect_symbol("g_cal_array[1].lo", "uint8", 1, 1);
         expect_symbol("gp_cal->lo", "uint8", 1, 1);

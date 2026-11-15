@@ -412,6 +412,7 @@ enum {
     L_p_u8, L_cu8, L_p_cu8, L_fp_u8, L_fp_cu8,
     L_S, L_p_S, L_cS, L_p_cS, L_W, L_E, L_E2, L_U, L_C, L_Cu, L_Cs,
     L_a_u8_8, L_a_u8_3, L_a_u8_2_3, L_cu16, L_a_cu16_4, L_cchar, L_a_cchar_8, L_vu16, L_a_u8_2,
+    L_const_mixed,
     L_last
 };
 
@@ -491,6 +492,11 @@ static void common_types(void)
     d_qual(L_cchar, TAG_const, L_char);
     d_array(L_a_cchar_8, L_cchar, 8, 0);
     d_qual(L_vu16, TAG_volatile, L_u16);
+    d_agg_begin(L_const_mixed, TAG_struct, "ConstMixed", 4);
+    d_member("ro", L_cu8, 0);
+    d_member("rw", L_u8, 1);
+    d_member("data", L_a_u8_2, 2);
+    d_end();
 }
 
 #define FUNC(n, ext, ret) d_func_begin(n, faddr(n), fend(faddr(n)), ext, ret)
@@ -502,6 +508,10 @@ static void build_dwarf(void)
     common_types();
     d_var("g_a", L_u8, 0xFE100, 1);           /* 最初の変数に独自属性が付く */
     d_junk_tag();
+    d_var("g_const_mixed", L_const_mixed, 0xFE180, 1);
+    d_var("g_const_elements", L_a_cu16_4, 0xFE184, 1);
+    d_var("g_const_record", L_cS, 0xFE18C, 1);
+
     d_var("g_c", L_u8, 0xFE101, 1);
     d_var("g_b", L_u16, 0xFE102, 1);
     d_var("g_l", L_u32, 0xFE104, 1);
@@ -554,11 +564,11 @@ static void build_dwarf(void)
     FUNC("f_far_write", 1, L_fp_u8); d_param("p", L_fp_u8); d_param("v", L_u8); d_end();
     FUNC("f_far2", 1, -1); d_param("a", L_u8); d_param("w", L_u16); d_param("p", L_fp_u8); d_end();
     FUNC("f_far3", 1, -1); d_param("w1", L_u16); d_param("w2", L_u16); d_param("p", L_fp_u8); d_end();
-    FUNC("f_sum", 1, L_u16); d_param("p", L_p_cu8); d_param("n", L_u8); d_end();
+    FUNC("f_sum", 1, L_u16); d_param("p", L_p_u8); d_param("n", L_u8); d_end();
     FUNC("f_neg", 1, L_i8); d_end();
     FUNC("f_float", 1, L_float); d_end();
     FUNC("f_ll", 1, L_llong); d_end();
-    FUNC("f_ptr_struct", 1, L_u16); d_param("p", L_p_cS); d_end();
+    FUNC("f_ptr_struct", 1, L_u16); d_param("p", L_p_S); d_end();
     FUNC("f_bits", 1, -1); d_end();
     FUNC("f_mulhu", 1, L_u32); d_param("a", L_u16); d_param("b", L_u16); d_end();
     FUNC("f_mdu", 1, L_u16); d_param("a", L_u16); d_param("b", L_u16); d_end();

@@ -53,6 +53,7 @@ call :run "G22: .data copied after RAM filled with 0xA5" 0 "OK 1, NG 0" --cfg "%
 call :run "G23: bss cleared after RAM filled with 0xA5" 0 "OK 1, NG 0" --cfg "%R%\csv\g23_fill.cfg" "%R%\csv\g23_startup.csv"
 
 echo == generated .abs: calling convention and types
+for %%K in (dwarf2 dwarf3 dwarf4) do for %%N in (g_const_mixed.ro g_const_elements[0] g_const_record.w) do call :dwarf_const "%%K" "%%N"
 for %%K in (dwarf2 dwarf3 dwarf4) do call :run "%%K: calling convention and types (43 rows)" 0 "OK 43, NG 0" --abs "%WORK%\tp_%%K.abs" "%R%\csv\synth_call.csv" "%R%\csv\synth_types.csv"
 call :run "result CSVs for byte compare" 0 "OK 43, NG 0" --abs "%TP%" "%R%\csv\synth_call.csv" "%R%\csv\synth_types.csv" --fixed-time
 fc /b "%WORK%\r_out\synth_call.csv" "%R%\expected\synth_call.csv" >nul
@@ -496,3 +497,12 @@ rem :rcond_list load-module
 "%RS%" list --abs "%~1" --cfg "%WORK%\cond.cfg" COND_ > "%WORK%\cond_list.log" 2>&1
 "%RS%" info --abs "%~1" --cfg "%WORK%\cond.cfg" > "%WORK%\cond_info.log" 2>&1
 exit /b 0
+
+:dwarf_const
+> "%WORK%\dwarf_const.csv" echo mod,f_bits,const path,1,0
+>> "%WORK%\dwarf_const.csv" echo #COMMENT,%~2
+>> "%WORK%\dwarf_const.csv" echo ,1
+"%SIM_RL78%" run --abs "%WORK%\tp_%~1.abs" "%WORK%\dwarf_const.csv" -o "%WORK%\dwarf_const" > "%WORK%\dwarf_const.log" 2>&1
+set RC=%ERRORLEVEL%
+if "%RC%"=="2" (call :ok "%~1 const %~2 rejected") else (call :ng "%~1 const %~2 rejected")
+exit /b

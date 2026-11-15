@@ -176,6 +176,13 @@ check "definition addresses counts and malformed inputs" "$WORK/check_defines_te
 # shellcheck disable=SC2086
 check "build defines text ASan UBSan" "${CC:-clang}" -std=c11 -O1 -g -Wall -Wextra -fsanitize=address,undefined -fno-omit-frame-pointer -D_DEFAULT_SOURCE -I"$ROOT/runtime/include" -I"$ROOT/runtime/src" $TEXT_SRCS -o "$WORK/check_defines_sanitize" -lpthread -lm
 check "definition text ASan UBSan 200 malformed inputs" "$WORK/check_defines_sanitize" "$T" "$WORK"
+echo "== defines: const paths reject CSV inputs"
+while read -r const_name; do
+    printf 'mod,TEST_cycle,const path,1,0\n#COMMENT,%s\n,123\n' "$const_name" > "$WORK/const_path.csv"
+    "$SIM" run "$WORK/const_path.csv" --cfg "$T/defines/type_contract.cfg" -o "$WORK/const_path" > "$WORK/const_path.log" 2>&1
+    const_rc=$?
+    check "const CSV $const_name exits 2" test "$const_rc" -eq 2
+done < "$T/defines/type_contract_ro.txt"
 echo "== defines: value expressions (mock)"
 "$SIM" run "$T/defines/value_forms.csv" --cfg "$T/defines/value_forms.cfg" -o "$WORK/value_good" > "$WORK/value_good.log" 2>&1
 RC=$?
@@ -496,7 +503,7 @@ if ! command -v curl > /dev/null 2>&1; then
 else
     PORT=$((20000 + $$ % 20000))
     mkdir -p "$WORK/nohtml"
-    "$SIM" gui --no-browser --port "$PORT" --period-ms 2 --html-dir "$WORK/nohtml" > "$WORK/gui.log" 2>&1 &
+    "$SIM" gui --no-browser --cfg "$T/defines/type_contract.cfg" --port "$PORT" --period-ms 2 --html-dir "$WORK/nohtml" > "$WORK/gui.log" 2>&1 &
     GUI_PID=$!
     U="http://127.0.0.1:$PORT"
     i=0
@@ -506,6 +513,18 @@ else
     done
     if ! kill -0 "$GUI_PID" 2>/dev/null; then cat "$WORK/gui.log"; fi
     post() { curl -s -o "$WORK/$2" -w '%{http_code}' -X POST -H 'Content-Type: application/json' --data-binary "@$T/gui/$1" "$U$3"; }
+
+    while read -r const_name; do
+        curl -s -G --data-urlencode "q=$const_name" "$U/api/symbols" > "$WORK/const_symbol.json"
+        check "const symbol $const_name readonly" contains "$WORK/const_symbol.json" '"writable":false'
+        printf '{"name":"%s","value":"123"}' "$const_name" > "$WORK/const_write.json"
+        CODE=$(curl -s -o "$WORK/const_write.out" -w '%{http_code}' -X POST --data-binary "@$WORK/const_write.json" "$U/api/write")
+        check "const API $const_name rejects write" test "$CODE" = 400
+    done < "$T/defines/type_contract_ro.txt"
+    curl -s -G --data-urlencode 'q=CONST_STRUCT' "$U/api/symbols" > "$WORK/const_children.json"
+    check "const symbols expand children" contains "$WORK/const_children.json" 'CONST_STRUCT.data[0]'
+    curl -s -G --data-urlencode 'q=MIXED.mutable' "$U/api/symbols" > "$WORK/const_mutable.json"
+    check "mutable sibling writable" contains "$WORK/const_mutable.json" '"writable":true'
 
     check "/api/info が応答" contains "$WORK/info.json" '"version":"0.1.0"'
     check "/api/info に functions と既定の関数" contains "$WORK/info.json" '"func":"TEST_cycle","functions":["eng_judge_gear"'

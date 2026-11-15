@@ -265,6 +265,7 @@ static sim_type *lmf_type(ltypes *c, const lsymbol *s, int function, unsigned de
     /* タグの共有型に修飾名を書き込まない。 */
     d = ar_alloc(&c->t->ar, sizeof *d); *d = *t;
     d->name = type_name(&c->t->ar, t);
+    d->is_const = (q & 0xF000)==0x5000;
     if (q == 0x5000 || q == 0x5100 || q == 0x1000 || q == 0x1100) {
         sim_buf name;
         sim_buf_init(&name);

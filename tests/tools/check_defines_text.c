@@ -16,6 +16,12 @@ static sim_ctx *load(const char *cfg,sim_backend **backend)
     CHECK(*backend!=NULL);
     if (!*backend) return NULL;
     c=sim_ctx_new(*backend);
+    if (strstr(cfg,"type_contract.cfg")) {
+        static const sim_type byte={SIM_T_UINT,"u8",1,NULL,0,NULL,0,0};
+        static const sim_member field={"value",0,-1,0,&byte};
+        static const sim_type tag={SIM_T_STRUCT,"const struct DebugConst",1,NULL,0,&field,1,1};
+        CHECK(sim_ctx_define(c,"DEBUG_CONST_SOURCE",&tag,0xF950,-1,0,"test",1)>0);
+    }
     CHECK(sim_defines_load(c,&o,err,sizeof err)==0);
     return c;
 }
@@ -51,6 +57,65 @@ int main(int argc,char **argv)
     unsigned i;
     static const char *names[]={"UTF8_REG","UTF8_BLOCK","UTF8_BOM","UTF8_BOM_BLOCK","SJIS_SLASH","SJIS_BLOCK","SJIS_STRING","SJIS_CHAR","SJIS_IF","SJIS_TYPE","SJIS_INVALID_NL","SJIS_INVALID_STAR","SJIS_INVALID_SLASH","SJIS_INVALID_QUOTE","SJIS_KANA","ASCII_REG"};
     if (argc!=3) return 2;
+    snprintf(path,sizeof path,"%s/defines/type_contract.cfg",argv[1]);
+    c=load(path,&b); if (!c) return 1;
+    variable(c,"REG_B",0xF910,2,0);
+    variable(c,"REG_VALUE",0xF910,2,0);
+    variable(c,"REG_BYTE",0xF912,1,0);
+    variable(c,"SAME",0xF914,2,0);
+    variable(c,"FORWARD",0xF916,2,0);
+    variable(c,"ANONYMOUS",0xF918,2,0);
+    variable(c,"RIGHT_UNION",0xF91C,2,0);
+    variable(c,"DEBUG_TAG",0xF920,1,0);
+    {
+        const char *bad[]={"INCOMPLETE","WRONG_KIND","CLASH_STRUCT","CLASH_UNION","DEBUG_WRONG"};
+        const char *ro[]={"CONST_ARRAY[0]","MIXED.field","DIRECT_FIELD","CONST_STRUCT.mutable","CONST_STRUCT.data[0]","DIRECT_NEST","CONST_ARRAY","&CONST_ARRAY","CONST_ARRAY:1","REG_B.value","MIXED.mutable","DEBUG_UNQUAL.value"};
+        char err[256]; unsigned j;
+        for (j=0;j<sizeof bad/sizeof bad[0];j++) {
+            sim_ref *r=sim_ref_parse_symbol(c,bad[j],err,sizeof err);
+            CHECK(r==NULL); sim_ref_free(r);
+        }
+        sim_ctx_refresh_symbols(c);
+        for (j=0;j<sizeof ro/sizeof ro[0];j++) {
+            sim_ref *r=sim_ref_parse(c,ro[j],err,sizeof err);
+            CHECK(r!=NULL);
+            if (r) {
+                sim_cellval value;
+                unsigned char before[32],after[32];
+                CHECK(sim_ref_writable(r)==(j>=9));
+                CHECK(sim_parse_cell("123",3,&value,err,sizeof err)==0);
+                CHECK(b->read(b,0xF900,before,sizeof before,err,sizeof err)==0);
+                CHECK((sim_ref_write(c,r,&value,err,sizeof err)==0)==(j>=9));
+                CHECK(b->read(b,0xF900,after,sizeof after,err,sizeof err)==0);
+                if (j<9) CHECK(memcmp(before,after,sizeof before)==0);
+                sim_cellval_free(&value);
+            }
+            sim_ref_free(r);
+        }
+    }
+    {
+        sim_type byte={SIM_T_UINT,"byte",1,NULL,0,NULL,0,0};
+        sim_type cb=byte, ptr={SIM_T_PTR,NULL,2,&byte,0,NULL,0,1}, cp=ptr;
+        const char *expr[]={"CONST_POINTER","CONST_POINTER[0]","*CONST_POINTER","TO_CONST[0]","*TO_CONST"};
+        char err[256]; unsigned j;
+        cb.is_const=1; cp.is_const=0; cp.target=&cb;
+        CHECK(sim_ctx_define(c,"CONST_POINTER",&ptr,0xF960,-1,0,"test",2)>0);
+        CHECK(sim_ctx_define(c,"TO_CONST",&cp,0xF962,-1,0,"test",2)>0);
+        for (j=0;j<5;j++) {
+            sim_ref *r=sim_ref_parse(c,expr[j],err,sizeof err);
+            CHECK(r!=NULL); if (r) CHECK(sim_ref_writable(r)==(j==1 || j==2));
+            sim_ref_free(r);
+        }
+    }
+    close_ctx(c,b);
+    for (i=0;i<2;i++) {
+        snprintf(path,sizeof path,"%s/defines/type_branches_%s.cfg",argv[1],i?"off":"on");
+        c=load(path,&b); if (!c) return 1;
+        variable(c,"BRANCH_TAG",0xF930,1,0);
+        variable(c,"BRANCH_ALIAS",0xF932,1,0);
+        info_has(c,i?"duplicates=3":"duplicates=0");
+        close_ctx(c,b);
+    }
     snprintf(path,sizeof path,"%s/defines/value_forms.cfg",argv[1]);
     c=load(path,&b); if (!c) return 1;
     variable(c,"df_unit",0xFF91C,1,0);

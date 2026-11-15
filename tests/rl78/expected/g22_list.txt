@@ -1,6 +1,6 @@
 var  0xFEF00 g_result_buffer                          uint16_t  [main.c]
-var  0x02000 g_fih_hz                                 uint32_t[16] (const)  [src\smc_gen\r_bsp\mcu\rl78_g22\mcu_clocks.c]
-var  0x02040 g_fim_hz                                 uint32_t[4] (const)  [src\smc_gen\r_bsp\mcu\rl78_g22\mcu_clocks.c]
+var  0x02000 g_fih_hz                                 const uint32_t[16] (const)  [src\smc_gen\r_bsp\mcu\rl78_g22\mcu_clocks.c]
+var  0x02040 g_fim_hz                                 const uint32_t[4] (const)  [src\smc_gen\r_bsp\mcu\rl78_g22\mcu_clocks.c]
 func 0x00144 main() -> void  [main.c]
 func 0x0015D R_Config_ADC_Create() -> void  [src\smc_gen\Config_ADC\Config_ADC.c]
 func 0x0019E R_Config_ADC_Start() -> void  [src\smc_gen\Config_ADC\Config_ADC.c]

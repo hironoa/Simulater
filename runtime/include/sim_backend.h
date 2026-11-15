@@ -60,6 +60,7 @@ struct sim_type {
     uint32_t count;          /* ARRAY の要素数 */
     const sim_member *members;
     int nmembers;
+    int is_const;           /* この型自身の const。PTR の指す先は target が保持 */
 };
 
 typedef struct {
