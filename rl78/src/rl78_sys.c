@@ -327,6 +327,9 @@ void rl78_destroy(rl78_cpu *c)
     free(c->mem);
     free(c->bplist);
     free(c->bpbits);
+    free(c->callprof);
+    free(c->xl_index);
+    free(c->xl_inside);
     free(c);
 }
 
@@ -573,7 +576,20 @@ rl78_stop_reason rl78_run(rl78_cpu *c, uint64_t max_insns)
         lim = remaining;
         if (c->hold_irq && c->nirqs) lim = 1; /* run the instruction after a hold insn */
         c->hold_irq = 0;
-        n = rl78__exec(c, lim, &why);
+        if (c->xl_mod && lim > 1 && !c->xl_bp_inside && c->skip_bp_pc == NO_BP) {
+            n = rl78__xl_run(c, lim, &why);
+            if (n == 0 && why == -1) {
+                /* no translated code for this pc (or too close to the limit, or a breakpoint):
+                   interpret a little; the burst grows while nothing translated turns up */
+                uint64_t burst = (uint64_t)1 << (c->xl_miss < 12u ? c->xl_miss : 12u);
+                if (c->xl_miss < 12u) c->xl_miss++;
+                n = rl78__exec(c, lim < burst ? lim : burst, &why);
+            } else {
+                c->xl_miss = 0;
+            }
+        } else {
+            n = rl78__exec(c, lim, &why);
+        }
         c->skip_bp_pc = NO_BP;
         c->insns += n;
         remaining = (n >= remaining) ? 0 : remaining - n;
@@ -621,6 +637,7 @@ int rl78_add_breakpoint(rl78_cpu *c, uint32_t addr)
     c->bplist[c->nbps++] = addr;
     c->bptrap[addr] = BP_OPCODE;
     c->bpbits[addr >> 3] = (uint8_t)(c->bpbits[addr >> 3] | (1u << (addr & 7u)));
+    rl78__xl_breakpoint_changed(c, addr, 0);
     return 0;
 }
 
@@ -634,6 +651,7 @@ int rl78_remove_breakpoint(rl78_cpu *c, uint32_t addr)
     c->bplist[i] = c->bplist[--c->nbps];
     c->bptrap[addr] = 0;
     c->bpbits[addr >> 3] = (uint8_t)(c->bpbits[addr >> 3] & ~(1u << (addr & 7u)));
+    rl78__xl_breakpoint_changed(c, addr, 0);
     return 0;
 }
 
@@ -646,6 +664,7 @@ void rl78_clear_breakpoints(rl78_cpu *c)
         c->bpbits[a >> 3] = 0;
     }
     c->nbps = 0;
+    rl78__xl_breakpoint_changed(c, 0, 0);
 }
 
 int rl78_breakpoint_count(const rl78_cpu *c) { return c->nbps; }

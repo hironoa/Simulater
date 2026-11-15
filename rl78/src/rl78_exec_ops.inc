@@ -59,10 +59,10 @@
         case 0x13: R[0] = R[2]; R[1] = R[3]; CKS1(1, 2); pc += 1; break;
         case 0x15: R[0] = R[4]; R[1] = R[5]; CKS1(1, 2); pc += 1; break;
         case 0x17: R[0] = R[6]; R[1] = R[7]; CKS1(1, 2); pc += 1; break;
-        case 0x30: R[0] = M[pc + 1]; R[1] = M[pc + 2]; CKS1(1, 2); pc += 3; break;
-        case 0x32: R[2] = M[pc + 1]; R[3] = M[pc + 2]; CKS1(1, 2); pc += 3; break;
-        case 0x34: R[4] = M[pc + 1]; R[5] = M[pc + 2]; CKS1(1, 2); pc += 3; break;
-        case 0x36: R[6] = M[pc + 1]; R[7] = M[pc + 2]; CKS1(1, 2); pc += 3; break;
+        case 0x30: R[0] = (uint8_t)B1; R[1] = (uint8_t)B2; CKS1(1, 2); pc += 3; break;
+        case 0x32: R[2] = (uint8_t)B1; R[3] = (uint8_t)B2; CKS1(1, 2); pc += 3; break;
+        case 0x34: R[4] = (uint8_t)B1; R[5] = (uint8_t)B2; CKS1(1, 2); pc += 3; break;
+        case 0x36: R[6] = (uint8_t)B1; R[7] = (uint8_t)B2; CKS1(1, 2); pc += 3; break;
         case 0x33: case 0x35: case 0x37: { /* XCHW AX,rp */
             unsigned k = (op - 0x31u);
             uint8_t t0 = R[0], t1 = R[1];
@@ -397,14 +397,15 @@
             WR8(0xF0000u | ((sp - 4u) & 0xFFFFu), ret);
             C->sp = (uint16_t)((sp - 4u) & 0xFFFFu);
             pc = tgt;
+            CALLPROF(pc);
             CKS1(3, 4);
             break;
         }
 
         /* ---- ES: prefix ---- */
         case 0x11: { /* ES: prefix; the prefixed instruction runs in the general copy */
-            unsigned nop = M[pc + 1];
-            if (!es_ok(nop, M[pc + 2])) UNDEF();
+            unsigned nop = B1;
+            if (!es_ok(nop, B2)) UNDEF();
             segv = (uint32_t)C->es << 16;
             pc += 1;
             CK(1);
@@ -529,6 +530,7 @@
                 WR8(0xF0000u | ((sp - 4u) & 0xFFFFu), ret);
                 C->sp = (uint16_t)((sp - 4u) & 0xFFFFu);
                 pc = tgt;
+                CALLPROF(pc);
                 CKS1(5, 6);
                 break;
             }
@@ -541,6 +543,7 @@
                 WR8(0xF0000u | ((sp - 4u) & 0xFFFFu), ret);
                 C->sp = (uint16_t)((sp - 4u) & 0xFFFFu);
                 pc = ((uint32_t)(C->cs & 0xFu) << 16) | tgt;
+                CALLPROF(pc);
                 CKS1(3, 4);
                 break;
             }

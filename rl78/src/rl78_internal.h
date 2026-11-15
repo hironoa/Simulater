@@ -76,6 +76,16 @@ struct rl78_cpu {
     uint32_t irq_seq;
 
     uint8_t sink[256]; /* writes to read-only pages land here */
+
+    uint8_t *callprof;  /* call-target bitmap (1 bit per address), or NULL */
+
+    /* translated code (rl78_xlate.c): block start -> leader number + 1 */
+    uint32_t *xl_index;
+    uint8_t *xl_inside;  /* bitmap: instructions inside a translated block of some chunk (not its start) */
+    const struct rl78_xl_module *xl_mod;
+    uint64_t xl_insns;  /* instructions executed by translated code */
+    int xl_bp_inside;   /* breakpoints set inside translated blocks: translated code is not used while > 0 */
+    unsigned xl_miss;   /* consecutive lookups that found no translated code (interpreter burst length) */
     rl78_fault fault;
 };
 
@@ -88,6 +98,11 @@ void rl78__rebuild_pages(rl78_cpu *c);
 void rl78__set_psw(rl78_cpu *c, uint8_t v);
 int rl78__insn_len(rl78_cpu *c, uint32_t pc);
 void rl78__write_macr(rl78_cpu *c, uint32_t v);
+
+/* translated code (rl78_xlate.c) */
+uint64_t rl78__exec(rl78_cpu *C, uint64_t lim, int *why);
+uint64_t rl78__xl_run(rl78_cpu *c, uint64_t lim, int *why);
+void rl78__xl_breakpoint_changed(rl78_cpu *c, uint32_t addr, int added);
 
 static inline uint8_t rl78__rd8(rl78_cpu *c, uint32_t a)
 {
