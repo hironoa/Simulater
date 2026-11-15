@@ -396,6 +396,22 @@ int rl78_set_call_profile(rl78_cpu *c, int on)
 
 const uint8_t *rl78_call_profile(const rl78_cpu *c) { return c->callprof; }
 
+/* The bytes of the instruction at a (as the memory is now: attach before anything changes the code). */
+static void mark_insn_bytes(rl78_cpu *c, uint32_t a)
+{
+    int len = rl78__insn_len(c, a), k;
+    for (k = 0; k < len && a + (uint32_t)k < RL78_MEM_SIZE; k++) {
+        uint32_t b = a + (uint32_t)k;
+        c->xl_bytes[b >> 3] |= (uint8_t)(1u << (b & 7u));
+    }
+}
+
+int rl78_xl_covers(const rl78_cpu *c, uint32_t addr)
+{
+    addr &= 0xFFFFFu;
+    return c->xl_bytes ? (c->xl_bytes[addr >> 3] >> (addr & 7u)) & 1 : 0;
+}
+
 int rl78_xl_attach(rl78_cpu *c, const rl78_xl_module *m, char *err, size_t errlen)
 {
     uint32_t i;
@@ -406,6 +422,8 @@ int rl78_xl_attach(rl78_cpu *c, const rl78_xl_module *m, char *err, size_t errle
         c->xl_index = NULL;
         free(c->xl_inside);
         c->xl_inside = NULL;
+        free(c->xl_bytes);
+        c->xl_bytes = NULL;
         c->xl_mod = NULL;
         c->xl_bp_inside = 0;
         return 0;
@@ -428,11 +446,19 @@ int rl78_xl_attach(rl78_cpu *c, const rl78_xl_module *m, char *err, size_t errle
     } else {
         memset(c->xl_inside, 0, RL78_MEM_SIZE / 8u);
     }
+    if (!c->xl_bytes) {
+        c->xl_bytes = (uint8_t *)calloc(RL78_MEM_SIZE / 8u + 2u, 1);
+        if (!c->xl_bytes) FAIL("out of memory");
+    } else {
+        memset(c->xl_bytes, 0, RL78_MEM_SIZE / 8u + 2u);
+    }
 #undef FAIL
     for (i = 0; i < m->ninside; i++) {
         uint32_t a = m->inside[i] & 0xFFFFFu;
         c->xl_inside[a >> 3] |= (uint8_t)(1u << (a & 7u));
+        mark_insn_bytes(c, a);
     }
+    for (i = 0; i < m->nleaders; i++) mark_insn_bytes(c, m->leaders[i].pc & 0xFFFFFu);
     for (i = 0; i < m->nleaders; i++) c->xl_index[m->leaders[i].pc & 0xFFFFFu] = i + 1u;
     c->xl_mod = m;
     c->xl_miss = 0;

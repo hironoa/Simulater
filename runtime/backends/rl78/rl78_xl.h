@@ -33,6 +33,13 @@ const char *rl78_xl_dir(const rl78_xl *x);
 const char *rl78_xl_why_off(const rl78_xl *x); /* 変換できない理由（できるなら ""） */
 /* 対象関数として呼び出した入口を知らせる（CALL の飛び先ではないので記録に出ない） */
 void rl78_xl_note_entry(rl78_xl *x, uint32_t addr);
+/* プログラムの外から（テスト CSV の入力など）コードフラッシュの 1 バイトを書き換えた後に呼ぶ。変換した命令のバイトが
+ * 開いたときと違う間は、変換したコードを使わない */
+void rl78_xl_host_wrote(rl78_xl *x, uint32_t addr, uint8_t value);
+/* メモリを開いたときの状態に戻した後に呼ぶ */
+void rl78_xl_memory_restored(rl78_xl *x);
+/* 変換したコードを一時的に止めた（rl78_xl_set_enabled(cpu, 0)）後、使える状態なら使い直す */
+void rl78_xl_resume(rl78_xl *x);
 /* まだ変換していない関数（記録された飛び先、知らされた入口、extra）があれば、全体を変換・コンパイルし直す。
  * 作り直したら新しい関数の数、何もなければ 0、失敗したら -1（経過と理由は標準出力に書く）。
  * できた変換結果は次に開いたときから使う */

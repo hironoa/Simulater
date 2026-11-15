@@ -569,7 +569,7 @@ static int run_call(be_t *z, const char *what, char *err, size_t errlen)
     z->tot_clocks = tc;
     rl78_xl_set_enabled(z->cpu, 0);
     rc2 = run_to(z, z->sentinel, z->max_insns, what, err, errlen);
-    rl78_xl_set_enabled(z->cpu, 1);
+    rl78_xl_resume(z->xl);
     {
         static const char *const RN[RL78_REG_COUNT] = {"X", "A", "C", "B", "E", "D", "L", "H", "AX", "BC", "DE", "HL", "PC", "SP", "PSW", "ES", "CS", "PMC"};
         char diff[400];
@@ -745,7 +745,10 @@ static int b_write(sim_backend *b, uint64_t addr, const void *buf, size_t n, cha
         uint32_t a = (uint32_t)addr + (uint32_t)i;
         /* SP/PSW/CS/ES/PMC は CPU のレジスタなのでバス経由で書く */
         if (a >= 0xFFFF8u) rl78_write8(z->cpu, a, p[i]);
-        else rl78_load(z->cpu, a, p + i, 1);
+        else {
+            rl78_load(z->cpu, a, p + i, 1);
+            if (z->xl) rl78_xl_host_wrote(z->xl, a, p[i]);
+        }
     }
     return 0;
 }
@@ -775,6 +778,7 @@ static int b_reset(sim_backend *b, char *err, size_t errlen)
     (void)err;
     (void)errlen;
     rl78_snapshot_restore(z->cpu, z->snap);
+    if (z->xl) rl78_xl_memory_restored(z->xl);
     z->heap_cur = z->heap_lo;
     return 0;
 }
@@ -1454,6 +1458,7 @@ sim_backend *sim_backend_open(const sim_open_opts *o, char *err, size_t errlen)
     if (z->xl_mode != RL78_XL_OFF) {
         rl78_xl_opts xo;
         uint64_t jobs = 0;
+        char *xcc = NULL, *xdir = NULL;
         memset(&xo, 0, sizeof xo);
         if ((s = sim_cfg_get(&z->cfg, "xlate_jobs")) && (parse_u64(s, &jobs) || jobs < 1 || jobs > 64)) {
             snprintf(err, errlen, "sim.cfg: xlate_jobs = %s を読めません（1〜64）", s);
@@ -1465,12 +1470,17 @@ sim_backend *sim_backend_open(const sim_open_opts *o, char *err, size_t errlen)
         xo.rom_size = z->cc.rom_size;
         xo.exe_dir = o->exe_dir;
         xo.rt_dir = getenv("SIM_XLATE_RT");
-        xo.cc = sim_cfg_get(&z->cfg, "xlate_cc");
-        xo.dir = sim_cfg_get(&z->cfg, "xlate_dir");
+        /* パスは設定ファイルのフォルダから見る。区切りのない xlate_cc（clang だけ）は PATH から探す */
+        if ((s = sim_cfg_get(&z->cfg, "xlate_cc"))) xcc = (strchr(s, '/') || strchr(s, '\\')) ? sim_cfg_path(&z->cfg, s) : sim_xstrdup(s);
+        if ((s = sim_cfg_get(&z->cfg, "xlate_dir"))) xdir = sim_cfg_path(&z->cfg, s);
+        xo.cc = xcc;
+        xo.dir = xdir;
         xo.abs_path = z->abs_path;
         xo.core_desc = z->core_desc;
         xo.jobs = (int)jobs;
         z->xl = rl78_xl_open(z->cpu, &xo);
+        free(xcc);
+        free(xdir);
         if (z->xl_mode == RL78_XL_VERIFY) {
             z->vsnap = rl78_snapshot_create(z->cpu);
             z->vmem = malloc(0x100000);

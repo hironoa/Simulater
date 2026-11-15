@@ -643,6 +643,33 @@ else
     check "変換方式: CSV の % 行の置換（ブレークポイント）でも変換したコードを使う" grep -q "変換したコードで実行: [1-9][0-9]* 命令" "$XW/stub.log"
     "$RS" xlate --abs "$XW/tp.abs" > "$XW/again.log" 2>&1
     check "sim xlate: 変換済みなら何もしない" sh -c "! grep -q '変換: 新しい関数' '$XW/again.log'"
+    # テスト CSV の入力でコードフラッシュの命令のバイトを書き換える（f_neg の即値 0x205 を 42 に、あとで元の 0xFD に戻す）
+    mkdir -p "$XW/hw"
+    cp "$TP" "$XW/hw/tp.abs"
+    printf 'mod,f_neg,x,1,1\n#COMMENT,0x205:1,f_neg@@\n,42,42\nmod,f_neg,y,1,1\n#COMMENT,0x205:1,f_neg@@\n,0xFD,-3\n' > "$XW/hw/poke.csv"
+    printf 'mod,f_neg,z,0,1\n#COMMENT,f_neg@@\n,-3\n' > "$XW/hw/plain.csv"
+    "$RS" run --abs "$XW/hw/tp.abs" "$XW/hw/poke.csv" -o "$XW/hw/out_i" > "$XW/hw/i.log" 2>&1
+    check "コードフラッシュへの入力: 解釈実行では書き換えた命令で動く（OK 2）" contains "$XW/hw/i.log" "合計: 総数 2, OK 2, NG 0"
+    "$RS" run --exec xlate --abs "$XW/hw/tp.abs" "$XW/hw/poke.csv" -o "$XW/hw/out_x" > "$XW/hw/x1.log" 2>&1
+    check "コードフラッシュへの入力: 変換結果がない初回も同じ" cmp -s "$XW/hw/out_i/poke.csv" "$XW/hw/out_x/poke.csv"
+    "$RS" run --exec xlate --abs "$XW/hw/tp.abs" "$XW/hw/plain.csv" -o "$XW/hw/out_x" > "$XW/hw/x2.log" 2>&1
+    check "コードフラッシュへの入力: 書き換え後の内容で変換結果を作らない（次の実行は元の命令で -3）" contains "$XW/hw/x2.log" "合計: 総数 1, OK 1, NG 0"
+    check "コードフラッシュへの入力: 次の実行は変換したコードを使っている" grep -q "変換したコードで実行: [1-9][0-9]* 命令" "$XW/hw/x2.log"
+    "$RS" run --exec xlate --abs "$XW/hw/tp.abs" "$XW/hw/poke.csv" -o "$XW/hw/out_x" > "$XW/hw/x3.log" 2>&1
+    check "コードフラッシュへの入力: 変換済みでも書き換えた命令で動く（古い変換結果を使わない）" cmp -s "$XW/hw/out_i/poke.csv" "$XW/hw/out_x/poke.csv"
+    check "コードフラッシュへの入力: 元の値に戻したら変換したコードを使い直す" grep -q "変換したコードで実行: [1-9][0-9]* 命令" "$XW/hw/x3.log"
+    "$RS" run --exec verify --abs "$XW/hw/tp.abs" "$XW/hw/poke.csv" -o "$XW/hw/out_v" > "$XW/hw/v.log" 2>&1
+    check "コードフラッシュへの入力: 照合でも一致する" cmp -s "$XW/hw/out_i/poke.csv" "$XW/hw/out_v/poke.csv"
+    # 設定ファイルの相対パス（xlate_dir、xlate_cc）は設定ファイルのフォルダから見る
+    mkdir -p "$XW/rel/sub"
+    cp "$TP" "$XW/rel/tp.abs"
+    printf 'exec = xlate\nxlate_dir = cache\n' > "$XW/rel/sim.cfg"
+    (cd "$XW/rel/sub" && "$RS" run --abs "$XW/rel/tp.abs" --cfg "$XW/rel/sim.cfg" "$R/csv/synth_call.csv" -o "$XW/rel/out" > "$XW/rel/run.log" 2>&1)
+    check "xlate_dir の相対パスは設定ファイルのフォルダから見る" test -d "$XW/rel/cache"
+    check "xlate_dir の相対パス: 作業フォルダには作らない" test ! -e "$XW/rel/sub/cache"
+    printf 'exec = xlate\nxlate_dir = cache2\nxlate_cc = tools/no-such-clang\n' > "$XW/rel/sim.cfg"
+    (cd "$XW/rel/sub" && "$RS" run --abs "$XW/rel/tp.abs" --cfg "$XW/rel/sim.cfg" "$R/csv/synth_call.csv" -o "$XW/rel/out" > "$XW/rel/cc.log" 2>&1)
+    check "xlate_cc の相対パスは設定ファイルのフォルダから見る" contains "$XW/rel/cc.log" "clang を起動できません（$XW/rel/tools/no-such-clang）"
     # sim.cfg の exec = と、起動できないコンパイラ
     mkdir -p "$XW/nocc"
     cp "$TP" "$XW/nocc/tp.abs"

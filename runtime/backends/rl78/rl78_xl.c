@@ -57,6 +57,9 @@ struct rl78_xl {
     uint8_t *known;     /* ビット表: 変換済みの DLL に入っている関数の入口 */
     size_t nknown;
     uint8_t *noted;     /* ビット表: 今回の実行で呼び出した対象関数 */
+    uint8_t *rom;       /* 開いたときのコードフラッシュの中身（変換はいつもこれから作る。鍵もこれから計算した） */
+    uint8_t *dirty;     /* ビット表: 変換した命令のバイトのうち、いま rom と違う値になっているもの */
+    size_t ndirty;
     void *lib;
     int loaded;         /* DLL を読み込んで取り付けた */
     int gen;            /* いまの DLL の番号 */
@@ -289,10 +292,10 @@ rl78_xl *rl78_xl_open(rl78_cpu *cpu, const rl78_xl_opts *o)
         return x;
     }
     /* 鍵: 変換の対象になるメモリ、変換に使うソース、CPU の設定、変換の版 */
-    rom = sim_xmalloc(x->rom_size);
+    rom = x->rom = sim_xmalloc(x->rom_size);
+    x->dirty = sim_xcalloc(0x100000 / 8, 1);
     rl78_peek(cpu, 0, rom, x->rom_size);
     key = fnv(key, rom, x->rom_size);
-    free(rom);
     key = fnv(key, &x->rom_size, sizeof x->rom_size);
     key = fnv(key, o->core_desc ? o->core_desc : "", o->core_desc ? strlen(o->core_desc) : 0);
     for (i = 0; RT_FILES[i]; i++) {
@@ -351,6 +354,35 @@ void rl78_xl_note_entry(rl78_xl *x, uint32_t addr)
     if (x && addr < x->rom_size) setbit(x->noted, addr);
 }
 
+/* テスト CSV の入力などで、プログラムの外からコードフラッシュの 1 バイトを書き換えた。変換した命令のバイトが
+ * 開いたときと違う値になっている間は、変換したコードを使わない（変換したコードは書き換えを知らないので、
+ * 古い命令のまま動いてしまう）。元の値に戻れば、また使う */
+void rl78_xl_host_wrote(rl78_xl *x, uint32_t addr, uint8_t value)
+{
+    int was, now;
+    if (!x || !x->rom || addr >= x->rom_size || !rl78_xl_covers(x->cpu, addr)) return;
+    was = bit(x->dirty, addr);
+    now = value != x->rom[addr];
+    if (now && !was) { setbit(x->dirty, addr); x->ndirty++; }
+    else if (!now && was) { x->dirty[addr >> 3] &= (uint8_t)~(1u << (addr & 7u)); x->ndirty--; }
+    rl78_xl_set_enabled(x->cpu, x->ndirty == 0);
+}
+
+/* メモリを開いたときの状態に戻した（リセット） */
+void rl78_xl_memory_restored(rl78_xl *x)
+{
+    if (!x || !x->dirty) return;
+    memset(x->dirty, 0, 0x100000 / 8);
+    x->ndirty = 0;
+    rl78_xl_set_enabled(x->cpu, 1);
+}
+
+/* 変換したコードを使ってよい状態なら使う（照合が一時的に止めた後に呼ぶ） */
+void rl78_xl_resume(rl78_xl *x)
+{
+    if (x) rl78_xl_set_enabled(x->cpu, x->ndirty == 0);
+}
+
 /* ---- 変換してコンパイルする ---- */
 
 typedef struct { char *src, *obj; sim_proc *proc; } job_t;
@@ -368,6 +400,7 @@ int rl78_xl_update(rl78_xl *x, const uint32_t *extra, size_t nextra)
     const char **link;
     size_t nlink = 0;
     uint64_t t0 = sim_now_ns();
+    uint8_t *cur_rom;
     int rc = -1, failed = 0;
     unsigned b;
 
@@ -402,6 +435,12 @@ int rl78_xl_update(rl78_xl *x, const uint32_t *extra, size_t nextra)
         (unsigned)nnew, (unsigned)n, x->jobs, x->dir);
     log = join(x->dir, "cc.log");
     sim_remove_file(log);
+
+    /* 変換はいつも開いたときの中身から作る（鍵もそこから計算した）。実行中にテスト CSV の入力などでコードフラッシュが
+     * 書き換わっていても、その内容で変換結果を作って保存しない。変換の間だけ中身を戻す */
+    cur_rom = sim_xmalloc(x->rom_size);
+    rl78_peek(x->cpu, 0, cur_rom, x->rom_size);
+    rl78_load(x->cpu, 0, x->rom, x->rom_size);
 
     /* まとまりごとに C を作る。内容が前回と同じでオブジェクトもあれば、コンパイルし直さない */
     rl78_xl_leaders_init(&ld);
@@ -449,6 +488,8 @@ int rl78_xl_update(rl78_xl *x, const uint32_t *extra, size_t nextra)
         sim_buf_free(&src);
     }
     rl78_xl_leaders_free(&ld);
+    rl78_load(x->cpu, 0, cur_rom, x->rom_size);
+    free(cur_rom);
 
     /* コンパイル: x->jobs 個ずつ並べて走らせる */
     if (!failed) {
@@ -552,5 +593,7 @@ void rl78_xl_close(rl78_xl *x)
     free(x->dir);
     free(x->known);
     free(x->noted);
+    free(x->rom);
+    free(x->dirty);
     free(x);
 }
