@@ -184,6 +184,11 @@ describe("classifyReload と同名の列", () => {
 });
 
 describe("modi initialization metadata", () => {
+  it("does not count stub lines (%) as cycles, before or after COMMENT", () => {
+    const d = decodeWaveformCSV('modi,f,t,1,1\n%,"AMSTB_x","x"\n#COMMENT,A,B\n%,AMSTB_y,y\n,1,2\n,3,4\n');
+    expect(d.chartData.steps).toEqual([1, 2]);
+    expect(d.chartData.seriesMap.A).toEqual([1, 3]);
+  });
   it("skips initialization after an early COMMENT and recognizes the next modi block", () => {
     const d = decodeWaveformCSV("modi,f,t,1,1\n#COMMENT,A,B\n#InitWheneverCall,A\n0,999\n,1,2\nmodi,g,t,0,1\n#COMMENT,C\n,4\n");
     expect(d.chartData).toEqual({ steps: [1], seriesMap: { A: [1], B: [2] } });

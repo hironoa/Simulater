@@ -83,6 +83,8 @@ call :run "core = S2" 0 "OK 2, NG 0" --abs "%TP%" --cfg "%R%\cfg\core_s2.cfg" "%
 call :run "core = S3, mdu = off" 0 "OK 2, NG 0" --abs "%TP%" --cfg "%R%\cfg\core_s3_nomdu.cfg" "%R%\csv\synth_nomdu.csv"
 call :run "stub = read_io:AMSTB_read_io" 0 "OK 3, NG 0" --abs "%TP%" --cfg "%R%\cfg\stub.cfg" "%R%\csv\synth_stub.csv"
 call :run "stub_auto = on" 0 "OK 3, NG 0" --abs "%TP%" --cfg "%R%\cfg\stub_auto.cfg" "%R%\csv\synth_stub.csv"
+call :run "stub lines in the CSV, no sim.cfg" 0 "OK 3, NG 0" --abs "%TP%" "%R%\csv\synth_stub_line.csv"
+call :run "CSV stubs do not leak into the next CSV" 0 "OK 4, NG 0" --abs "%TP%" "%R%\csv\synth_stub_line.csv" "%R%\csv\synth_nostub.csv"
 mkdir "%WORK%\autocfg"
 copy /y "%TP%" "%WORK%\autocfg\prog.abs" >nul
 copy /y "%R%\cfg\stub.cfg" "%WORK%\autocfg\sim.cfg" >nul

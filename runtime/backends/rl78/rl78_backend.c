@@ -65,6 +65,9 @@ typedef struct {
 
     stub_t stubs[MAX_STUBS];
     int nstubs;
+    stub_t csv_stubs[MAX_STUBS];        /* CSV の % 行による置換（ブロックごとに入れ替える。stubs より優先） */
+    unsigned char csv_bp[MAX_STUBS];    /* この置換のために足したブレークポイントなら 1 */
+    int ncsv;
 
     uint64_t max_insns, startup_max;
     uint64_t tot_insns, tot_clocks, ncalls, startup_insns, startup_clocks;
@@ -370,6 +373,7 @@ static void where(be_t *z, uint32_t pc, char *out, size_t n)
 static const stub_t *stub_at(be_t *z, uint32_t pc)
 {
     int i;
+    for (i = 0; i < z->ncsv; i++) if (z->csv_stubs[i].orig == pc) return &z->csv_stubs[i];
     for (i = 0; i < z->nstubs; i++) if (z->stubs[i].orig == pc && !z->stubs[i].patched) return &z->stubs[i];
     return NULL;
 }
@@ -658,6 +662,43 @@ static int b_reset(sim_backend *b, char *err, size_t errlen)
     rl78_snapshot_restore(z->cpu, z->snap);
     z->heap_cur = z->heap_lo;
     return 0;
+}
+
+static int b_set_csv_stubs(sim_backend *b, const char *const *origs, const char *const *stubs, int n,
+                           char *err, size_t errlen)
+{
+    be_t *z = b->impl;
+    int i, k;
+    for (i = 0; i < z->ncsv; i++) if (z->csv_bp[i]) rl78_remove_breakpoint(z->cpu, z->csv_stubs[i].orig);
+    z->ncsv = 0;
+    for (i = 0; i < n; i++) {
+        stub_t t;
+        int rc;
+        memset(&t, 0, sizeof t);
+        if ((rc = resolve_code(z, origs[i], &t.orig, &t.oname))) {
+            snprintf(err, errlen, "%% 行: 置き換え元の関数 '%s' が%s", origs[i], rc == -2 ? ADDR_BAD : "ロードモジュールに見つかりません");
+            goto fail;
+        }
+        if ((rc = resolve_code(z, stubs[i], &t.stub, &t.sname))) {
+            snprintf(err, errlen, "%% 行: スタブ関数 '%s' が%s", stubs[i], rc == -2 ? ADDR_BAD : "ロードモジュールに見つかりません");
+            goto fail;
+        }
+        if (t.orig == t.stub) continue;
+        for (k = 0; k < z->ncsv && z->csv_stubs[k].orig != t.orig; k++) {}
+        if (k < z->ncsv) { z->csv_stubs[k].stub = t.stub; z->csv_stubs[k].sname = t.sname; continue; }
+        if (z->ncsv >= MAX_STUBS) { snprintf(err, errlen, "%% 行の置換が多すぎます（%d 個まで）", MAX_STUBS); goto fail; }
+        z->csv_bp[z->ncsv] = 0;
+        if (!rl78_has_breakpoint(z->cpu, t.orig)) {
+            if (rl78_add_breakpoint(z->cpu, t.orig)) { snprintf(err, errlen, "%% 行: ブレークポイントを登録できません（メモリ不足）"); goto fail; }
+            z->csv_bp[z->ncsv] = 1;
+        }
+        z->csv_stubs[z->ncsv++] = t;
+    }
+    return 0;
+fail:
+    for (i = 0; i < z->ncsv; i++) if (z->csv_bp[i]) rl78_remove_breakpoint(z->cpu, z->csv_stubs[i].orig);
+    z->ncsv = 0;
+    return -1;
 }
 
 static uint64_t b_ptr_to_addr(sim_backend *b, const sim_type *pt, uint64_t v)
@@ -1257,6 +1298,7 @@ sim_backend *sim_backend_open(const sim_open_opts *o, char *err, size_t errlen)
     b->call = b_call;
     b->alloc = b_alloc;
     b->reset = b_reset;
+    b->set_csv_stubs = b_set_csv_stubs;
     b->lookup_var = NULL;
     b->close = b_close;
     b->ptr_to_addr = b_ptr_to_addr;

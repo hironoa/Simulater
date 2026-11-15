@@ -1,0 +1,9 @@
+mod,use_io,% 行で read_io を AMSTB_read_io に置き換える（sim.cfg なし）,2,2
+%,"AMSTB_read_io","read_io"
+#COMMENT,0xFFF1E:2,g_stub_val,use_io@@,0xFFF1E:2
+,0x0100,0x0222,0x0223,0x0100
+,0x0300,0x0444,0x0445,0x0300
+mod,read_io,#COMMENT の後の % 行。対象関数そのものが置き換え元,2,1
+#COMMENT,0xFFF1E:2,g_stub_val,read_io@@
+%,AMSTB_read_io,read_io
+,0x0100,0x0555,0x0555

@@ -39,12 +39,16 @@ typedef struct {
     size_t init_header, init_values; /* parser line indices; not playback rows */
     char **init_names, **init_cells;
     char *warning;
+    int nstubs;             /* % 行（%,スタブ関数,元の関数）の数 */
+    char **stub_funcs, **stub_origs;
     int init_columns;       /* GUI flattened initialization columns */
     int nblocks;            /* ファイル中の mod ブロックの数（先頭のブロックを含む） */
 } sim_csv_table;
 
 int sim_csv_load_table(const char *data, size_t len, sim_csv_table *t, char *err, size_t errlen);
 void sim_csv_table_free(sim_csv_table *t);
+/* t の % 行の置換をバックエンドに入れ替えて適用する（% 行がなければ解除）。失敗なら -1 と err */
+int sim_csv_apply_stubs(sim_backend *b, const sim_csv_table *t, char *err, size_t errlen);
 /* GUI: expand initialization into ordered ordinary input columns. */
 void sim_csv_table_expand_init(sim_csv_table *t, int mode);
 

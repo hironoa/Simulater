@@ -214,6 +214,15 @@ static int is_header(const line_t *L)
     return r;
 }
 
+/* % 行: 1 列目が % だけ。WinAMS が置換（スタブ）の指定を書く行（%,スタブ関数,元の関数） */
+static int is_stub_line(const line_t *L)
+{
+    char *k = first_key(L);
+    int r = k[0] == '%' && k[1] == 0;
+    free(k);
+    return r;
+}
+
 static int is_init(const line_t *L)
 {
     char *k = first_key(L);
@@ -260,6 +269,17 @@ static int block_prefix(line_t *ls, size_t n, size_t start, size_t *hdr,
             j++;
         } else if (is_header(&ls[j])) {
             if (!*hdr) *hdr = j;
+        } else if (is_stub_line(&ls[j])) {
+            char *sf = cell_value(&ls[j], 1), *of = cell_value(&ls[j], 2);
+            if (!sf[0] || !of[0]) {
+                free(sf); free(of);
+                snprintf(err, cap, "%d 行目: %% 行は %%,スタブ関数,元の関数 の形にしてください", ls[j].lineno);
+                return -1;
+            }
+            t->stub_funcs = sim_xrealloc(t->stub_funcs, (size_t)(t->nstubs + 1) * sizeof *t->stub_funcs);
+            t->stub_origs = sim_xrealloc(t->stub_origs, (size_t)(t->nstubs + 1) * sizeof *t->stub_origs);
+            t->stub_funcs[t->nstubs] = sf;
+            t->stub_origs[t->nstubs++] = of;
         } else if (!first_starts(&ls[j], '#') && !first_starts(&ls[j], ';') && !all_empty(&ls[j])) {
             if (!*hdr) { snprintf(err, cap, "%d 行目: #COMMENT 行の前にデータ行があります（初期値の複数行は不可）", ls[j].lineno); return -1; }
             break;
@@ -366,6 +386,11 @@ static size_t run_block(sim_ctx *c, const char *path, line_t *ls, size_t n, size
 
     if (!failed && block_prefix(ls, n, i, &hdr, &init, err, sizeof err)) failed = 1;
     if (init.warning) warn(path, ls[i].lineno, init.warning);
+    /* % 行の置換をこのブロックのものに入れ替える（% 行がなければ解除。前のブロックの置換を持ち越さない） */
+    if (!failed && sim_csv_apply_stubs(sim_ctx_backend(c), &init, err, sizeof err)) failed = 1;
+    if (!failed && init.nstubs && !o->quiet)
+        for (k = 0; k < init.nstubs; k++)
+            fprintf(stdout, "  置換（CSV の %% 行）: %s -> %s\n", init.stub_origs[k], init.stub_funcs[k]);
     if (failed) {
         report(path, ls[i].lineno, err);
         st->errors++;
@@ -444,6 +469,11 @@ static size_t run_block(sim_ctx *c, const char *path, line_t *ls, size_t n, size
         int skipped = first_starts(L, ';') || first_starts(L, '#') || all_empty(L);
         if (init.ninit && (j == init.init_header || j == init.init_values)) { copy_line(out, L); continue; }
         if (is_init(L)) { report(path, L->lineno, "#Init 行が複数あるか、データ行の後にあります"); failed = 1; }
+        if (is_stub_line(L)) {
+            if (b_rows) { report(path, L->lineno, "% 行（置換の指定）がデータ行の後にあります"); failed = 1; }
+            copy_line(out, L);
+            continue;
+        }
 
         if (!skipped) b_rows++;
         if (failed || skipped) {
@@ -604,6 +634,10 @@ static size_t run_block(sim_ctx *c, const char *path, line_t *ls, size_t n, size
     free(init_refs); free(init_vals); sim_csv_table_free(&init);
     free(func);
     sim_ctx_set_func(c, NULL, err, sizeof err);
+    {
+        sim_backend *bk = sim_ctx_backend(c);
+        if (bk->set_csv_stubs) bk->set_csv_stubs(bk, NULL, NULL, 0, err, sizeof err);
+    }
     return j;
 }
 
@@ -733,8 +767,20 @@ int sim_csv_run_file(sim_ctx *c, const char *path, const sim_csv_opts *o, sim_cs
 
 /* ================================================================ GUI 用の表 */
 
+int sim_csv_apply_stubs(sim_backend *b, const sim_csv_table *t, char *err, size_t errlen)
+{
+    if (!b->set_csv_stubs) {
+        if (!t->nstubs) return 0;
+        snprintf(err, errlen, "%% 行（置換の指定）がありますが、バックエンド %s は関数の置換に対応していません", b->name);
+        return -1;
+    }
+    return b->set_csv_stubs(b, (const char *const *)t->stub_origs, (const char *const *)t->stub_funcs, t->nstubs, err, errlen);
+}
+
 void sim_csv_table_free(sim_csv_table *t)
 {
+    for (int s = 0; s < t->nstubs; s++) { free(t->stub_funcs[s]); free(t->stub_origs[s]); }
+    free(t->stub_funcs); free(t->stub_origs);
     for (int k = 0; k < t->ninit; k++) { free(t->init_names[k]); free(t->init_cells[k]); }
     free(t->init_names); free(t->init_cells); free(t->warning);
     int r, k;
@@ -780,6 +826,10 @@ int sim_csv_load_table(const char *data, size_t len, sim_csv_table *t, char *err
         char **row;
         if (t->ninit && (i == t->init_header || i == t->init_values)) continue;
         if (is_init(&ls[i])) { snprintf(err, errlen, "#Init 行が複数あるか、データ行の後にあります"); goto fail; }
+        if (is_stub_line(&ls[i])) {
+            if (t->nrows) { snprintf(err, errlen, "%d 行目: %% 行（置換の指定）がデータ行の後にあります", ls[i].lineno); goto fail; }
+            continue;
+        }
         if (first_starts(&ls[i], ';') || first_starts(&ls[i], '#') || all_empty(&ls[i])) continue;
         row = sim_xcalloc((size_t)t->nin + 1, sizeof *row);
         for (k = 0; k < t->nin; k++) {
