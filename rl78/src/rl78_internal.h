@@ -7,6 +7,7 @@
 #define RL78_MEM_SIZE 0x100000u
 #define RL78_MEM_PAD 16u /* operand fetch past FFFFFH stays in bounds */
 #define RL78_NPAGES 4096u /* 256-byte pages */
+#define RL78_TRAP_OFFSET (RL78_MEM_SIZE + RL78_MEM_PAD) /* bptrap = mem + this */
 
 #define F_CY 0x01u
 #define F_ISP0 0x02u
@@ -44,7 +45,7 @@ struct rl78_cpu {
     uint8_t flashpen[RL78_NPAGES]; /* extra clocks for data read from flash */
 
     uint8_t *mem;
-    uint8_t *bptrap; /* opcode-only mask: FF at breakpoints, zero elsewhere */
+    uint8_t *bptrap; /* opcode-only mask: FF at breakpoints, zero elsewhere (mem + RL78_TRAP_OFFSET) */
     uint8_t *rb; /* current register bank: mem + FFEF8H - 8*bank */
 
     uint32_t pc;
