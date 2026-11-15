@@ -3,6 +3,7 @@ rem Build and run all RL78 core tests and the benchmark (Windows, clang / LLVM).
 rem   CC            compiler (default: clang)
 rem   RL78_GNU_BIN  optional: directory with the GNU rl78-elf-* tools -> difftest
 rem   BENCH_INSNS   benchmark instructions (default 300000000)
+rem   BENCH_MIN     optional: fail if the benchmark is below this many M insns/s
 rem Exit code is non-zero if any check fails.
 setlocal
 set HERE=%~dp0
@@ -10,7 +11,7 @@ set ROOT=%HERE%..
 set BUILD=%ROOT%\build
 if "%CC%"=="" set CC=clang
 if "%BENCH_INSNS%"=="" set BENCH_INSNS=300000000
-set CFLAGS=-std=c11 -O2 -Wall -Wextra -Wpedantic -Wshadow -Werror -D_CRT_SECURE_NO_WARNINGS
+set CFLAGS=-std=c11 -O2 -fno-unroll-loops -Wall -Wextra -Wpedantic -Wshadow -Werror -D_CRT_SECURE_NO_WARNINGS
 if not exist "%BUILD%" mkdir "%BUILD%"
 set STATUS=0
 
@@ -27,7 +28,7 @@ echo == tests
 if errorlevel 1 set STATUS=1
 
 echo == benchmark
-"%BUILD%\rl78_bench.exe" %BENCH_INSNS%
+"%BUILD%\rl78_bench.exe" %BENCH_INSNS% %BENCH_MIN%
 if errorlevel 1 set STATUS=1
 
 if "%RL78_GNU_BIN%"=="" (

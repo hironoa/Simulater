@@ -241,6 +241,11 @@ echo == performance (real backend)
 for /l %%I in (1,1,2000) do >> "%WORK%\perf_cycle.csv" echo ,%%I
 call :run "TEST_cycle 2000 times" 0 "OK 2000, NG 0" --abs "%TP%" "%WORK%\perf_cycle.csv"
 type "%WORK%\r.log" | findstr /v /c:"mod " /c:"->"
+rem PERF_MIN: optional lower bound in million instructions per second (guards against a slow build of the hot loop)
+if defined PERF_MIN (
+    powershell -NoProfile -Command "$t=[IO.File]::ReadAllText('%WORK%\r.log',[Text.Encoding]::UTF8); if ($t -match '([0-9.]+) \u767e\u4e07' -and [double]$Matches[1] -ge [double]$env:PERF_MIN) {exit 0} else {exit 1}"
+    if errorlevel 1 (call :ng "speed is at least %PERF_MIN% M insns/s") else (call :ok "speed is at least %PERF_MIN% M insns/s")
+)
 
 echo == startup diagnostics and skip poke
 "%WORK%\mkabs.exe" startup "%WORK%\startup.abs"

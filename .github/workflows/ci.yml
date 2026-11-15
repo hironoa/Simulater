@@ -32,7 +32,14 @@ jobs:
         shell: cmd
         run: |
           where clang >nul 2>nul || set "PATH=C:\Program Files\LLVM\bin;%PATH%"
+          set PERF_MIN=100
           call tests\run_tests.bat
+      - name: コア単体のテストとベンチマーク
+        shell: cmd
+        run: |
+          where clang >nul 2>nul || set "PATH=C:\Program Files\LLVM\bin;%PATH%"
+          set BENCH_MIN=100
+          call rl78\tests\run_tests.bat
       - name: 配布物をまとめる
         shell: cmd
         run: |

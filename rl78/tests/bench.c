@@ -103,6 +103,12 @@ int main(int argc, char **argv)
                sec, (double)n / sec / 1e6);
     }
     printf("bench best: %.1f M insns/s\n", best / 1e6);
+    /* optional 2nd argument: fail below this many M insns/s (guards against a
+       miscompiled hot loop, e.g. the clang loop-unrolling slowdown) */
+    if (argc > 2 && best / 1e6 < atof(argv[2])) {
+        fprintf(stderr, "bench: too slow (%.1f < %s M insns/s)\n", best / 1e6, argv[2]);
+        return 1;
+    }
     rl78_destroy(cpu);
     free(img);
     return 0;
