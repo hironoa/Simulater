@@ -200,13 +200,7 @@ static int resolve_code(be_t *z, const char *s, uint32_t *addr, const char **nam
     const rl78_funcinfo *f;
     const rl78_sym *y;
     if (!s || !*s) return -1;
-    if (isdigit((unsigned char)s[0])) {
-        /* 数字で始まる名前はないので、アドレスとして読めなければ -2（別のアドレスや名前にしない） */
-        if (parse_u64(s, &v) || v > 0xFFFFFu) return -2;
-        *addr = (uint32_t)v;
-        *name = s;
-        return 0;
-    }
+    /* 「ファイル名/関数名」は、数字で始まるファイル名（1ngine.c/func）をアドレスと取り違えないよう先に見る */
     {
         const char *sl = strrchr(s, '/');
         if (sl) {
@@ -221,6 +215,13 @@ static int resolve_code(be_t *z, const char *s, uint32_t *addr, const char **nam
             *name = f->f.name;
             return 0;
         }
+    }
+    if (isdigit((unsigned char)s[0])) {
+        /* 数字で始まる名前はないので、アドレスとして読めなければ -2（別のアドレスや名前にしない） */
+        if (parse_u64(s, &v) || v > 0xFFFFFu) return -2;
+        *addr = (uint32_t)v;
+        *name = s;
+        return 0;
     }
     f = find_func(z, s);
     if (f) { *addr = (uint32_t)f->f.addr; *name = f->f.name; return 0; }

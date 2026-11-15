@@ -175,6 +175,8 @@ printf 'mod,use_io,x,2,2\n%%,"winams/AMSTB_SrcFile.c/AMSTB_read_io","ENGINE.C/re
 rl78_run "% 行の「ファイル名/関数名」表記（大文字小文字は区別しない）" 0 "合計: 総数 1, OK 1, NG 0" -- --abs "$TP" "$WORK/stub_file.csv"
 printf 'mod,use_io,x,2,1\n%%,AMSTB_read_io,sensor.c/read_io\n#COMMENT,0xFFF1E:2,g_stub_val,use_io@@\n,0x0100,0x0222,0x0101\n' > "$WORK/stub_wrongfile.csv"
 rl78_run "% 行のファイル名が違えば別の関数を置き換えずにエラー" 2 "% 行: 置き換え元の関数 'sensor.c/read_io' がロードモジュールに見つかりません" -- --abs "$TP" "$WORK/stub_wrongfile.csv"
+printf 'mod,use_io,x,2,1\n%%,AMSTB_read_io,1ngine.c/read_io\n#COMMENT,0xFFF1E:2,g_stub_val,use_io@@\n,0x0100,0x0222,0x0101\n' > "$WORK/stub_digitfile.csv"
+rl78_run "% 行の数字で始まるファイル名をアドレスと取り違えない" 2 "% 行: 置き換え元の関数 '1ngine.c/read_io' がロードモジュールに見つかりません" -- --abs "$TP" "$WORK/stub_digitfile.csv"
 mkdir -p "$WORK/autocfg"
 cp "$TP" "$WORK/autocfg/prog.abs"
 cp "$R/cfg/stub.cfg" "$WORK/autocfg/sim.cfg"
