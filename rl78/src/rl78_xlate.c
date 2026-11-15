@@ -21,7 +21,6 @@
 
 #include "rl78_xlate_rt.h"
 
-#define XL_INSIDE 0xFFFFFFFFu /* xl_index: translated, but not a block start */
 #define XL_MAX_INSNS 6000     /* per function; the rest is left to the interpreter */
 
 /* ---- output ----------------------------------------------------------------- */
@@ -366,9 +365,12 @@ int rl78_xlate_main(rl78_cpu *c, rl78_xl_leaders *ld, rl78_xl_put put, void *ctx
 static void recount_bp_inside(rl78_cpu *c)
 {
     int i, n = 0;
-    if (c->xl_index)
+    /* An address can start a block in one chunk and sit inside a block of another (two functions
+       branching into the same code at different places): the second chunk would run over a breakpoint
+       there, so "inside" is kept apart from the dispatch index. */
+    if (c->xl_inside)
         for (i = 0; i < c->nbps; i++)
-            if (c->xl_index[c->bplist[i]] == XL_INSIDE) n++;
+            if ((c->xl_inside[c->bplist[i] >> 3] >> (c->bplist[i] & 7u)) & 1) n++;
     c->xl_bp_inside = n;
 }
 
@@ -402,6 +404,8 @@ int rl78_xl_attach(rl78_cpu *c, const rl78_xl_module *m, char *err, size_t errle
     if (!m) {
         free(c->xl_index);
         c->xl_index = NULL;
+        free(c->xl_inside);
+        c->xl_inside = NULL;
         c->xl_mod = NULL;
         c->xl_bp_inside = 0;
         return 0;
@@ -418,8 +422,17 @@ int rl78_xl_attach(rl78_cpu *c, const rl78_xl_module *m, char *err, size_t errle
     } else {
         memset(c->xl_index, 0, RL78_MEM_SIZE * sizeof *c->xl_index);
     }
+    if (!c->xl_inside) {
+        c->xl_inside = (uint8_t *)calloc(RL78_MEM_SIZE / 8u, 1);
+        if (!c->xl_inside) FAIL("out of memory");
+    } else {
+        memset(c->xl_inside, 0, RL78_MEM_SIZE / 8u);
+    }
 #undef FAIL
-    for (i = 0; i < m->ninside; i++) c->xl_index[m->inside[i] & 0xFFFFFu] = XL_INSIDE;
+    for (i = 0; i < m->ninside; i++) {
+        uint32_t a = m->inside[i] & 0xFFFFFu;
+        c->xl_inside[a >> 3] |= (uint8_t)(1u << (a & 7u));
+    }
     for (i = 0; i < m->nleaders; i++) c->xl_index[m->leaders[i].pc & 0xFFFFFu] = i + 1u;
     c->xl_mod = m;
     c->xl_miss = 0;
@@ -444,7 +457,7 @@ uint64_t rl78__xl_run(rl78_cpu *c, uint64_t lim, int *why)
     for (;;) {
         uint32_t k = idx[c->pc & 0xFFFFFu];
         int st;
-        if (k == 0 || k == XL_INSIDE) break;
+        if (k == 0) break;
         st = ld[k - 1u].fn(c, &n, lim);
         if (st == RL78_XL_CONT) continue;
         if (st >= RL78_XL_STOP) *why = st - RL78_XL_STOP - 1;

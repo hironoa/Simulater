@@ -79,8 +79,9 @@ struct rl78_cpu {
 
     uint8_t *callprof;  /* call-target bitmap (1 bit per address), or NULL */
 
-    /* translated code (rl78_xlate.c): leader address -> chunk number + 1 */
+    /* translated code (rl78_xlate.c): block start -> leader number + 1 */
     uint32_t *xl_index;
+    uint8_t *xl_inside;  /* bitmap: instructions inside a translated block of some chunk (not its start) */
     const struct rl78_xl_module *xl_mod;
     uint64_t xl_insns;  /* instructions executed by translated code */
     int xl_bp_inside;   /* breakpoints set inside translated blocks: translated code is not used while > 0 */

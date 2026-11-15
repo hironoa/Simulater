@@ -59,6 +59,8 @@ static const char *xl_prog =
     "  CALL HL\n"                  /* register call: the dispatcher finds the target */
     "  MOV CS, #0\n"
     "  CALL !banks\n"
+    "  CALL !ova\n"               /* two functions that enter the same code at different places */
+    "  CALL !ovb\n"
     "  POP BC\n"
     "  POP HL\n"
     "  POP DE\n"
@@ -109,6 +111,15 @@ static const char *xl_prog =
     "  SEL RB2\n"
     "  MOVW AX, #3322H\n"
     "  SEL RB0\n"
+    "  RET\n"
+    "ova:\n"
+    "  BR $ot1\n"
+    "ovb:\n"
+    "  BR $ot2\n"
+    "ot1:\n"
+    "  INC 0FE24H\n"
+    "ot2:\n"                     /* a block start for ovb, inside a block for ova */
+    "  INC 0FE25H\n"
     "  RET\n"
     ".org 23456H\n"
     "  INC 0FE23H\n"

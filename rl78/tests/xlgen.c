@@ -55,7 +55,7 @@ int main(int argc, char **argv)
     printf("xlgen: %u functions:", (unsigned)n);
     { size_t i; for (i = 0; i < n; i++) printf(" %05X", (unsigned)list[i]); }
     printf("\n");
-    if (n < 6) { fprintf(stderr, "xlgen: the call profile found too few functions\n"); return 1; }
+    if (n < 8) { fprintf(stderr, "xlgen: the call profile found too few functions\n"); return 1; }
 
     rl78_xl_leaders_init(&ld);
     snprintf(path, sizeof path, "%s/xl_unit.c", dir);

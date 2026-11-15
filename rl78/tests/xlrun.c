@@ -78,7 +78,7 @@ int main(int argc, char **argv)
     const rl78_xl_module *mod;
     rl78_cpu *a, *b;
     FILE *f;
-    long sub, fib;
+    long sub, fib, ot2;
     int i;
 
     if (argc < 3) { fprintf(stderr, "usage: xlrun <dir> <dll>\n"); return 2; }
@@ -108,7 +108,8 @@ int main(int argc, char **argv)
         free(tmp);
         sub = tasm_label("sub");
         fib = tasm_label("fib");
-        if (sub < 0 || fib < 0) { fprintf(stderr, "xlrun: labels not found\n"); return 2; }
+        ot2 = tasm_label("ot2");
+        if (sub < 0 || fib < 0 || ot2 < 0) { fprintf(stderr, "xlrun: labels not found\n"); return 2; }
     }
 
     printf("== translated code: one long run\n");
@@ -169,6 +170,25 @@ int main(int argc, char **argv)
         CHECK(rl78_run(a, 100000) == RL78_STOP_LIMIT && rl78_run(b, 100000) == RL78_STOP_LIMIT, "run after removing the breakpoints");
         CHECK(same_regs(a, b), "after the breakpoints: %s", where(a, b));
         CHECK(rl78_xl_insn_count(b) > before, "translated code was not used again after removing the breakpoint");
+    }
+
+    printf("== translated code: a breakpoint where one function starts a block and another runs through\n");
+    {
+        uint64_t before = rl78_xl_insn_count(b);
+        rl78_add_breakpoint(a, (uint32_t)ot2);
+        rl78_add_breakpoint(b, (uint32_t)ot2);
+        for (i = 0; i < 50; i++) {
+            rl78_stop_reason ra = rl78_run(a, 100000), rb = rl78_run(b, 100000);
+            CHECK(ra == RL78_STOP_BREAKPOINT && rb == RL78_STOP_BREAKPOINT, "shared breakpoint %d: stop reasons %d / %d", i, (int)ra, (int)rb);
+            CHECK(same_regs(a, b), "shared breakpoint %d: %s", i, where(a, b));
+        }
+        CHECK(rl78_xl_insn_count(b) == before, "translated code ran with a breakpoint inside a block of another function");
+        rl78_remove_breakpoint(a, (uint32_t)ot2);
+        rl78_remove_breakpoint(b, (uint32_t)ot2);
+        before = rl78_xl_insn_count(b);
+        CHECK(rl78_run(a, 100000) == RL78_STOP_LIMIT && rl78_run(b, 100000) == RL78_STOP_LIMIT, "run after removing the shared breakpoint");
+        CHECK(same_regs(a, b), "after the shared breakpoint: %s", where(a, b));
+        CHECK(rl78_xl_insn_count(b) > before, "translated code was not used again");
     }
 
     printf("== translated code: detach, and a module that does not fit\n");

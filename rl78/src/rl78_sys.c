@@ -329,6 +329,7 @@ void rl78_destroy(rl78_cpu *c)
     free(c->bpbits);
     free(c->callprof);
     free(c->xl_index);
+    free(c->xl_inside);
     free(c);
 }
 
