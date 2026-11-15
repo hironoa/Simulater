@@ -50,7 +50,8 @@ if "%MODE%"=="mock" (
 )
 
 echo build.bat: building %OUT%\sim.exe with %CC% (backend: %MODE%)
-"%CC%" -std=c11 -O2 -Wall -Wextra %INC% %SRCS% -o "%OUT%\sim.exe" -lws2_32
+rem -fno-unroll-loops: clang 20 at plain -O2 makes the instruction loop about 10x slower on x86-64
+"%CC%" -std=c11 -O2 -fno-unroll-loops -Wall -Wextra %INC% %SRCS% -o "%OUT%\sim.exe" -lws2_32
 if errorlevel 1 (
     echo build.bat: compile failed. clang for Windows also needs the MSVC C runtime and the Windows SDK, e.g. Visual Studio Build Tools. 1>&2
     exit /b 1

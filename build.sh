@@ -25,7 +25,8 @@ case "$(uname -s)" in
 esac
 
 S="$ROOT/runtime/src"
-CFLAGS="-std=c11 -O2 -g -Wall -Wextra -D_DEFAULT_SOURCE -I$ROOT/runtime/include -I$S"
+# -fno-unroll-loops: clang 20 の素の -O2 は x86-64 で命令実行ループを約 10 倍遅くする（Windows で 27 → 254 百万命令/秒）
+CFLAGS="-std=c11 -O2 -fno-unroll-loops -g -Wall -Wextra -D_DEFAULT_SOURCE -I$ROOT/runtime/include -I$S"
 COMMON="$S/sim_main.c $S/sim_util.c $S/sim_json.c $S/sim_platform.c $S/sim_expr.c $S/sim_csv.c $S/sim_gui.c $S/sim_cfg.c $S/sim_defines.c $S/sim_ppexpr.c $S/sim_mtpj.c"
 
 if [ "$MODE" = "mock" ]; then

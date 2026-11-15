@@ -85,6 +85,11 @@ call :run "stub = read_io:AMSTB_read_io" 0 "OK 3, NG 0" --abs "%TP%" --cfg "%R%\
 call :run "stub_auto = on" 0 "OK 3, NG 0" --abs "%TP%" --cfg "%R%\cfg\stub_auto.cfg" "%R%\csv\synth_stub.csv"
 call :run "stub lines in the CSV, no sim.cfg" 0 "OK 3, NG 0" --abs "%TP%" "%R%\csv\synth_stub_line.csv"
 call :run "CSV stubs do not leak into the next CSV" 0 "OK 4, NG 0" --abs "%TP%" "%R%\csv\synth_stub_line.csv" "%R%\csv\synth_nostub.csv"
+> "%WORK%\stub_file.csv" echo mod,use_io,x,2,2
+>> "%WORK%\stub_file.csv" echo %%,"winams/AMSTB_SrcFile.c/AMSTB_read_io","ENGINE.C/read_io"
+>> "%WORK%\stub_file.csv" echo #COMMENT,0xFFF1E:2,g_stub_val,use_io@@,0xFFF1E:2
+>> "%WORK%\stub_file.csv" echo ,0x0100,0x0222,0x0223,0x0100
+call :run "stub line with file/function names" 0 "OK 1, NG 0" --abs "%TP%" "%WORK%\stub_file.csv"
 mkdir "%WORK%\autocfg"
 copy /y "%TP%" "%WORK%\autocfg\prog.abs" >nul
 copy /y "%R%\cfg\stub.cfg" "%WORK%\autocfg\sim.cfg" >nul
@@ -236,6 +241,11 @@ echo == performance (real backend)
 for /l %%I in (1,1,2000) do >> "%WORK%\perf_cycle.csv" echo ,%%I
 call :run "TEST_cycle 2000 times" 0 "OK 2000, NG 0" --abs "%TP%" "%WORK%\perf_cycle.csv"
 type "%WORK%\r.log" | findstr /v /c:"mod " /c:"->"
+rem PERF_MIN: optional lower bound in million instructions per second (guards against a slow build of the hot loop)
+if defined PERF_MIN (
+    powershell -NoProfile -Command "$t=[IO.File]::ReadAllText('%WORK%\r.log',[Text.Encoding]::UTF8); if ($t -match '([0-9.]+) \u767e\u4e07' -and [double]$Matches[1] -ge [double]$env:PERF_MIN) {exit 0} else {exit 1}"
+    if errorlevel 1 (call :ng "speed is at least %PERF_MIN% M insns/s") else (call :ok "speed is at least %PERF_MIN% M insns/s")
+)
 
 echo == startup diagnostics and skip poke
 "%WORK%\mkabs.exe" startup "%WORK%\startup.abs"

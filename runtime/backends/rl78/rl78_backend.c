@@ -161,15 +161,61 @@ static const rl78_funcinfo *find_func(be_t *z, const char *name)
     return hit;
 }
 
+/* ファイル名の照合（大文字小文字と \ / の違いを無視）。path の末尾が file と一致し、その手前がパスの区切りなら一致 */
+static int file_tail_match(const char *path, const char *file)
+{
+    size_t lp = strlen(path), lf = strlen(file), i;
+    if (!lf || lf > lp) return 0;
+    for (i = 0; i < lf; i++) {
+        char a = path[lp - lf + i], c = file[i];
+        if (a == '\\') a = '/';
+        if (c == '\\') c = '/';
+        if (tolower((unsigned char)a) != tolower((unsigned char)c)) return 0;
+    }
+    return lp == lf || path[lp - lf - 1] == '/' || path[lp - lf - 1] == '\\';
+}
+
+/* 「ファイル名/関数名」（WinAMS の static 関数の書き方）。ファイルが一致する関数を優先し、
+ * なければ、定義ファイルが分からない同名の関数（デバッグ情報のないシンボルなど）を返す。
+ * 同名の関数が別のファイルにしかなければ NULL（別の関数を置き換えない） */
+static const rl78_funcinfo *find_func_in(be_t *z, const char *file, const char *name)
+{
+    size_t i;
+    const rl78_funcinfo *nofile = NULL;
+    for (i = 0; i < z->st.nfuncs; i++) {
+        const rl78_funcinfo *f = &z->st.funcs[i];
+        if (strcmp(f->f.name, name)) continue;
+        if (f->f.file && f->f.file[0]) { if (file_tail_match(f->f.file, file)) return f; }
+        else if (!nofile) nofile = f;
+    }
+    return nofile;
+}
+
 #define ADDR_BAD "アドレスとして読めません（10 進か 0x / 末尾 H の 16 進で 0x00000〜0xFFFFF）"
 
-/* 関数名、ELF のシンボル名、アドレスのどれかを解決する。見つからなければ -1、数字で始まりアドレスとして読めなければ -2 */
+/* 関数名、「ファイル名/関数名」、ELF のシンボル名、アドレスのどれかを解決する。見つからなければ -1、数字で始まりアドレスとして読めなければ -2 */
 static int resolve_code(be_t *z, const char *s, uint32_t *addr, const char **name)
 {
     uint64_t v;
     const rl78_funcinfo *f;
     const rl78_sym *y;
     if (!s || !*s) return -1;
+    /* 「ファイル名/関数名」は、数字で始まるファイル名（1ngine.c/func）をアドレスと取り違えないよう先に見る */
+    {
+        const char *sl = strrchr(s, '/');
+        if (sl) {
+            char file[512];
+            size_t n = (size_t)(sl - s);
+            if (!n || n >= sizeof file || !sl[1]) return -1;
+            memcpy(file, s, n);
+            file[n] = 0;
+            f = find_func_in(z, file, sl + 1);
+            if (!f) return -1;
+            *addr = (uint32_t)f->f.addr;
+            *name = f->f.name;
+            return 0;
+        }
+    }
     if (isdigit((unsigned char)s[0])) {
         /* 数字で始まる名前はないので、アドレスとして読めなければ -2（別のアドレスや名前にしない） */
         if (parse_u64(s, &v) || v > 0xFFFFFu) return -2;

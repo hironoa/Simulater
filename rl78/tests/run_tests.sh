@@ -4,13 +4,14 @@
 #   RL78_GNU_BIN  optional: directory with rl78-elf-as/ld/objcopy/objdump/run;
 #                 when set, the differential test against the GNU simulator runs too
 #   BENCH_INSNS   instructions for the benchmark (default 300000000)
+#   BENCH_MIN     optional: fail if the benchmark is below this many M insns/s
 # Exit status is non-zero if any check fails (0 checks counts as a failure).
 set -u
 HERE=$(cd "$(dirname "$0")" && pwd)
 ROOT=$(cd "$HERE/.." && pwd)
 BUILD="$ROOT/build"
 CC=${CC:-cc}
-CFLAGS="-std=c11 -O2 -Wall -Wextra -Wpedantic -Wshadow"
+CFLAGS="-std=c11 -O2 -fno-unroll-loops -Wall -Wextra -Wpedantic -Wshadow"
 mkdir -p "$BUILD"
 status=0
 
@@ -26,7 +27,7 @@ echo "== tests"
 "$BUILD/rl78_tests" || status=1
 
 echo "== benchmark"
-"$BUILD/rl78_bench" "${BENCH_INSNS:-300000000}" || status=1
+"$BUILD/rl78_bench" "${BENCH_INSNS:-300000000}" ${BENCH_MIN:-} || status=1
 
 if [ -n "${RL78_GNU_BIN:-}" ]; then
     echo "== difftest vs GNU rl78-elf-run"
