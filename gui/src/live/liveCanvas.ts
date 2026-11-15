@@ -55,7 +55,9 @@ export function niceTicks(min: number, max: number, target: number): number[] {
   const step = (norm <= 1 ? 1 : norm <= 2 ? 2 : norm <= 5 ? 5 : 10) * mag;
   // 目盛りは「整数 × 間隔」で作る（足し込むと誤差がたまる）。0.1 × 3 のような誤差は、間隔の小数の桁数で丸めて消す。
   // 有効桁数で丸めると、大きな基準値の近くの小さな間隔（1e12 + 1, 1e12 + 2）がつぶれる
-  const decimals = step < 1 ? Math.min(20, Math.ceil(-Math.log10(step) - 1e-9)) : 0;
+  // toFixed は 20 桁まで。それより細かい間隔（1e-24 など）は丸めずに元の値を使う
+  const need = step < 1 ? Math.ceil(-Math.log10(step) - 1e-9) : 0;
+  const decimals = need <= 20 ? need : 0;
   const k0 = Math.ceil(min / step - 1e-9), k1 = Math.floor(max / step + 1e-9);
   const out: number[] = [];
   for (let k = k0; k <= k1 && out.length < 100; k++) {

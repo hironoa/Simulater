@@ -19,6 +19,12 @@ describe("niceTicks", () => {
     expect(new Set(formatTicks(t)).size).toBe(3);
     expect(niceTicks(1e12 + 1, 1e12 + 5, 4)).toEqual([1e12 + 1, 1e12 + 2, 1e12 + 3, 1e12 + 4, 1e12 + 5]);
   });
+  it("1e-20 より細かい間隔でも目盛りを失わない", () => {
+    const t = niceTicks(1e-24, 2e-24, 3);
+    expect(t.length).toBeGreaterThan(1);
+    expect(t.every((v) => v >= 1e-24 * 0.999 && v <= 2e-24 * 1.001)).toBe(true);
+    expect(new Set(formatTicks(t)).size).toBe(t.length);
+  });
   it("幅のない範囲は 1 本、数でない範囲は空", () => {
     expect(niceTicks(5, 5, 3)).toEqual([5]);
     expect(niceTicks(NaN, 1, 3)).toEqual([]);
