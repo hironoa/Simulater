@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { niceTicks, formatTick, laneRange, fitText, traceStepLine, drawLive, type LiveCanvasContext } from "./liveCanvas";
+import { niceTicks, formatTick, formatTicks, laneRange, fitText, traceStepLine, drawLive, type LiveCanvasContext } from "./liveCanvas";
 import { LiveRecord } from "./liveRecord";
 
 const id = { lsb: 1, offset: 0 };
@@ -23,6 +23,16 @@ describe("formatTick", () => {
   it("桁区切りを付ける", () => {
     expect(formatTick(10000)).toBe("10,000");
     expect(formatTick(-0.5)).toBe("-0.5");
+  });
+  it("間隔の小さい目盛りも区別できる桁数で書く", () => {
+    const labels = formatTicks(niceTicks(0.000001, 0.0000014, 3));
+    expect(new Set(labels).size).toBe(labels.length);
+    expect(labels.length).toBeGreaterThan(1);
+    expect(formatTicks([0.1, 0.2, 0.3])).toEqual(["0.1", "0.2", "0.3"]);
+    expect(formatTicks([1.00001, 1.00002])).toEqual(["1.00001", "1.00002"]);
+    expect(formatTicks([0, 5000, 10000])).toEqual(["0", "5,000", "10,000"]);
+    const tiny = formatTicks([1e-9, 2e-9, 3e-9]);
+    expect(new Set(tiny).size).toBe(3);
   });
 });
 

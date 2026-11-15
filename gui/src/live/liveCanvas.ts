@@ -62,11 +62,27 @@ export function niceTicks(min: number, max: number, target: number): number[] {
   return out;
 }
 
-/** 目盛りの値の表記。大きな値は桁区切りを付ける。 */
-export function formatTick(v: number): string {
-  const r = Number(v.toPrecision(10));
-  if (Math.abs(r) >= 1e15 || (r !== 0 && Math.abs(r) < 1e-6)) return r.toExponential(3);
-  return r.toLocaleString("en-US", { maximumFractionDigits: 6 });
+/**
+ * 目盛りの値の表記。step（目盛りの間隔）が分かれば、隣の目盛りと区別できる桁数まで出す
+ * （小数 6 桁で切ると、1e-6 未満の間隔の目盛りがすべて同じ表記になる）。大きな値は桁区切りを付ける。
+ */
+export function formatTick(v: number, step?: number): string {
+  const r = Number(v.toPrecision(12));
+  const a = Math.abs(r);
+  // 間隔から決まる小数の桁数（間隔 0.5 → 1 桁、0.0000002 → 7 桁）
+  const digits = step && step > 0 && Number.isFinite(step) ? Math.max(0, Math.ceil(-Math.log10(step) - 1e-9)) : 6;
+  if (a >= 1e15 || (r !== 0 && a < 1e-6) || digits > 9) {
+    // 指数表記でも、間隔を区別できる有効桁数を保つ
+    const sig = step && step > 0 && a > 0 ? Math.min(15, Math.max(1, Math.ceil(Math.log10(a / step) + 1e-9) + 1)) : 4;
+    return r.toExponential(sig - 1);
+  }
+  return r.toLocaleString("en-US", { maximumFractionDigits: Math.min(20, digits) });
+}
+
+/** 目盛りの並びをまとめて表記にする（間隔は並びから取る）。 */
+export function formatTicks(ticks: readonly number[]): string[] {
+  const step = ticks.length > 1 ? Math.abs(ticks[1] - ticks[0]) : undefined;
+  return ticks.map((t) => formatTick(t, step));
 }
 
 /** 縦軸の範囲。固定の指定がなければ、窓の中の値に少し余白を付ける。値がなければ null。 */
@@ -218,11 +234,11 @@ export function drawLive(
     ctx.textAlign = "right";
     ctx.textBaseline = "middle";
     let tickW = 0;
-    for (const t of yTicks) {
-      const s = formatTick(t);
-      tickW = Math.max(tickW, ctx.measureText(s).width);
-      ctx.fillText(s, plotL - 5, yPhys(t));
-    }
+    const yLabels = formatTicks(yTicks);
+    yTicks.forEach((t, k) => {
+      tickW = Math.max(tickW, ctx.measureText(yLabels[k]).width);
+      ctx.fillText(yLabels[k], plotL - 5, yPhys(t));
+    });
 
     // レーン名（値の左。重ならない幅に切り詰める）
     ctx.fillStyle = lane.color;
@@ -236,7 +252,8 @@ export function drawLive(
       ctx.font = "10px sans-serif";
       ctx.textAlign = "center";
       ctx.textBaseline = "top";
-      for (const t of xTicks) ctx.fillText(formatTick(t), plotL + ((t - xMin) / xSpan) * plotW, bottom + 4);
+      const xLabels = formatTicks(xTicks);
+      xTicks.forEach((t, k) => ctx.fillText(xLabels[k], plotL + ((t - xMin) / xSpan) * plotW, bottom + 4));
       ctx.textAlign = "right";
       ctx.fillText("ms", plotR, bottom + 16);
     }

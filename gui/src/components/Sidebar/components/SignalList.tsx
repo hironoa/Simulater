@@ -14,7 +14,9 @@ import { GroupSettings } from "./GroupSettings";
 import { SignalSettings } from "./SignalSettings";
 
 export function SignalItemOverlay({ sigName }: { sigName: string }) {
-  const view = useCompareView();
+  // 表示名の重なりの判定に使う名前の一覧。行ごとに useCompareView() を呼ぶと、比較表示のたびに全信号のデータを
+  // 行の数だけ作り直すので、ストアの名前だけを見る
+  const names = useWaveformStore(useShallow((state) => Object.keys(state.signalSettings)));
   const {
        signalSettings, showAlias 
     } = useWaveformStore(useShallow((state) => ({
@@ -23,7 +25,7 @@ export function SignalItemOverlay({ sigName }: { sigName: string }) {
     })));
   const setting = signalSettings[sigName];
   if (!setting) return null;
-  const displayName = (showAlias && setting.alias) || displaySignalName(sigName, view.signals);
+  const displayName = (showAlias && setting.alias) || displaySignalName(sigName, names);
 
   return (
     <div className="border border-gray-200 dark:border-slate-700 bg-white dark:bg-slate-800 shadow-xl opacity-90 ring-2 ring-blue-500 transition-colors" style={{ listStyle: "none" }}>
@@ -69,7 +71,9 @@ export function GroupItemOverlay({ id }: { id: string }) {
 }
 
 export function SortableSignalItem({ id, sigName }: { id: string; sigName: string; key?: React.Key; }) {
-  const view = useCompareView();
+  // 表示名の重なりの判定に使う名前の一覧。行ごとに useCompareView() を呼ぶと、比較表示のたびに全信号のデータを
+  // 行の数だけ作り直すので、ストアの名前だけを見る
+  const names = useWaveformStore(useShallow((state) => Object.keys(state.signalSettings)));
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id, data: { type: "Signal" } });
   const style = { transform: CSS.Transform.toString(transform), transition, opacity: isDragging ? 0.3 : 1 };
 
@@ -92,7 +96,7 @@ export function SortableSignalItem({ id, sigName }: { id: string; sigName: strin
   if (!setting) return null;
 
   const isHovered = hoveredSignal === sigName;
-  const displayName = (showAlias && setting.alias) || displaySignalName(sigName, view.signals);
+  const displayName = (showAlias && setting.alias) || displaySignalName(sigName, names);
 
   const autoRange = useMemo(() => {
     if (!chartData || !chartData.seriesMap[sigName]) return { min: 0, max: 1 };
