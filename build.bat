@@ -52,7 +52,7 @@ if "%MODE%"=="mock" (
     set "SRCS=%COMMON% "%ROOT%\runtime\backends\mock\mock_backend.c""
     set "INC=-I"%ROOT%\runtime\include" -I"%S%""
 ) else (
-    set "SRCS=%COMMON% "%B%\rl78_backend.c" "%B%\rl78_abi.c" "%B%\rl78_lmf.c" "%B%\rl78_sym.c" "%B%\rl78_elf.c" "%B%\rl78_dwarf.c" "%B%\rl78_map.c" "%C%\rl78_exec.c" "%C%\rl78_sys.c" "%C%\rl78_disasm.c" "%C%\rl78_xlate.c""
+    set "SRCS=%COMMON% "%B%\rl78_backend.c" "%B%\rl78_xl.c" "%B%\rl78_abi.c" "%B%\rl78_lmf.c" "%B%\rl78_sym.c" "%B%\rl78_elf.c" "%B%\rl78_dwarf.c" "%B%\rl78_map.c" "%C%\rl78_exec.c" "%C%\rl78_sys.c" "%C%\rl78_disasm.c" "%C%\rl78_xlate.c""
     set "INC=-I"%ROOT%\runtime\include" -I"%S%" -I"%ROOT%\rl78\include" -I"%B%""
 )
 
@@ -70,6 +70,15 @@ if exist "%ROOT%\gui\dist\sim_gui.html" (
 ) else (
     if exist "%OUT%\sim_gui.html" del "%OUT%\sim_gui.html"
     echo build.bat: gui\dist\sim_gui.html not found, sim gui will show a GUI-not-built page
+)
+if not "%MODE%"=="mock" (
+    rem sources that exec = xlate hands to clang
+    if not exist "%OUT%\xlate" mkdir "%OUT%\xlate"
+    copy /y "%ROOT%\rl78\include\rl78.h" "%OUT%\xlate\" >nul
+    copy /y "%ROOT%\rl78\src\rl78_internal.h" "%OUT%\xlate\" >nul
+    copy /y "%ROOT%\rl78\src\rl78_exec_defs.h" "%OUT%\xlate\" >nul
+    copy /y "%ROOT%\rl78\src\rl78_exec_ops.inc" "%OUT%\xlate\" >nul
+    copy /y "%ROOT%\rl78\src\rl78_xlate_rt.h" "%OUT%\xlate\" >nul
 )
 echo build.bat: done: %OUT%\sim.exe
 exit /b 0

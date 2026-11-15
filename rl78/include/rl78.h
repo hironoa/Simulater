@@ -267,6 +267,12 @@ const rl78_xl_host *rl78_xl_host_get(void);
 /* Use translated code (NULL: stop using it).  0 ok, -1 and a message when it does not fit this CPU. */
 int rl78_xl_attach(rl78_cpu *cpu, const rl78_xl_module *m, char *err, size_t errlen);
 uint64_t rl78_xl_insn_count(const rl78_cpu *cpu);         /* instructions run by translated code */
+/* 1 if addr is a byte of a translated instruction or of the instruction right after one (a translated
+   skip has the length of the next instruction built in).  Translated code does not see changes to such bytes
+   (rl78_load after attaching): the caller has to stop using it (rl78_xl_set_enabled) while they differ. */
+int rl78_xl_covers(const rl78_cpu *cpu, uint32_t addr);
+/* Keep the module attached but interpret everything (0), or use it again (1). */
+void rl78_xl_set_enabled(rl78_cpu *cpu, int on);
 
 const char *rl78_stop_reason_name(rl78_stop_reason r);
 

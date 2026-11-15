@@ -21,7 +21,7 @@ fi
 
 LIBS="-lpthread"
 case "$(uname -s)" in
-    Linux*) LIBS="$LIBS -lm" ;;
+    Linux*) LIBS="$LIBS -lm -ldl" ;;
 esac
 
 S="$ROOT/runtime/src"
@@ -34,7 +34,7 @@ if [ "$MODE" = "mock" ]; then
 else
     B="$ROOT/runtime/backends/rl78"
     CFLAGS="$CFLAGS -I$ROOT/rl78/include -I$B"
-    SRCS="$COMMON $B/rl78_backend.c $B/rl78_abi.c $B/rl78_lmf.c $B/rl78_sym.c $B/rl78_elf.c $B/rl78_dwarf.c $B/rl78_map.c \
+    SRCS="$COMMON $B/rl78_backend.c $B/rl78_xl.c $B/rl78_abi.c $B/rl78_lmf.c $B/rl78_sym.c $B/rl78_elf.c $B/rl78_dwarf.c $B/rl78_map.c \
 $ROOT/rl78/src/rl78_exec.c $ROOT/rl78/src/rl78_sys.c $ROOT/rl78/src/rl78_disasm.c $ROOT/rl78/src/rl78_xlate.c"
 fi
 
@@ -48,5 +48,11 @@ if [ -f "$ROOT/gui/dist/sim_gui.html" ]; then
 else
     rm -f "$OUT/sim_gui.html"
     echo "build.sh: gui/dist/sim_gui.html がないので、sim gui は「GUI が未ビルド」のページを返します"
+fi
+if [ "$MODE" != "mock" ]; then
+    # C への変換方式（exec = xlate）が clang に渡すソース
+    mkdir -p "$OUT/xlate"
+    cp "$ROOT/rl78/include/rl78.h" "$ROOT/rl78/src/rl78_internal.h" "$ROOT/rl78/src/rl78_exec_defs.h" \
+       "$ROOT/rl78/src/rl78_exec_ops.inc" "$ROOT/rl78/src/rl78_xlate_rt.h" "$OUT/xlate/"
 fi
 echo "build.sh: 完了 -> $OUT/sim"
