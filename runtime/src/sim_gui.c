@@ -330,6 +330,17 @@ static void do_step_locked(void)
 /* 実行中の 1 周期の長さ（ナノ秒）。speed > 0 のときだけ使う */
 static uint64_t interval_ns_locked(void) { return (uint64_t)(G.period_ms / G.speed * 1e6); }
 
+/* 予定からこれ以上遅れたら「追いつけない」とみなす幅（ナノ秒）。4 周期ぶん、最低 20ms。
+ * これより小さい遅れ（OS の起床の遅れ、たまたま重かった 1 ステップ）は、次のステップを待たずに始めて取り戻す。
+ * 1 回の遅れで予定を捨てると、そのたびに実時間からずれ、オーバーランの表示も点きっぱなしになる
+ * （何もしていない Mac でも起床が 5ms 遅れることがあり、周期 5ms では 1 周期ぶんの遅れは珍しくない）。
+ * 計算そのものが周期に間に合わないときは遅れが積み上がるので、数ステップでこの幅を超える */
+static uint64_t overrun_limit_ns(uint64_t interval)
+{
+    uint64_t lim = interval * 4;
+    return lim < 20000000ULL ? 20000000ULL : lim;
+}
+
 /* G.mu をロックしたまま呼ぶ。期限 deadline まで、または G.cv の通知（/api/control などの制御要求）まで待つ。
  * 期限の SIM_COND_WAIT_SLACK_NS 手前までは条件変数で待ち（通知ですぐ起きる）、残りはロックを外して
  * sim_sleep_until_ns で高精度に待つ（この間の通知は残りの短い時間だけ遅れて効く）。
@@ -365,6 +376,7 @@ static void sim_loop(void *arg)
 {
     uint64_t next = sim_now_ns(), last_overrun = 0, last_yield = sim_now_ns();
     (void)arg;
+    sim_thread_boost();   /* 周期の起床がほかのスレッド（HTTP、ブラウザの描画）に押されて遅れにくくする */
     sim_mutex_lock(G.mu);
     for (;;) {
         if (G.budget > 0) {
@@ -387,14 +399,23 @@ static void sim_loop(void *arg)
             uint64_t interval = interval_ns_locked();
             uint64_t now = sim_now_ns(), epoch = G.epoch;
             next += interval;
-            if (now > next + interval) {
-                /* 追いつけない: 周期を詰めずに続ける */
+            if (now > next + overrun_limit_ns(interval)) {
+                /* 追いつけない: 取り戻すのをあきらめ、いまの時刻から数え直す */
                 if (!G.overrun) { G.overrun = 1; state_changed(); }
                 last_overrun = now;
                 next = now;
             } else if (G.overrun && now - last_overrun > 1000000000ULL) {
                 G.overrun = 0;
                 state_changed();
+            }
+            /* 遅れを取り戻している間（期限がもう過ぎている）は待たないので、ロックを離す機会がない。
+             * HTTP のスレッドが止まらないよう、ここで順番を譲る（最速のときと同じく、5ms に 1 回は 1ms 寝る） */
+            if (now >= next) {
+                sim_mutex_unlock(G.mu);
+                if (now - last_yield > 5000000ULL) { sim_sleep_ms(1); last_yield = sim_now_ns(); }
+                sim_mutex_lock(G.mu);
+            } else {
+                last_yield = now;   /* これから待つ。待っている間はロックを離す */
             }
             /* 期限まで待つ。制御要求で起きたら状態と期限を確かめ直す */
             for (;;) {
