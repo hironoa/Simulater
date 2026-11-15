@@ -28,7 +28,7 @@ static int hexn(const char *p, int n, unsigned *out)
 }
 void rl78_sym_load(rl78_elf *e, rl78_symtab *t, rl78_warns *w, const char *path)
 {
-    FILE *fp=fopen(path,"rb"); char line[2048];
+    FILE *fp=sim_fopen(path,"rb"); char line[2048];
     const char *module=""; int public=1, fallback=e->nsym==0, ok=0, bad=0;
     if(!fp) return;
     while(fgets(line,sizeof line,fp)) {

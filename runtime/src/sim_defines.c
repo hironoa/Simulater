@@ -1020,7 +1020,7 @@ static int compiler_kind(defs *d, const sim_open_opts *o)
     size_t n = 0;
     int kind = 0;
     if (path) {
-        FILE *fp = fopen(path, "rb");
+        FILE *fp = sim_fopen(path, "rb");
         if (fp) { n = fread(m, 1, 4, fp); fclose(fp); }
         free(path);
     }

@@ -32,6 +32,12 @@ int sim_cfg_load(sim_cfg *c, const char *path, char *err, size_t errlen)
     int line = 0;
     char *d = sim_read_file(path, &len);
     if (!d) return -1;
+    /* Windows: Shift_JIS などで保存した設定ファイルは UTF-8 に直す（中のパスをプログラム内の UTF-8 に揃える） */
+    {
+        size_t n2 = 0;
+        char *u = sim_ansi_to_utf8(d, len, &n2);
+        if (u) { free(d); d = u; len = n2; }
+    }
     c->path = sim_xstrdup(path);
     {
         const char *b = sim_basename(path);

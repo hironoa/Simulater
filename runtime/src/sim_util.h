@@ -4,6 +4,7 @@
 
 #include <stdarg.h>
 #include <stddef.h>
+#include <stdio.h>
 #include <stdint.h>
 
 typedef struct {
@@ -67,5 +68,21 @@ int sim_parse_uint(const char *s, uint64_t max, uint64_t *out);
 int sim_parse_uint_n(const char *s, size_t n, uint64_t max, uint64_t *out);
 /* 10 進の浮動小数（符号・小数点・指数可）。有限の値だけ */
 int sim_parse_double(const char *s, double *out);
+
+/* ---- パスの文字コード ----
+ * プログラムの中では、パスを UTF-8 で持つ（Windows でも）。コンソールへの表示を UTF-8 にしているので、
+ * ANSI コードページ（日本語 Windows では Shift_JIS）のまま持つと、日本語のファイル名が表示で化ける。
+ * Windows ではファイルを開く直前にワイド文字へ直す。UTF-8 として読めないパスは ANSI コードページとして解釈する。 */
+FILE *sim_fopen(const char *path, const char *mode);
+/* text が UTF-8 として読めなければ、ANSI コードページから UTF-8 に直した新しい文字列を返す（Windows だけ）。
+ * 直す必要がない・直せないなら NULL */
+char *sim_ansi_to_utf8(const char *text, size_t len, size_t *outlen);
+int sim_utf8_valid(const char *s, size_t n);
+#ifdef _WIN32
+/* UTF-8（読めなければ ANSI）のパスをワイド文字にする。free で解放。sim_platform.c から使う */
+wchar_t *sim_win_wide(const char *path);
+/* ワイド文字を UTF-8 にする。free で解放 */
+char *sim_win_utf8(const wchar_t *w);
+#endif
 
 #endif

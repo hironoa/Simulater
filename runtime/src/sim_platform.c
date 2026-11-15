@@ -6,6 +6,7 @@
 #define _DEFAULT_SOURCE
 #endif
 #include "sim_platform.h"
+#include "sim_util.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -175,10 +176,14 @@ void sim_sock_set_timeout(sim_sock s, int ms)
 
 const char *sim_exe_dir(void)
 {
-    static char dir[MAX_PATH * 3];
-    char *p, *last = NULL;
-    DWORD n = GetModuleFileNameA(NULL, dir, (DWORD)sizeof dir);
-    if (n == 0 || n >= sizeof dir) { strcpy(dir, "."); return dir; }
+    static char dir[MAX_PATH * 4];
+    wchar_t wdir[MAX_PATH + 1];
+    char *p, *last = NULL, *u;
+    DWORD n = GetModuleFileNameW(NULL, wdir, MAX_PATH + 1);
+    if (n == 0 || n > MAX_PATH || !(u = sim_win_utf8(wdir))) { strcpy(dir, "."); return dir; }
+    if (strlen(u) >= sizeof dir) { free(u); strcpy(dir, "."); return dir; }
+    strcpy(dir, u);
+    free(u);
     for (p = dir; *p; p++) if (*p == '\\' || *p == '/') last = p;
     if (last) *last = 0; else strcpy(dir, ".");
     return dir;
@@ -196,13 +201,32 @@ void sim_console_utf8(void)
     SetConsoleOutputCP(CP_UTF8);
 }
 
-/* fopen と同じ ANSI コードページでパスを解釈するため CreateFileA を使う。
+#pragma comment(lib, "shell32.lib")
+#include <shellapi.h>
+
+/* main の argv は ANSI コードページ。コマンドラインをワイド文字で取り直して UTF-8 にする（失敗したら元のまま） */
+void sim_utf8_args(int *argc, char ***argv)
+{
+    int n = 0, i;
+    wchar_t **w = CommandLineToArgvW(GetCommandLineW(), &n);
+    char **a;
+    if (!w) return;
+    if (n != *argc || !(a = calloc((size_t)n + 1, sizeof *a))) { LocalFree(w); return; }
+    for (i = 0; i < n; i++)
+        if (!(a[i] = sim_win_utf8(w[i]))) { LocalFree(w); return; }   /* 途中までの確保はプロセス終了まで残す */
+    LocalFree(w);
+    *argv = a;
+}
+
+/* sim_fopen と同じ規則（UTF-8、読めなければ ANSI）でパスを解釈する。
  * フォルダも開けるよう FILE_FLAG_BACKUP_SEMANTICS、ほかが開いていても開けるよう共有はすべて許す */
 static int file_id(const char *path, BY_HANDLE_FILE_INFORMATION *fi)
 {
-    HANDLE h = CreateFileA(path, 0, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING,
-                           FILE_FLAG_BACKUP_SEMANTICS, NULL);
+    wchar_t *w = sim_win_wide(path);
+    HANDLE h = w ? CreateFileW(w, 0, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING,
+                               FILE_FLAG_BACKUP_SEMANTICS, NULL) : INVALID_HANDLE_VALUE;
     BOOL ok;
+    free(w);
     if (h == INVALID_HANDLE_VALUE) return -1;
     ok = GetFileInformationByHandle(h, fi);
     CloseHandle(h);
@@ -430,6 +454,7 @@ void sim_open_browser(const char *url)
 }
 
 void sim_console_utf8(void) {}
+void sim_utf8_args(int *argc, char ***argv) { (void)argc; (void)argv; }
 
 int sim_same_file(const char *a, const char *b)
 {
@@ -446,7 +471,9 @@ int sim_same_file(const char *a, const char *b)
 int sim_path_kind(const char *path)
 {
 #ifdef _WIN32
-    DWORD a = GetFileAttributesA(path);
+    wchar_t *w = sim_win_wide(path);
+    DWORD a = w ? GetFileAttributesW(w) : INVALID_FILE_ATTRIBUTES;
+    free(w);
     if (a == INVALID_FILE_ATTRIBUTES || (a & FILE_ATTRIBUTE_REPARSE_POINT)) return 0;
     return (a & FILE_ATTRIBUTE_DIRECTORY) ? 2 : 1;
 #else
@@ -458,19 +485,26 @@ int sim_path_kind(const char *path)
 int sim_dir_each(const char *path, void (*visit)(void *, const char *, int), void *ctx)
 {
 #ifdef _WIN32
-    WIN32_FIND_DATAA data;
+    WIN32_FIND_DATAW data;
     size_t n = strlen(path);
     char *pattern = malloc(n + 3);
+    wchar_t *wpattern;
     HANDLE h;
     if (!pattern) return -1;
     memcpy(pattern, path, n); memcpy(pattern + n, "\\*", 3);
-    h = FindFirstFileA(pattern, &data); free(pattern);
+    wpattern = sim_win_wide(pattern); free(pattern);
+    if (!wpattern) return -1;
+    h = FindFirstFileW(wpattern, &data); free(wpattern);
     if (h == INVALID_HANDLE_VALUE) return -1;
     do {
-        if (!strcmp(data.cFileName, ".") || !strcmp(data.cFileName, "..") ||
+        char *name;
+        if (!wcscmp(data.cFileName, L".") || !wcscmp(data.cFileName, L"..") ||
             (data.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)) continue;
-        visit(ctx, data.cFileName, (data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) ? 2 : 1);
-    } while (FindNextFileA(h, &data));
+        name = sim_win_utf8(data.cFileName);   /* 名前は UTF-8 で渡す（プログラム内のパスは UTF-8） */
+        if (!name) continue;
+        visit(ctx, name, (data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) ? 2 : 1);
+        free(name);
+    } while (FindNextFileW(h, &data));
     { DWORD e = GetLastError(); FindClose(h); return e == ERROR_NO_MORE_FILES ? 0 : -1; }
 #else
     struct dirent *de;
