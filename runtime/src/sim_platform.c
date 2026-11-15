@@ -67,8 +67,6 @@ int sim_thread_start(sim_thread_fn fn, void *arg)
     return 0;
 }
 
-void sim_thread_boost(void) { SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL); }
-
 uint64_t sim_now_ns(void)
 {
     static LARGE_INTEGER freq;
@@ -319,8 +317,6 @@ int sim_thread_start(sim_thread_fn fn, void *arg)
     pthread_attr_destroy(&at);
     return 0;
 }
-
-void sim_thread_boost(void) {}
 
 uint64_t sim_now_ns(void)
 {

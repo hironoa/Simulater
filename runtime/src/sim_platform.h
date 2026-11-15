@@ -29,8 +29,6 @@ void sim_cond_broadcast(sim_cond *c);
 typedef void (*sim_thread_fn)(void *arg);
 /* デタッチしたスレッドを作る。失敗なら -1 */
 int sim_thread_start(sim_thread_fn fn, void *arg);
-/* いまのスレッドの優先度を少し上げる（周期実行のスレッド用。できなければ何もしない） */
-void sim_thread_boost(void);
 
 /* 単調増加の時刻（ナノ秒） */
 uint64_t sim_now_ns(void);

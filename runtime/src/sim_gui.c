@@ -376,14 +376,16 @@ static void sim_loop(void *arg)
 {
     uint64_t next = sim_now_ns(), last_overrun = 0, last_yield = sim_now_ns();
     (void)arg;
-    sim_thread_boost();   /* 周期の起床がほかのスレッド（HTTP、ブラウザの描画）に押されて遅れにくくする */
     sim_mutex_lock(G.mu);
     for (;;) {
         if (G.budget > 0) {
             do_step_locked();
             if (G.budget > 0) G.budget--;
             if (G.budget == 0) state_changed();
+            /* 続けて回る間も HTTP のスレッド（pause など）に順番を譲る。ロックを離してすぐ取り直すだけでは
+             * 譲れないことがあるので、5ms に 1 回は 1ms 寝る（最速のときと同じ） */
             sim_mutex_unlock(G.mu);
+            if (sim_now_ns() - last_yield > 5000000ULL) { sim_sleep_ms(1); last_yield = sim_now_ns(); }
             sim_mutex_lock(G.mu);
             next = sim_now_ns();
             continue;
