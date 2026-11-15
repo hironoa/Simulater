@@ -85,6 +85,11 @@ call :run "stub = read_io:AMSTB_read_io" 0 "OK 3, NG 0" --abs "%TP%" --cfg "%R%\
 call :run "stub_auto = on" 0 "OK 3, NG 0" --abs "%TP%" --cfg "%R%\cfg\stub_auto.cfg" "%R%\csv\synth_stub.csv"
 call :run "stub lines in the CSV, no sim.cfg" 0 "OK 3, NG 0" --abs "%TP%" "%R%\csv\synth_stub_line.csv"
 call :run "CSV stubs do not leak into the next CSV" 0 "OK 4, NG 0" --abs "%TP%" "%R%\csv\synth_stub_line.csv" "%R%\csv\synth_nostub.csv"
+> "%WORK%\stub_file.csv" echo mod,use_io,x,2,2
+>> "%WORK%\stub_file.csv" echo %%,"winams/AMSTB_SrcFile.c/AMSTB_read_io","ENGINE.C/read_io"
+>> "%WORK%\stub_file.csv" echo #COMMENT,0xFFF1E:2,g_stub_val,use_io@@,0xFFF1E:2
+>> "%WORK%\stub_file.csv" echo ,0x0100,0x0222,0x0223,0x0100
+call :run "stub line with file/function names" 0 "OK 1, NG 0" --abs "%TP%" "%WORK%\stub_file.csv"
 mkdir "%WORK%\autocfg"
 copy /y "%TP%" "%WORK%\autocfg\prog.abs" >nul
 copy /y "%R%\cfg\stub.cfg" "%WORK%\autocfg\sim.cfg" >nul
