@@ -396,10 +396,14 @@ int rl78_set_call_profile(rl78_cpu *c, int on)
 
 const uint8_t *rl78_call_profile(const rl78_cpu *c) { return c->callprof; }
 
-/* The bytes of the instruction at a (as the memory is now: attach before anything changes the code). */
+/* The bytes translated code depends on for the instruction at a (as the memory is now: attach before
+   anything changes the code): the instruction itself, and the instruction after it, because the
+   translation of a skip instruction has the length of the next instruction built in, whether or not
+   that next instruction is translated. */
 static void mark_insn_bytes(rl78_cpu *c, uint32_t a)
 {
     int len = rl78__insn_len(c, a), k;
+    len += rl78__insn_len(c, (a + (uint32_t)len) & 0xFFFFFu);
     for (k = 0; k < len && a + (uint32_t)k < RL78_MEM_SIZE; k++) {
         uint32_t b = a + (uint32_t)k;
         c->xl_bytes[b >> 3] |= (uint8_t)(1u << (b & 7u));
