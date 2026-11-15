@@ -1,0 +1,106 @@
+# ABI: auto は ELF -> ccrl、LMF -> ca78k0r。明示指定で上書き可。
+abi = auto
+# LMFのcharとsigned charは同じコード。-quを使ったビルドではon（既定off）。
+#char_unsigned = off
+
+# sim.cfg - シミュレータの設定（KEY = VALUE、# 以降はコメント）
+# .abs と同じフォルダに置くと自動で読む。別の場所なら sim run --cfg <このファイル> で指定する。
+# 相対パスはこのファイルのあるフォルダが基準。
+
+# ロードモジュール（--abs を省いたときに使う）
+#abs = DefaultBuild/project.abs
+# リンクマップ（既定は .abs と同じ名前の .map。あれば照合とデバッグ情報がないときの補助に使う）
+#map = DefaultBuild/project.map
+
+# CPU コア種別: auto（S3 の命令と S2 の乗除算器 SFR の両方を有効）| S1 | S2 | S3
+core = auto
+# 乗除算器 SFR（MDAL/MDAH/MDBL/MDBH/MDCL/MDCH/MDUC）を有効にするか。既定は auto と S2 で on
+#mdu = on
+
+# CPU クロック（Hz）。結果 CSV の実行時間 = 実行したクロック数 / cpu_hz
+cpu_hz = 32000000
+
+# 初期設定終了アドレス（ここで止めた状態が「初期状態」）。関数名か 0x アドレス。既定 main
+#init_end = main
+
+# GUI の既定の周期関数
+#func = TEST_cycle
+
+# スタブへの置換（元の関数の先頭に来たらスタブの先頭へ移る）
+#stub = func3_sub_read_io:AMSTB_func3_sub_read_io
+#stub = read_adc:AMSTB_read_adc
+# on にすると AMSTB_<関数名> がある関数をすべて置換する
+stub_auto = off
+
+# 関数を実行せず即座に戻る（通常の CALL/RET 専用。RETI/RETB の割り込み関数には使わない）
+# 戻り値は型が分かる整数・nearポインタの生ビット列。負数は 0xFFFF などで指定する。
+#skip = R_CGC_Create
+#skip = read_adc:0x1234
+# リセット直後、スタートアップ前の物理番地に値を書く（複数可、リトルエンディアン）
+# 実際の製品のマニュアルで番地と必要なビットを確認する。以下は書式例。
+#poke = 0xFFFA2:1
+#poke = 0xF00A8:0x1234:2
+
+# HALT / STOP 命令: ignore（読み飛ばす）| stop（その行をエラーにする）
+halt = ignore
+stop = ignore
+
+# 1 回の呼び出しで実行する命令数の上限（暴走・無限ループの検出）。スタートアップの上限は startup_max_insns
+max_insns = 100000000
+#startup_max_insns = 200000000
+
+# ミラー領域: auto（.const の位置と RAM の先頭から決める）| off | 開始-終了[@写し元]
+#mirror = 0xF3000-0xFBEFF@0x03000
+# RAM（既定は __RAM_ADDR_START/__RAM_ADDR_END、なければ RAM のセクションから）
+#ram = 0xFBF00-0xFFEDF
+# $ptr 用のヒープ（既定は使われていない RAM、なければスタックの底から 2KB まで）
+#heap = 0xFB000-0xFB3FF
+# スタートアップ前の RAM の値（実機では不定。既定 0）
+#ram_fill = 0x00
+# 戻り番地に積む番兵アドレス（既定 0xEFFF0。プログラムと重なるなら変える）
+#sentinel = 0xEFFF0
+# 呼び出し時の SP（既定は初期設定終了時の SP）
+#call_sp = 0xFFE1C
+
+# DWARF のポインタの DW_AT_address_class ごとの大きさ（CC-RL の near は 4 -> 2 バイト。既定で対応済み）
+#addr_class.4 = 2
+# DWARF2/3 のビットフィールドの DW_AT_bit_offset を LSB 側から数える（非標準。既定 msb）
+#bitfield_order = msb
+
+# 初期化つきWinAMS CSV。auto: InitWheneverCallなら毎周期、他のInitなら最初だけ
+#csv_init = auto
+# シンボルにならない直アドレスのマクロ。既定でサブフォルダも読む
+#defines = ../product
+#defines_exclude = generated
+#defines_recursive = on
+#defines_near_base = 0xF0000
+#defines_guess_bits = on
+# ヘッダの #if / #ifdef を評価して有効な枝だけを読む（既定 on。off ならすべての枝を読む）
+#defines_cond = on
+# コンパイル・オプションの定義マクロ（-D 相当）。名前=値 を複数行書ける。値を省くと 1
+#cdef = PRODUCT=2
+#cdef = SIM
+# 定義を外す（暗黙の定義、mtpj、cdef のどれでも）
+#cundef = OLD_SWITCH
+# CS+ のプロジェクトファイルから定義マクロを読む。読み取った一覧は sim info に出る
+#mtpj = ../product/project.mtpj
+#mtpj_mode = DefaultBuild
+#ctype = u1 : u8
+#ctype = typeBit : bits8
+# 明示定義はロードモジュール・ヘッダの同名定義より優先
+#var = P1 : u8 @ 0xFFF01
+#var = ADCR : u16 @ 0xFFF1E
+#var = TBL : u8[16] @ 0xFE900
+#var = P1_0 : u8.0 @ 0xFFF01
+#var = FLAGS : u8.4-6 @ 0xFE800
+#varfile = registers.txt
+
+# 実行方式。interp: 命令を 1 つずつ解釈して実行（既定）。xlate: C に変換し、clang でコンパイルしたもので実行（数倍速い）。
+# verify: 両方で実行して結果が一致することを確かめる（遅い）。コマンドラインの --exec が優先
+# exec = xlate
+# xlate の clang（既定は環境変数 SIM_XLATE_CC、なければ PATH の clang）。LLVM の配布物を展開しただけのもので可
+# xlate_cc = C:\tools\clang+llvm-18.1.8-x86_64-pc-windows-msvc\bin\clang.exe
+# xlate の変換結果を置くフォルダ（既定はロードモジュールの隣の .simxl）
+# xlate_dir = D:\work\simxl
+# xlate のコンパイルの並列数（既定は CPU の数）
+# xlate_jobs = 4

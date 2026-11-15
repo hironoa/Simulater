@@ -1,7 +1,7 @@
 #!/bin/sh
-# build_windows_cross.sh - macOS / Linux の上で Windows 用の sim.exe を作り、配布用の zip にまとめる
+# build_windows_cross.sh - macOS / Linux の上で Windows 用の sim.exe を作り、配布用のフォルダにまとめる
 #
-#   tools/build_windows_cross.sh [出力フォルダ]     （既定 dist）
+#   tools/build_windows_cross.sh [出力フォルダ]     （既定 dist。その下の sim-windows-x64/ を作り直す）
 #
 # MinGW-w64 の gcc（x86_64-w64-mingw32-gcc。macOS なら brew install mingw-w64）が要る。
 # 設定は build.bat の CC=gcc の場合と同じ（-static: MinGW の DLL に依存しない）。
@@ -26,7 +26,6 @@ WORK=$(mktemp -d "${TMPDIR:-/tmp}/simwin.XXXXXX")
 trap 'rm -rf "$WORK"' EXIT
 OUT="$WORK/$NAME"
 mkdir -p "$OUT/xlate" "$DIST"
-# zip は作業用フォルダへ移ってから作るので、出力先を絶対パスにしておく（相対パスで渡されても呼び出し元から見た場所に作る）
 DIST=$(cd "$DIST" && pwd)
 
 echo "build_windows_cross.sh: $CC で sim.exe をビルドします"
@@ -44,6 +43,7 @@ cp "$ROOT/rl78/include/rl78.h" "$C/rl78_internal.h" "$C/rl78_exec_defs.h" "$C/rl
 cp "$ROOT/example/sim.cfg" "$OUT/sim.cfg.example"
 cp "$ROOT/README.md" "$OUT/"
 
-rm -f "$DIST/$NAME.zip"
-(cd "$WORK" && zip -q -r -X "$DIST/$NAME.zip" "$NAME")
-echo "build_windows_cross.sh: 完了 -> $DIST/$NAME.zip（$("$CC" --version | head -1)）"
+# 前の中身を残さないよう、フォルダごと置き換える（ビルドが成功してから消す）
+rm -rf "$DIST/$NAME"
+cp -R "$OUT" "$DIST/$NAME"
+echo "build_windows_cross.sh: 完了 -> $DIST/$NAME/（$("$CC" --version | head -1)）"
