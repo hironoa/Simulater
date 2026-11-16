@@ -213,12 +213,87 @@ static const unit_fn *unit_find(const unit_fn *fn, size_t nfn, uint32_t a)
     return NULL;
 }
 
-static void emit_function(rl78_cpu *c, uint32_t entry, const uint8_t *entries, const unit_fn *fn, size_t nfn,
-                          scan_t *s, out_t *o, rl78_xl_leaders *ld)
+/* Where the instruction limit and the breakpoint are checked.
+
+   Every block start has the check (label L_), because the dispatcher can enter there.  But a jump
+   that goes forward inside the function does not need it again: the check before it has already
+   counted the instructions behind the jump (the longest way, up to the next check), and a
+   breakpoint at the target counts as one "inside" a block, which turns translated code off.  Such
+   a jump goes to the label behind the check (U_).
+   What stays checked: the function entry, the target of a backward jump (so a loop is checked once
+   per turn), the instruction after a CALL (the callee ran any number of instructions), and
+   everything reached through the dispatcher or the switch.
+   The longest way is capped: near the limit the rest is left to the interpreter, and that rest
+   should stay short. */
+#define XL_FREE_MAX 64u         /* instructions a check may answer for through forward jumps */
+#define XL_FREE_FALL 1u         /* falls into the next block without its check */
+#define XL_FREE_TARGET 2u       /* the branch target is entered without its check */
+#define XL_FREE_SKIP 4u         /* the address behind the skipped instruction is entered without its check */
+
+static size_t list_index(const scan_t *s, uint32_t a)
+{
+    size_t lo = 0, hi = s->n;
+    while (lo < hi) {
+        size_t mid = lo + (hi - lo) / 2;
+        if (s->list[mid] < a) lo = mid + 1; else hi = mid;
+    }
+    return lo;      /* the caller knows a is in the list */
+}
+
+/* rem[i]: instructions from list[i] to the next check, the longest way.  edge[i]: XL_FREE_* of
+   list[i].  open[i]: list[i] is entered without its check from somewhere. */
+static void plan_checks(rl78_cpu *c, const scan_t *s, uint32_t *rem, uint8_t *edge, uint8_t *open)
+{
+    size_t i = s->n;
+    memset(edge, 0, s->n);
+    memset(open, 0, s->n);
+#define HERE(t) ((s->mark[(t) & 0xFFFFFu] & 3) == 3)
+    while (i-- > 0) {
+        uint32_t pc = s->list[i], next, after, r = 1;
+        flow_t f;
+        flow_of(c, pc, &f);
+        next = pc + (uint32_t)f.len;
+        if (i + 1 < s->n && s->list[i + 1] == next) {
+            if (!(s->mark[next] & 2)) {
+                r = 1 + rem[i + 1];                         /* same block: no check in between */
+            } else if (f.falls && !f.is_call && 1 + rem[i + 1] <= XL_FREE_MAX) {
+                edge[i] |= XL_FREE_FALL;
+                open[i + 1] = 1;
+                r = 1 + rem[i + 1];
+            }
+        }
+        if (f.has_target && !f.is_call && f.target > pc && HERE(f.target)) {
+            size_t j = list_index(s, f.target);
+            if (1 + rem[j] <= XL_FREE_MAX) {
+                edge[i] |= XL_FREE_TARGET;
+                open[j] = 1;
+                if (1 + rem[j] > r) r = 1 + rem[j];
+            }
+        }
+        after = next + (uint32_t)rl78__insn_len(c, next);
+        if (f.is_skip && HERE(after)) {
+            size_t j = list_index(s, after);     /* the skipped instruction counts as one executed: 2 */
+            if (2 + rem[j] <= XL_FREE_MAX) {
+                edge[i] |= XL_FREE_SKIP;
+                open[j] = 1;
+                if (2 + rem[j] > r) r = 2 + rem[j];
+            }
+        }
+        rem[i] = r;
+    }
+#undef HERE
+}
+
+static int emit_function(rl78_cpu *c, uint32_t entry, const uint8_t *entries, const unit_fn *fn, size_t nfn,
+                         scan_t *s, out_t *o, rl78_xl_leaders *ld)
 {
     size_t i;
     const uint8_t *img = c->mem;
     const unit_fn *self = unit_find(fn, nfn, entry);
+    uint32_t *rem = (uint32_t *)malloc((s->n ? s->n : 1) * sizeof *rem);
+    uint8_t *edge = (uint8_t *)malloc(s->n ? s->n : 1), *open = (uint8_t *)malloc(s->n ? s->n : 1);
+    if (!rem || !edge || !open) { free(rem); free(edge); free(open); return -1; }
+    plan_checks(c, s, rem, edge, open);
     if (self && self->copy) ld = NULL;  /* the block starts are listed by the file the function belongs to */
     outf(o, "static %sxl_state xl_i%05X(rl78_cpu *C, xl_state s_, uint64_t lim)\n{\n",
          self && self->inl ? "inline __attribute__((always_inline)) " : "", (unsigned)entry);
@@ -236,13 +311,14 @@ static void emit_function(rl78_cpu *c, uint32_t entry, const uint8_t *entries, c
         next = pc + (uint32_t)f.len;
         nl = rl78__insn_len(c, next);
         if (s->mark[pc] & 2) {
-            /* block start: all of the block must fit under the limit, and a breakpoint here is the interpreter's */
-            size_t j = i + 1;
-            uint32_t q = next;
-            while (j < s->n && s->list[j] == q && !(s->mark[q] & 2)) { q += (uint32_t)rl78__insn_len(c, q); j++; }
+            /* block start: everything up to the next check must fit under the limit, and a breakpoint
+               here is the interpreter's */
             outf(o, "L_%05X:\n    if (n + %u > lim || M[0x%05Xu + RL78_TRAP_OFFSET]) { pc = 0x%05X; st = RL78_XL_MISS; goto out; }\n",
-                 (unsigned)pc, (unsigned)(j - i), (unsigned)pc, (unsigned)pc);
+                 (unsigned)pc, (unsigned)rem[i], (unsigned)pc, (unsigned)pc);
+            if (open[i]) outf(o, "U_%05X:\n", (unsigned)pc);
             if (ld) rl78_xl_leaders_add(ld, pc, entry, 1);
+            /* entered without the check too: a breakpoint here would be run over, like one inside a block */
+            if (ld && open[i]) rl78_xl_leaders_add(ld, pc, entry, 0);
         } else if (ld) {
             rl78_xl_leaders_add(ld, pc, entry, 0);
         }
@@ -281,20 +357,31 @@ static void emit_function(rl78_cpu *c, uint32_t entry, const uint8_t *entries, c
                     "    }\n", (unsigned)f.target, (unsigned)f.target, (unsigned)f.target);
         }
 #define HERE(t) ((s->mark[t] & 3) == 3)
-        if (f.has_target && HERE(f.target)) outf(o, "    if (pc == 0x%05X) goto L_%05X;\n", (unsigned)f.target, (unsigned)f.target);
+        if (f.has_target && HERE(f.target))
+            outf(o, "    if (pc == 0x%05X) goto %c_%05X;\n", (unsigned)f.target,
+                 (edge[i] & XL_FREE_TARGET) ? 'U' : 'L', (unsigned)f.target);
         if (f.is_skip && HERE(next + (uint32_t)nl))
-            outf(o, "    if (pc == 0x%05X) goto L_%05X;\n", (unsigned)(next + (uint32_t)nl), (unsigned)(next + (uint32_t)nl));
+            outf(o, "    if (pc == 0x%05X) goto %c_%05X;\n", (unsigned)(next + (uint32_t)nl),
+                 (edge[i] & XL_FREE_SKIP) ? 'U' : 'L', (unsigned)(next + (uint32_t)nl));
 #undef HERE
-        if (i + 1 < s->n && s->list[i + 1] == next) outf(o, "    if (pc != 0x%05X) goto dyn;\n", (unsigned)next);
-        else outf(o, "    goto dyn;\n");
+        if (i + 1 < s->n && s->list[i + 1] == next) {
+            outf(o, "    if (pc != 0x%05X) goto dyn;\n", (unsigned)next);
+            if (edge[i] & XL_FREE_FALL) outf(o, "    goto U_%05X;\n", (unsigned)next);
+        } else {
+            outf(o, "    goto dyn;\n");
+        }
     }
     outf(o, "out:\n    s_.cyc = cyc; s_.n = n; s_.R = R; s_.pc = pc; s_.F = F; s_.st = st;\n    return s_;\n}\n\n");
-    if (self && self->copy) return;
+    free(rem);
+    free(edge);
+    free(open);
+    if (self && self->copy) return 0;
     outf(o, "int rl78_xl_f%05X(rl78_cpu *C, uint64_t *np, uint64_t lim)\n{\n"
             "    xl_state s_ = {C->cycles, *np, C->rb, C->pc, C->psw, 0};\n"
             "    s_ = xl_i%05X(C, s_, lim);\n"
             "    C->pc = s_.pc; C->psw = (uint8_t)s_.F; C->cycles = s_.cyc; C->rb = s_.R; *np = s_.n;\n"
             "    return s_.st;\n}\n\n", (unsigned)entry, (unsigned)entry);
+    return 0;
 }
 
 /* ---- public: translation --------------------------------------------------------- */
@@ -391,7 +478,7 @@ int rl78_xlate_unit(rl78_cpu *c, const uint32_t *unit, size_t nunit, const uint8
         uint32_t e = fn[i].entry;
         if (e == 0xFFFFFFFFu) continue;
         if (scan_function(c, e, entries, &s)) { rc = -1; break; }
-        if (s.n) emit_function(c, e, entries, fn, nfn, &s, &o, ld);
+        if (s.n && emit_function(c, e, entries, fn, nfn, &s, &o, ld)) rc = -1;
         if (!fn[i].copy) total += s.n;
         scan_clear(&s);
     }

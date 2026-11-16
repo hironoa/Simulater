@@ -15,7 +15,7 @@
 
 #include "rl78_exec_defs.h"
 
-#define RL78_XL_ABI 3u
+#define RL78_XL_ABI 4u
 
 /* A translated function runs the function it CALLs itself (a C call) instead of going back to
    the dispatcher, up to this depth of RL78 calls.  Deeper calls, and recursion that never comes

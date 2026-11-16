@@ -241,6 +241,35 @@ int main(int argc, char **argv)
         CHECK(rl78_xl_insn_count(b) > before, "translated code was not used again");
     }
 
+    printf("== translated code: a breakpoint at the target of a forward jump\n");
+    {
+        /* "odd" and "join" are block starts, but the jumps to them go forward and skip their check
+           (the check before the jump answers for them): a breakpoint there is one inside a block */
+        static const char *const names[] = {"odd", "join"};
+        size_t k;
+        for (k = 0; k < sizeof names / sizeof *names; k++) {
+            int at = tasm_label(names[k]);
+            uint64_t before = rl78_xl_insn_count(b);
+            CHECK(at >= 0, "label %s not found", names[k]);
+            if (at < 0) continue;
+            rl78_add_breakpoint(a, (uint32_t)at);
+            rl78_add_breakpoint(b, (uint32_t)at);
+            for (i = 0; i < 50; i++) {
+                rl78_stop_reason ra = rl78_run(a, 100000), rb = rl78_run(b, 100000);
+                CHECK(ra == RL78_STOP_BREAKPOINT && rb == RL78_STOP_BREAKPOINT, "%s breakpoint %d: stop reasons %d / %d", names[k], i, (int)ra, (int)rb);
+                CHECK(same_regs(a, b), "%s breakpoint %d: %s", names[k], i, where(a, b));
+            }
+            CHECK(rl78_get_reg(b, RL78_REG_PC) == (uint32_t)at, "stopped at %05X, not at %s", (unsigned)rl78_get_reg(b, RL78_REG_PC), names[k]);
+            CHECK(rl78_xl_insn_count(b) == before, "translated code ran with a breakpoint at %s", names[k]);
+            rl78_remove_breakpoint(a, (uint32_t)at);
+            rl78_remove_breakpoint(b, (uint32_t)at);
+            before = rl78_xl_insn_count(b);
+            CHECK(rl78_run(a, 100000) == RL78_STOP_LIMIT && rl78_run(b, 100000) == RL78_STOP_LIMIT, "run after removing the breakpoint at %s", names[k]);
+            CHECK(same_regs(a, b), "after the breakpoint at %s: %s", names[k], where(a, b));
+            CHECK(rl78_xl_insn_count(b) > before, "translated code was not used again after the breakpoint at %s", names[k]);
+        }
+    }
+
     printf("== translated code: a hook on plain RAM switches it off\n");
     {
         /* translated code reads and writes constant RAM addresses without the page tables: a hook
