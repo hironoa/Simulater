@@ -39,6 +39,7 @@ typedef struct {
     struct memo *memos; /* 読んだ結果の記録（同じ状態で #include されたら読み直さない） */
     unsigned nmemos;
     unsigned char included, visited, has_types;
+    unsigned char closure;  /* defines_scope = mtpj で、#include をたどって足したファイル（起点にしない） */
 } source;
 /* マクロの名前。状態は起点ごと（gen が今の世代なら kind / body、違えば定義マクロの base_*） */
 typedef struct {
@@ -97,6 +98,13 @@ typedef struct {
     unsigned enc_ascii, enc_utf8, enc_sjis, enc_utf16;
     size_t bytes, ndirectives;
     uint64_t t_scan, t_read, t_cond;
+    /* defines_scope = mtpj: 読むのは登録ファイルと、そこから #include でたどれるファイルだけ */
+    int scope;
+    unsigned char *file_closure;    /* files と同じ並び。#include をたどって足したものは 1 */
+    size_t files_alloc;
+    char **incdirs; size_t nincdirs;    /* インクルード・パス（正規化済み）。前から順に探す */
+    char **pkeys; int32_t *pvals; size_t pcap, pcount;  /* 正規化して小文字にしたパス -> files の番号（-1 = ない） */
+    unsigned scope_registered, scope_added, scope_fallback;
 } defs;
 typedef struct { const char *p, *start; char tok[128]; } lexer;
 
@@ -165,13 +173,52 @@ static int source_extension(const char *p)
     const char *e=strrchr(p,'.');
     return e && (wildcard(".h",e) || wildcard(".c",e) || wildcard(".inc",e));
 }
+/* 区切りを '/' にし、"." と ".." を畳んだパス（同じファイルを別の書き方で 2 回読まないため） */
+static char *normal_path(const char *p)
+{
+    size_t n=strlen(p), i=0, o=0, root, lead=0;
+    char *s=sim_xmalloc(n+3);
+    if (n>=2 && p[1]==':') { s[o++]=p[0]; s[o++]=':'; i=2; }
+    while (p[i]=='/' || p[i]=='\\') { if (lead<2 && (lead==0 || i==1)) { s[o++]='/'; lead++; } i++; }
+    root=o;
+    while (p[i]) {
+        size_t b=i, len;
+        while (p[i] && p[i]!='/' && p[i]!='\\') i++;
+        len=i-b;
+        while (p[i]=='/' || p[i]=='\\') i++;
+        if (len==1 && p[b]=='.') continue;
+        if (len==2 && p[b]=='.' && p[b+1]=='.' && o>root) {
+            size_t q=o;
+            while (q>root && s[q-1]!='/') q--;      /* 最後の要素の先頭 */
+            if (!(o-q==2 && s[q]=='.' && s[q+1]=='.')) { o=q>root ? q-1 : root; continue; }
+        }
+        if (len==2 && p[b]=='.' && p[b+1]=='.' && o==root && lead) continue;   /* ルートより上はない */
+        if (o>root) s[o++]='/';
+        memcpy(s+o,p+b,len); o+=len;
+    }
+    if (!o) s[o++]='.';
+    s[o]=0;
+    return s;
+}
+static int absolute_path(const char *p) { return p[0]=='/' || p[0]=='\\' || (p[0] && p[1]==':'); }
+static void push_file(defs *d, char *owned_path, int closure)
+{
+    if (d->nfiles==d->files_alloc) {
+        d->files_alloc=d->files_alloc?d->files_alloc*2:256;
+        d->files=sim_xrealloc(d->files,d->files_alloc*sizeof *d->files);
+        d->file_closure=sim_xrealloc(d->file_closure,d->files_alloc);
+    }
+    d->file_closure[d->nfiles]=(unsigned char)closure;
+    d->files[d->nfiles++]=owned_path;
+}
 static void add_file(defs *d, const char *path)
 {
     size_t i;
+    char *p;
     if (excluded(d,path)) return;
-    for (i=0;i<d->nfiles;i++) if (!strcmp(d->files[i],path)) return;
-    d->files=sim_xrealloc(d->files,(d->nfiles+1)*sizeof *d->files);
-    d->files[d->nfiles++]=sim_xstrdup(path);
+    p=d->scope ? normal_path(path) : sim_xstrdup(path);
+    for (i=0;i<d->nfiles;i++) if (!strcmp(d->files[i],p)) { free(p); return; }
+    push_file(d,p,0);
 }
 typedef struct { defs *d; const char *dir, *pattern; unsigned depth; } walk;
 static void visit_file(void *ctx, const char *name, int kind)
@@ -919,6 +966,10 @@ static void free_sources(defs *d)
         free(s->lower); free(s->text); free(s->line_off); free(s->line_no); free(s->dirs); free(s->seen); free(s->memos);
     }
     free(d->src); free(d->by_base); free(d->ranges); free(d->frames); free(d->rlog); free(d->wlog);
+    for (k = 0; k < d->pcap; k++) free(d->pkeys[k]);
+    free(d->pkeys); free(d->pvals); free(d->file_closure);
+    for (k = 0; k < d->nincdirs; k++) free(d->incdirs[k]);
+    free(d->incdirs);
     for (k = 1; k < d->nsyms; k++) free(d->syms[k].name);
     free(d->syms); free(d->sym_index);
     for (k = 0; k < d->ext_cap; k++) free(d->ext[k].name);
@@ -927,18 +978,99 @@ static void free_sources(defs *d)
     free(d->owned);
 }
 
+/* ---- defines_scope = mtpj: パス -> ファイルの番号の表（開番地法）。ないと分かったパスも -1 で覚える
+   （同じヘッダを何百回も #include するので、そのたびにファイルの有無を OS に聞かない） */
+static uint32_t path_hash(const char *s)
+{
+    uint32_t h = 2166136261u;
+    for (; *s; s++) { h ^= (unsigned char)*s; h *= 16777619u; }
+    return h;
+}
+static size_t path_slot(const defs *d, const char *key)
+{
+    size_t i = path_hash(key) & (d->pcap - 1);
+    while (d->pkeys[i] && strcmp(d->pkeys[i], key)) i = (i + 1) & (d->pcap - 1);
+    return i;
+}
+/* key は表が持つ（あとで free する） */
+static void path_put(defs *d, char *key, int32_t value)
+{
+    size_t i;
+    if ((d->pcount + 1) * 2 > d->pcap) {
+        char **keys = d->pkeys; int32_t *vals = d->pvals;
+        size_t old = d->pcap, k;
+        d->pcap = old ? old * 2 : 1024;
+        d->pkeys = sim_xcalloc(d->pcap, sizeof *d->pkeys);
+        d->pvals = sim_xmalloc(d->pcap * sizeof *d->pvals);
+        for (k = 0; k < old; k++) if (keys[k]) { i = path_slot(d, keys[k]); d->pkeys[i] = keys[k]; d->pvals[i] = vals[k]; }
+        free(keys); free(vals);
+    }
+    i = path_slot(d, key);
+    if (d->pkeys[i]) { free(key); d->pvals[i] = value; return; }
+    d->pkeys[i] = key; d->pvals[i] = value; d->pcount++;
+}
+
+/* コンパイラと同じ順番で #include を探す: インクルード元のフォルダ、インクルード・パスの順。
+   まだ読んでいないファイルが見つかれば読む対象に足す。見つからなければ -2（あとでファイル名から探す） */
+static int32_t scope_include(defs *d, size_t from, const char *name)
+{
+    size_t n = strlen(name), j, dirlen;
+    const char *from_path = d->files[from], *b = sim_basename(from_path);
+    char *nm;
+    int32_t found = -2;
+    while (n && (name[n - 1] == ' ' || name[n - 1] == '\t')) n--;
+    if (!n) return -2;
+    nm = sim_xstrndup(name, n);
+    dirlen = (size_t)(b - from_path);
+    for (j = 0; j <= d->nincdirs && found < 0; j++) {
+        char *joined, *path, *key;
+        size_t slot;
+        if (absolute_path(nm)) { if (j) break; joined = sim_xstrdup(nm); }
+        else if (j == 0) {
+            char *dir = dirlen ? sim_xstrndup(from_path, dirlen) : sim_xstrdup(".");
+            joined = sim_path_join(dir, nm); free(dir);
+        } else joined = sim_path_join(d->incdirs[j - 1], nm);
+        path = normal_path(joined); free(joined);
+        key = lower_path(path);
+        slot = d->pcap ? path_slot(d, key) : 0;
+        if (d->pcap && d->pkeys[slot]) { found = d->pvals[slot] >= 0 ? d->pvals[slot] : -2; free(key); free(path); continue; }
+        if (sim_path_kind(path) == 1 && !excluded(d, path)) {
+            found = (int32_t)d->nfiles;
+            path_put(d, key, found);
+            push_file(d, path, 1);
+            d->scope_added++;
+        } else { path_put(d, key, -1); free(path); }
+    }
+    free(nm);
+    return found;
+}
+
 /* 走査したファイルをすべて読み、条件を評価して定義を集める */
 static void preprocess(defs *d)
 {
-    size_t k, i;
+    size_t k, i, src_alloc = d->nfiles ? d->nfiles : 1;
     uint64_t t0 = sim_now_ns();
-    d->nsrc = d->nfiles;
-    d->src = sim_xcalloc(d->nsrc ? d->nsrc : 1, sizeof *d->src);
-    d->by_base = sim_xmalloc((d->nsrc ? d->nsrc : 1) * sizeof *d->by_base);
-    for (k = 0; k < d->nsrc && !d->error; k++) {
+    d->src = sim_xcalloc(src_alloc, sizeof *d->src);
+    if (d->scope) for (k = 0; k < d->nfiles; k++) path_put(d, lower_path(d->files[k]), (int32_t)k);
+    /* defines_scope = mtpj では、読んだファイルの #include から読む対象（files）が増えていく */
+    for (k = 0; k < d->nfiles && !d->error; k++) {
+        if (k == src_alloc) {
+            d->src = sim_xrealloc(d->src, src_alloc * 2 * sizeof *d->src);
+            memset(d->src + src_alloc, 0, src_alloc * sizeof *d->src);
+            src_alloc *= 2;
+        }
+        d->nsrc = k + 1;
         d->src[k].path = d->files[k]; d->src[k].lower = lower_path(d->files[k]);
+        d->src[k].closure = d->file_closure ? d->file_closure[k] : 0;
         load_source(d, &d->src[k]);
+        if (d->scope && !d->error)
+            for (i = 0; i < d->src[k].ndirs; i++) {
+                directive *x = &d->src[k].dirs[i];
+                if (x->kind == D_INCLUDE) x->target = scope_include(d, k, x->arg);
+            }
     }
+    d->nsrc = d->error ? d->nsrc : d->nfiles;
+    d->by_base = sim_xmalloc((d->nsrc ? d->nsrc : 1) * sizeof *d->by_base);
     if (d->error) return;
     d->t_read = sim_now_ns() - t0; t0 = sim_now_ns();
     for (k = 0; k < d->nsrc; k++) d->by_base[k] = (uint32_t)k;
@@ -947,12 +1079,17 @@ static void preprocess(defs *d)
         for (k = 0; k < d->nsrc; k++) for (i = 0; i < d->src[k].ndirs; i++) {
             directive *x = &d->src[k].dirs[i];
             if (x->kind != D_INCLUDE) continue;
+            if (d->scope && x->target >= 0) { d->src[x->target].included = 1; continue; }
+            /* 範囲を絞らない方式、または上の順番で見つからなかったもの: 読んだファイルの中からファイル名で探す */
             x->target = resolve_include(d, &d->src[k], x->arg);
-            if (x->target >= 0) d->src[x->target].included = 1; else d->include_missing++;
+            if (x->target >= 0) { d->src[x->target].included = 1; if (d->scope) d->scope_fallback++; }
+            else d->include_missing++;
         }
     for (i = 0; i < 2; i++)
         for (k = 0; k < d->nsrc; k++) {
             if (i == 0 ? d->src[k].included : d->src[k].visited) continue;
+            /* #include をたどって足しただけのファイルは起点にしない（読まれるのは、有効な枝からインクルードされたときだけ） */
+            if (d->scope && d->cond && d->src[k].closure) continue;
             d->gen++; d->roots++;
             d->tick = 0; d->nrlog = d->nwlog = 0; d->root_includes = 0;
             process_file(d, (uint32_t)k, 0);
@@ -1596,16 +1733,21 @@ int sim_defines_load(sim_ctx *c,const sim_open_opts *o,char *err,size_t cap)
     defs d; char *path; int rc,i,kind; size_t k; uint64_t t0=sim_now_ns(),t1; sim_buf info;
     sim_mtpj mtpj; char *mtpj_path=NULL; int have_mtpj=0;
     unsigned n_implicit=0,n_mtpj=0,n_cfg=0,n_cli=0,n_cundef=0;
+    sim_buf scope_missing; unsigned scope_nmissing=0,scope_other=0,scope_skipped=0,scope_cfg_incs=0;
     memset(&d,0,sizeof d); d.ctx=c; d.err=err; d.cap=cap; d.verbose=o->verbose;
     d.env.lookup=lookup_cb; d.env.ctx=&d;
     memset(&mtpj,0,sizeof mtpj);
     sim_cfg_init(&d.cfg);
+    sim_buf_init(&scope_missing);
     path=sim_cfg_locate(o->cfg_path,o->abs_path);
     rc=sim_cfg_load(&d.cfg,path,err,cap); free(path);
     if (rc==-2 || (rc==-1 && o->cfg_path)) { if (rc==-1) snprintf(err,cap,"設定ファイルを読めません"); sim_cfg_free(&d.cfg); return -1; }
     d.recursive=onoff(&d,"defines_recursive",1); d.guess=onoff(&d,"defines_guess_bits",1);
     d.char_unsigned=onoff(&d,"char_unsigned",0); d.near_base=0xF0000;
     d.cond=onoff(&d,"defines_cond",1);
+    { const char *s=sim_cfg_get(&d.cfg,"defines_scope");
+      if (s && !strcmp(s,"mtpj")) d.scope=1;
+      else if (s && strcmp(s,"folder")) { snprintf(err,cap,"defines_scope = %s は読めません（folder: defines のフォルダの下すべて、mtpj: プロジェクトに登録されたファイルと #include でたどれるファイル）",s); d.error=1; } }
     { const char *s=sim_cfg_get(&d.cfg,"defines_near_base"); if (s && (sim_parse_uint(s,0xF0000,&d.near_base) || (d.near_base && d.near_base!=0xF0000))) { snprintf(err,cap,"defines_near_base は 0xF0000 / 0 です"); d.error=1; } }
     /* 定義マクロ: 暗黙 -> mtpj の定義・定義解除 -> sim.cfg の cdef -> --cdef -> cundef の順に適用する */
     kind=d.error?0:compiler_kind(&d,o); d.compiler=kind;
@@ -1622,6 +1764,7 @@ int sim_defines_load(sim_ctx *c,const sim_open_opts *o,char *err,size_t cap)
                 for (i=0;i<mtpj.nundefs && !d.error;i++) add_cundef(&d,mtpj.undefs[i],"mtpj の定義解除マクロ");
             }
         } else if (mode) { snprintf(err,cap,"mtpj_mode は mtpj = パス と一緒に指定してください"); d.error=1; }
+        if (!d.error && d.scope && !have_mtpj) { snprintf(err,cap,"defines_scope = mtpj は mtpj = パス と一緒に指定してください"); d.error=1; }
     }
     for (i=0;i<d.cfg.n && !d.error;i++) if (!strcmp(d.cfg.e[i].key,"cdef")) add_cdef(&d,d.cfg.e[i].value,ORIGIN_CFG,"cdef");
     for (i=0;i<o->ncdefs && !d.error;i++) add_cdef(&d,o->cdefs[i],ORIGIN_CLI,"--cdef");
@@ -1632,6 +1775,31 @@ int sim_defines_load(sim_ctx *c,const sim_open_opts *o,char *err,size_t cap)
     }
     for (i=0;i<d.cfg.n && !d.error;i++) if (!strcmp(d.cfg.e[i].key,"defines")) collect_path(&d,d.cfg.e[i].value);
     for (i=0;i<o->ndefines && !d.error;i++) collect_path(&d,o->defines[i]);
+    if (!d.error && d.scope) {
+        /* 登録ファイルとインクルード・パスは mtpj のフォルダから見る */
+        const char *mb=sim_basename(mtpj_path);
+        char *mdir=mb>mtpj_path ? sim_xstrndup(mtpj_path,(size_t)(mb-mtpj_path)) : sim_xstrdup(".");
+        for (i=0;i<mtpj.nfiles;i++) {
+            char *joined, *full;
+            size_t before=d.nfiles;
+            if (!source_extension(mtpj.files[i])) { scope_other++; continue; }
+            joined=absolute_path(mtpj.files[i]) ? sim_xstrdup(mtpj.files[i]) : sim_path_join(mdir,mtpj.files[i]);
+            full=normal_path(joined); free(joined);
+            if (sim_path_kind(full)==1) { add_file(&d,full); if (d.nfiles>before) d.scope_registered++; else scope_skipped++; }
+            else { if (scope_nmissing<20 || d.verbose) sim_buf_printf(&scope_missing,"  見つからない登録ファイル: %s\n",full); scope_nmissing++; }
+            free(full);
+        }
+        for (i=0;i<mtpj.nincs+d.cfg.n;i++) {
+            char *joined, *full;
+            if (i<mtpj.nincs) joined=absolute_path(mtpj.incs[i]) ? sim_xstrdup(mtpj.incs[i]) : sim_path_join(mdir,mtpj.incs[i]);
+            else if (!strcmp(d.cfg.e[i-mtpj.nincs].key,"defines_include")) { joined=sim_cfg_path(&d.cfg,d.cfg.e[i-mtpj.nincs].value); scope_cfg_incs++; }
+            else continue;
+            full=normal_path(joined); free(joined);
+            d.incdirs=sim_xrealloc(d.incdirs,(d.nincdirs+1)*sizeof *d.incdirs);
+            d.incdirs[d.nincdirs++]=full;
+        }
+        free(mdir);
+    } else if (!d.error && sim_cfg_get(&d.cfg,"defines_include")) { snprintf(err,cap,"defines_include は defines_scope = mtpj と一緒に指定してください"); d.error=1; }
     qsort(d.files,d.nfiles,sizeof *d.files,path_cmp);
     d.t_scan=sim_now_ns()-t0;
     if (!d.error) preprocess(&d);
@@ -1690,6 +1858,18 @@ int sim_defines_load(sim_ctx *c,const sim_open_opts *o,char *err,size_t cap)
                 sim_buf_printf(&info,"%s\n",mtpj.nundefs?"":" なし");
             }
             for (i=0;i<mtpj.nbad;i++) sim_buf_printf(&info,"mtpj: 名前として読めない行を無視しました: %s\n",mtpj.bad[i]);
+            if (d.scope) {
+                size_t j;
+                sim_buf_printf(&info,"defines_scope = mtpj: 登録ファイル %d 個のうち、読んだもの %u 個（ビルド対象外 %d 個、.h / .c / .inc 以外 %u 個、defines_exclude などで外したもの %u 個、見つからないもの %u 個）。#include をたどって足したファイル %u 個\n",
+                    mtpj.files_total,d.scope_registered,mtpj.files_off,scope_other,scope_skipped,scope_nmissing,d.scope_added);
+                sim_buf_adds(&info,sim_buf_cstr(&scope_missing));
+                if (scope_nmissing>20 && !d.verbose) sim_buf_printf(&info,"  …ほか %u 個（--verbose で全部を表示）\n",scope_nmissing-20);
+                sim_buf_printf(&info,"インクルード・パス %zu 個（mtpj の <%s> から %d 個、defines_include から %u 個）。#include は、インクルード元のフォルダ、インクルード・パスの順に探します\n",
+                    d.nincdirs,mtpj.inc_element?mtpj.inc_element:"AdditionalIncludePaths（要素なし）",mtpj.nincs,scope_cfg_incs);
+                for (j=0;j<d.nincdirs;j++) sim_buf_printf(&info,"  %s%s\n",d.incdirs[j],sim_path_kind(d.incdirs[j])==2?"":"（フォルダがありません）");
+                if (d.scope_fallback) sim_buf_printf(&info,"上の順番で見つからず、読んだファイルの中からファイル名で探した #include: %u 箇所（インクルード・パスが足りない可能性があります。CS+ の「追加のインクルード・パス」と見比べ、足りなければ defines_include で足してください）\n",d.scope_fallback);
+                sim_buf_adds(&info,"mtpj: 登録ファイルのビルド対象の判定とインクルード・パスの書式は、実例からの推定です\n");
+            }
             if (mtpj.individual) sim_buf_printf(&info,"mtpj: ファイルごとの個別コンパイル・オプションらしい定義マクロが %d 件あります（読んでいません。必要なら cdef で与えてください）\n",mtpj.individual);
         }
         list_origin(&d,&info,ORIGIN_MTPJ,"  有効な定義マクロ（mtpj）: ");
@@ -1714,7 +1894,7 @@ int sim_defines_load(sim_ctx *c,const sim_open_opts *o,char *err,size_t cap)
         sim_ctx_set_definition_info(c,sim_buf_cstr(&info));
         if (d.verbose) fputs(sim_buf_cstr(&info),stderr);
     }
-    sim_buf_free(&info);
+    sim_buf_free(&info); sim_buf_free(&scope_missing);
     if (have_mtpj) sim_mtpj_free(&mtpj);
     free(mtpj_path);
     free_sources(&d);
