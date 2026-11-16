@@ -298,6 +298,11 @@ rl78_xl *rl78_xl_open(rl78_cpu *cpu, const rl78_xl_opts *o)
     key = fnv(key, rom, x->rom_size);
     key = fnv(key, &x->rom_size, sizeof x->rom_size);
     key = fnv(key, o->core_desc ? o->core_desc : "", o->core_desc ? strlen(o->core_desc) : 0);
+    {   /* 変換したコードは、素の RAM の範囲をページの表を引かずに読み書きする。範囲が違えば別のコードになる */
+        uint32_t plain[2];
+        rl78_xl_plain_range(cpu, &plain[0], &plain[1]);
+        key = fnv(key, plain, sizeof plain);
+    }
     for (i = 0; RT_FILES[i]; i++) {
         char *p = join(x->rt_dir, RT_FILES[i]), *t;
         size_t n = 0;

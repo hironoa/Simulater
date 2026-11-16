@@ -87,6 +87,8 @@ struct rl78_cpu {
     uint64_t xl_insns;  /* instructions executed by translated code */
     int xl_off;         /* rl78_xl_set_enabled(cpu, 0): keep the module attached but interpret */
     int xl_bp_inside;   /* breakpoints set inside translated blocks: translated code is not used while > 0 */
+    uint32_t xl_plain_lo, xl_plain_hi; /* the attached module's plain range (rl78_xl_module) */
+    int xl_map_bad;     /* a page the translated code treats as plain RAM is not plain any more: not used while set */
     unsigned xl_miss;   /* consecutive lookups that found no translated code (interpreter burst length) */
     rl78_fault fault;
 };
@@ -104,6 +106,8 @@ void rl78__write_macr(rl78_cpu *c, uint32_t v);
 /* translated code (rl78_xlate.c) */
 uint64_t rl78__exec(rl78_cpu *C, uint64_t lim, int *why);
 uint64_t rl78__xl_run(rl78_cpu *c, uint64_t lim, int *why);
+/* 1 if every page of [lo, hi) is read and written straight in the memory image */
+int rl78__pages_plain(const rl78_cpu *c, uint32_t lo, uint32_t hi);
 void rl78__xl_breakpoint_changed(rl78_cpu *c, uint32_t addr, int added);
 
 static inline uint8_t rl78__rd8(rl78_cpu *c, uint32_t a)

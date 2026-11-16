@@ -105,6 +105,17 @@ void rl78__rebuild_pages(rl78_cpu *c)
         c->rp[pg] = slow ? NULL : r;
         c->wp[pg] = slow ? NULL : w;
     }
+    /* translated code was made for the memory map it was attached with */
+    if (c->xl_mod) c->xl_map_bad = !rl78__pages_plain(c, c->xl_plain_lo, c->xl_plain_hi);
+}
+
+int rl78__pages_plain(const rl78_cpu *c, uint32_t lo, uint32_t hi)
+{
+    uint32_t pg;
+    if (hi > RL78_MEM_SIZE || lo > hi || ((lo | hi) & 0xFFu)) return 0;
+    for (pg = lo >> 8; pg < (hi >> 8); pg++)
+        if (c->rp[pg] != c->mem + (pg << 8) || c->wp[pg] != c->mem + (pg << 8)) return 0;
+    return 1;
 }
 
 /* ---- PSW / SFR ------------------------------------------------------------ */
@@ -577,7 +588,7 @@ rl78_stop_reason rl78_run(rl78_cpu *c, uint64_t max_insns)
         lim = remaining;
         if (c->hold_irq && c->nirqs) lim = 1; /* run the instruction after a hold insn */
         c->hold_irq = 0;
-        if (c->xl_mod && lim > 1 && !c->xl_off && !c->xl_bp_inside && c->skip_bp_pc == NO_BP) {
+        if (c->xl_mod && lim > 1 && !c->xl_off && !c->xl_bp_inside && !c->xl_map_bad && c->skip_bp_pc == NO_BP) {
             n = rl78__xl_run(c, lim, &why);
             if (n == 0 && why == -1) {
                 /* no translated code for this pc (or too close to the limit, or a breakpoint):
