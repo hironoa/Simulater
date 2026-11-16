@@ -45,7 +45,7 @@ else
     $CC $CFLAGS -Werror -I"$ROOT/include" -I"$HERE" "$ROOT"/src/*.c "$HERE"/tasm.c "$HERE"/xlrun.c -o "$BUILD/xlrun" $XLLIBS || exit 1
     if "$BUILD/xlgen" "$BUILD/xl" &&
        "$XLCC" -O2 -fno-unroll-loops -ffreestanding -fPIC $XLLINK -DRL78_XL_DLL -I"$ROOT/include" -I"$ROOT/src" \
-           "$BUILD/xl/xl_unit.c" "$BUILD/xl/xl_main.c" -o "$XLDLL"; then
+           "$BUILD/xl/xl_unit.c" "$BUILD/xl/xl_unit2.c" "$BUILD/xl/xl_main.c" -o "$XLDLL"; then
         "$BUILD/xlrun" "$BUILD/xl" "$XLDLL" || status=1
     else
         echo "translation: FAIL (cannot translate or build the DLL)"

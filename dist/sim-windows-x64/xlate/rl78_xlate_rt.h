@@ -15,7 +15,13 @@
 
 #include "rl78_exec_defs.h"
 
-#define RL78_XL_ABI 2u
+#define RL78_XL_ABI 3u
+
+/* A translated function runs the function it CALLs itself (a C call) instead of going back to
+   the dispatcher, up to this depth of RL78 calls.  Deeper calls, and recursion that never comes
+   back, go through the dispatcher as before, so the host stack stays small (a frame is some
+   hundred bytes). */
+#define RL78_XL_MAX_DEPTH 32u
 
 /* Return codes of a translated function (chunk) and of rl78_xl_exec1(). */
 #define RL78_XL_CONT 0   /* left the chunk: look the new pc up again */
@@ -49,6 +55,9 @@ struct rl78_xl_module {
 };
 
 #ifdef RL78_XL_UNIT
+/* The CPU state a translated function works on, handed from one function to the next by value. */
+typedef struct { uint64_t cyc, n; uint8_t *R; uint32_t pc; unsigned F; int st; } xl_state;
+
 /* ---- one translated instruction ------------------------------------------- */
 
 #undef B1

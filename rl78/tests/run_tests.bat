@@ -53,7 +53,7 @@ if errorlevel 1 exit /b 1
 "%BUILD%\xlgen.exe" "%BUILD%\xl"
 if errorlevel 1 set STATUS=1
 rem freestanding DLL: no C runtime and no Windows SDK (only clang and lld-link from the LLVM package)
-"%XLCC%" -O2 -fno-unroll-loops -ffreestanding -nostdlib -shared -fuse-ld=lld -Wl,/noentry -mno-stack-arg-probe -DRL78_XL_DLL -I"%ROOT%\include" -I"%ROOT%\src" "%BUILD%\xl\xl_unit.c" "%BUILD%\xl\xl_main.c" -o "%BUILD%\xl\xl.dll"
+"%XLCC%" -O2 -fno-unroll-loops -ffreestanding -nostdlib -shared -fuse-ld=lld -Wl,/noentry -mno-stack-arg-probe -DRL78_XL_DLL -I"%ROOT%\include" -I"%ROOT%\src" "%BUILD%\xl\xl_unit.c" "%BUILD%\xl\xl_unit2.c" "%BUILD%\xl\xl_main.c" -o "%BUILD%\xl\xl.dll"
 if errorlevel 1 (
   echo translation: FAIL ^(cannot build the DLL^)
   set STATUS=1

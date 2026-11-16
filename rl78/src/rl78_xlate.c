@@ -183,13 +183,47 @@ static void scan_clear(scan_t *s)
     s->ntouched = 0;
 }
 
-static void emit_function(rl78_cpu *c, uint32_t entry, scan_t *s, out_t *o, rl78_xl_leaders *ld)
+/* 1 if rl78_xlate_unit() emits a C function for this entry (in its unit, which may be another file) */
+static int has_function(rl78_cpu *c, const uint8_t *entries, uint32_t a)
+{
+    flow_t f;
+    if (a >= RL78_MEM_SIZE || !is_entry(entries, a) || !in_rom(c, a)) return 0;
+    flow_of(c, a, &f);
+    return f.len > 0;
+}
+
+/* The functions of the unit being translated.  A function is written as two C functions:
+     xl_iNNNNN  the body.  The CPU state it works on (registers pointer, flags, clock, counter, pc)
+                comes in and goes out by value, so that a caller in the same C file can run it
+                without storing the state in the CPU and loading it again; a small one that calls
+                nothing is inlined into its callers and the call costs nothing at all.
+     rl78_xl_fNNNNN  what the dispatcher (and a caller in another C file) calls: loads the state
+                from the CPU, runs the body, stores it back. */
+typedef struct {
+    uint32_t entry;
+    int inl;    /* small and calls nothing: inlined into its callers */
+    int copy;   /* belongs to another C file; this file has a private copy of the body to inline (no rl78_xl_f) */
+} unit_fn;
+#define XL_INLINE_INSNS 24u     /* a function with at most this many instructions and no call is inlined */
+
+static const unit_fn *unit_find(const unit_fn *fn, size_t nfn, uint32_t a)
+{
+    size_t i;
+    for (i = 0; i < nfn; i++) if (fn[i].entry == a) return &fn[i];
+    return NULL;
+}
+
+static void emit_function(rl78_cpu *c, uint32_t entry, const uint8_t *entries, const unit_fn *fn, size_t nfn,
+                          scan_t *s, out_t *o, rl78_xl_leaders *ld)
 {
     size_t i;
     const uint8_t *img = c->mem;
-    outf(o, "int rl78_xl_f%05X(rl78_cpu *C, uint64_t *np, uint64_t lim)\n{\n", (unsigned)entry);
-    outf(o, "    uint8_t *const M = C->mem; uint8_t *R = C->rb; unsigned F = C->psw;\n");
-    outf(o, "    uint64_t cyc = C->cycles, n = *np; uint32_t pc = C->pc; int st = 0;\n");
+    const unit_fn *self = unit_find(fn, nfn, entry);
+    if (self && self->copy) ld = NULL;  /* the block starts are listed by the file the function belongs to */
+    outf(o, "static %sxl_state xl_i%05X(rl78_cpu *C, xl_state s_, uint64_t lim)\n{\n",
+         self && self->inl ? "inline __attribute__((always_inline)) " : "", (unsigned)entry);
+    outf(o, "    uint8_t *const M = C->mem; uint8_t *R = s_.R; unsigned F = s_.F;\n");
+    outf(o, "    uint64_t cyc = s_.cyc, n = s_.n; uint32_t pc = s_.pc; int st = 0;\n");
     outf(o, "dyn:\n    switch (pc) {\n");
     for (i = 0; i < s->n; i++)
         if (s->mark[s->list[i]] & 2) outf(o, "    case 0x%05X: goto L_%05X;\n", (unsigned)s->list[i], (unsigned)s->list[i]);
@@ -215,6 +249,37 @@ static void emit_function(rl78_cpu *c, uint32_t entry, scan_t *s, out_t *o, rl78
         outf(o, "    st = rl78_xl_exec1(C, M, &R, &F, &cyc, &pc, &n, 0x%05X", (unsigned)pc);
         for (k = 0; k < 6; k++) outf(o, ", 0x%02X", (unsigned)img[pc + (uint32_t)k]);
         outf(o, ", %d);\n    if (st) goto out;\n", nl);
+        /* CALL of a translated function: run it from here.  Going back to the dispatcher costs a
+           table lookup, an indirect call and the entry switch for every call and every return; in
+           code that calls a small function every few instructions that is most of the time.
+           Whatever the callee returns (it came back, it left for another address, it stopped), the
+           code after the call sorts it out as if the dispatcher had run it.  The callee checks the
+           limit and the breakpoint at its entry.
+           (A call of code inside this function, recursion for one, stays in this C function: below.) */
+        if (f.is_call && f.has_target && (s->mark[f.target] & 3) != 3 && unit_find(fn, nfn, f.target)) {
+            /* the callee is in this C file: hand the state over by value */
+            const unit_fn *callee = unit_find(fn, nfn, f.target);
+            outf(o, "    if (pc == 0x%05X%s) {\n"
+                    "        xl_state s_ = {cyc, n, R, pc, F, 0};\n",
+                 (unsigned)f.target, callee->inl ? "" : " && C->xl_depth < RL78_XL_MAX_DEPTH");
+            if (!callee->inl) outf(o, "        C->xl_depth++;\n");
+            outf(o, "        s_ = xl_i%05X(C, s_, lim);\n", (unsigned)f.target);
+            if (!callee->inl) outf(o, "        C->xl_depth--;\n");
+            outf(o, "        R = s_.R; F = s_.F; cyc = s_.cyc; n = s_.n; pc = s_.pc;\n"
+                    "        if (s_.st) { st = s_.st; goto out; }\n"
+                    "    }\n");
+        } else if (f.is_call && f.has_target && (s->mark[f.target] & 3) != 3 && has_function(c, entries, f.target)) {
+            /* the callee is in another C file: the state goes through the CPU */
+            outf(o, "    if (pc == 0x%05X && C->xl_depth < RL78_XL_MAX_DEPTH) {\n"
+                    "        int rl78_xl_f%05X(rl78_cpu *C, uint64_t *np, uint64_t lim);\n"
+                    "        C->pc = pc; C->psw = (uint8_t)F; C->cycles = cyc; C->rb = R;\n"
+                    "        C->xl_depth++;\n"
+                    "        st = rl78_xl_f%05X(C, &n, lim);\n"
+                    "        C->xl_depth--;\n"
+                    "        F = C->psw; R = C->rb; cyc = C->cycles; pc = C->pc;\n"
+                    "        if (st) goto out;\n"
+                    "    }\n", (unsigned)f.target, (unsigned)f.target, (unsigned)f.target);
+        }
 #define HERE(t) ((s->mark[t] & 3) == 3)
         if (f.has_target && HERE(f.target)) outf(o, "    if (pc == 0x%05X) goto L_%05X;\n", (unsigned)f.target, (unsigned)f.target);
         if (f.is_skip && HERE(next + (uint32_t)nl))
@@ -223,7 +288,13 @@ static void emit_function(rl78_cpu *c, uint32_t entry, scan_t *s, out_t *o, rl78
         if (i + 1 < s->n && s->list[i + 1] == next) outf(o, "    if (pc != 0x%05X) goto dyn;\n", (unsigned)next);
         else outf(o, "    goto dyn;\n");
     }
-    outf(o, "out:\n    C->pc = pc; C->psw = (uint8_t)F; C->cycles = cyc; C->rb = R; *np = n;\n    return st;\n}\n\n");
+    outf(o, "out:\n    s_.cyc = cyc; s_.n = n; s_.R = R; s_.pc = pc; s_.F = F; s_.st = st;\n    return s_;\n}\n\n");
+    if (self && self->copy) return;
+    outf(o, "int rl78_xl_f%05X(rl78_cpu *C, uint64_t *np, uint64_t lim)\n{\n"
+            "    xl_state s_ = {C->cycles, *np, C->rb, C->pc, C->psw, 0};\n"
+            "    s_ = xl_i%05X(C, s_, lim);\n"
+            "    C->pc = s_.pc; C->psw = (uint8_t)s_.F; C->cycles = s_.cyc; C->rb = s_.R; *np = s_.n;\n"
+            "    return s_.st;\n}\n\n", (unsigned)entry, (unsigned)entry);
 }
 
 /* ---- public: translation --------------------------------------------------------- */
@@ -257,7 +328,8 @@ int rl78_xlate_unit(rl78_cpu *c, const uint32_t *unit, size_t nunit, const uint8
 {
     out_t o;
     scan_t s;
-    size_t i, total = 0;
+    size_t i, total = 0, nfn = 0, nown = 0, cap;
+    unit_fn *fn;
     int rc = 0;
     const int s1 = c->cfg.core == RL78_CORE_S1;
     const int s3 = c->cfg.core == RL78_CORE_S3 || c->cfg.core == RL78_CORE_AUTO;
@@ -271,14 +343,59 @@ int rl78_xlate_unit(rl78_cpu *c, const uint32_t *unit, size_t nunit, const uint8
     outf(&o, "/* generated by the RL78 translator: do not edit */\n#define RL78_XL_UNIT 1\n#define RL78_XL_S1 %d\n#define RL78_XL_S3 %d\n"
              "#define RL78_XL_PLAIN_LO 0x%05Xu\n#define RL78_XL_PLAIN_HI 0x%05Xu\n"
              "#include \"rl78_xlate_rt.h\"\n\n", s1, s3, (unsigned)plain_lo, (unsigned)plain_hi);
-    for (i = 0; i < nunit && !rc; i++) {
+    /* first pass: which functions this file gets, and which of them are small leaves.  The list
+       grows while it is walked: a small leaf of another file that a function here calls is added
+       as a private copy, so that the call can be inlined across files too (most calls in real
+       code go to another file, the files being cut by address). */
+    cap = nunit ? nunit : 1;
+    fn = (unit_fn *)malloc(cap * sizeof *fn);
+    if (!fn) { free(s.mark); return -1; }
+    for (i = 0; i < nunit; i++) {
         uint32_t e = unit[i] & 0xFFFFFu;
-        if (!in_rom(c, e)) continue;
+        if (!has_function(c, entries, e) || unit_find(fn, nfn, e)) continue;
+        fn[nfn].entry = e; fn[nfn].inl = 0; fn[nfn].copy = 0; nfn++;
+    }
+    nown = nfn;
+    for (i = 0; i < nfn && !rc; i++) {
+        size_t k, ncalls = 0, ntarget = 0;
+        uint32_t *target = NULL;
+        if (scan_function(c, fn[i].entry, entries, &s)) { rc = -1; break; }
+        if (i < nown) target = (uint32_t *)malloc((s.n ? s.n : 1) * sizeof *target);
+        for (k = 0; k < s.n; k++) {
+            flow_t f;
+            flow_of(c, s.list[k], &f);
+            if (!f.is_call) continue;
+            ncalls++;
+            if (target && f.has_target && (s.mark[f.target] & 3) != 3) target[ntarget++] = f.target;
+        }
+        fn[i].inl = !ncalls && s.n <= XL_INLINE_INSNS;
+        if (i >= nown && !fn[i].inl) fn[i].entry = 0xFFFFFFFFu;     /* not worth a copy after all: drop it */
+        scan_clear(&s);
+        for (k = 0; k < ntarget && !rc; k++) {
+            if (unit_find(fn, nfn, target[k]) || !has_function(c, entries, target[k])) continue;
+            if (nfn == cap) {
+                unit_fn *nf = (unit_fn *)realloc(fn, cap * 2 * sizeof *fn);
+                if (!nf) { rc = -1; break; }
+                fn = nf; cap *= 2;
+            }
+            fn[nfn].entry = target[k]; fn[nfn].inl = 0; fn[nfn].copy = 1; nfn++;
+        }
+        free(target);
+    }
+    for (i = 0; i < nfn && !rc; i++)
+        if (fn[i].entry != 0xFFFFFFFFu)
+            outf(&o, "static %sxl_state xl_i%05X(rl78_cpu *C, xl_state s_, uint64_t lim);\n",
+                 fn[i].inl ? "inline __attribute__((always_inline)) " : "", (unsigned)fn[i].entry);
+    outf(&o, "\n");
+    for (i = 0; i < nfn && !rc; i++) {
+        uint32_t e = fn[i].entry;
+        if (e == 0xFFFFFFFFu) continue;
         if (scan_function(c, e, entries, &s)) { rc = -1; break; }
-        if (s.n) emit_function(c, e, &s, &o, ld);
-        total += s.n;
+        if (s.n) emit_function(c, e, entries, fn, nfn, &s, &o, ld);
+        if (!fn[i].copy) total += s.n;
         scan_clear(&s);
     }
+    free(fn);
     if (ld && ld->failed) rc = -1;
     if (ninsns) *ninsns = total;
     free(s.mark);
@@ -511,6 +628,7 @@ uint64_t rl78__xl_run(rl78_cpu *c, uint64_t lim, int *why)
     c->exit_req = 0;
     c->hold_req = 0;
     c->hold_n = 0;
+    c->xl_depth = 0;
     for (;;) {
         uint32_t k = idx[c->pc & 0xFFFFFu];
         int st;
