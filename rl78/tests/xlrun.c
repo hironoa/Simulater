@@ -70,6 +70,37 @@ static const char *where(rl78_cpu *a, rl78_cpu *b)
 static uint32_t rnd_state = 12345u;
 static uint32_t rnd(void) { rnd_state = rnd_state * 1664525u + 1013904223u; return rnd_state >> 8; }
 
+/* hooks that behave like plain memory */
+static int hook_calls;
+static uint32_t hook_rd(void *ctx, rl78_cpu *cpu, uint32_t addr, int size)
+{
+    uint8_t v[2] = {0, 0};
+    (void)ctx;
+    hook_calls++;
+    rl78_peek(cpu, addr, v, (size_t)size);
+    return size == 2 ? (uint32_t)(v[0] | (v[1] << 8)) : v[0];
+}
+static void hook_wr(void *ctx, rl78_cpu *cpu, uint32_t addr, uint32_t val, int size)
+{
+    uint8_t v[2];
+    (void)ctx;
+    hook_calls++;
+    v[0] = (uint8_t)val; v[1] = (uint8_t)(val >> 8);
+    rl78_load(cpu, addr, v, (size_t)size);     /* straight into the memory image, like plain RAM */
+}
+
+/* a read hook that installs a second hook (counted by hook_calls) the first time it is called */
+static uint32_t nest_lo, nest_hi;
+static int nest_done;
+static uint32_t nest_rd(void *ctx, rl78_cpu *cpu, uint32_t addr, int size)
+{
+    uint8_t v[2] = {0, 0};
+    (void)ctx;
+    if (!nest_done) { nest_done = 1; rl78_add_hook(cpu, nest_lo, nest_hi, hook_rd, hook_wr, NULL); }
+    rl78_peek(cpu, addr, v, (size_t)size);
+    return size == 2 ? (uint32_t)(v[0] | (v[1] << 8)) : v[0];
+}
+
 int main(int argc, char **argv)
 {
     char path[1024], err[256];
@@ -189,6 +220,62 @@ int main(int argc, char **argv)
         CHECK(rl78_run(a, 100000) == RL78_STOP_LIMIT && rl78_run(b, 100000) == RL78_STOP_LIMIT, "run after removing the shared breakpoint");
         CHECK(same_regs(a, b), "after the shared breakpoint: %s", where(a, b));
         CHECK(rl78_xl_insn_count(b) > before, "translated code was not used again");
+    }
+
+    printf("== translated code: a hook on plain RAM switches it off\n");
+    {
+        /* translated code reads and writes constant RAM addresses without the page tables: a hook
+           there would be missed, so the code must not run while one is installed */
+        uint32_t lo, hi;
+        uint64_t before;
+        rl78_xl_plain_range(b, &lo, &hi);
+        CHECK(lo < hi && hi == 0xFFF00u && lo >= 0xF0000u, "plain range %05X..%05X", (unsigned)lo, (unsigned)hi);
+        hook_calls = 0;
+        CHECK(rl78_add_hook(a, hi - 0x200u, hi - 0x100u, hook_rd, hook_wr, NULL) == 0, "hook on the reference CPU");
+        CHECK(rl78_add_hook(b, hi - 0x200u, hi - 0x100u, hook_rd, hook_wr, NULL) == 0, "hook on the translated CPU");
+        before = rl78_xl_insn_count(b);
+        rl78_run(a, 50000);
+        rl78_run(b, 50000);
+        CHECK(same_regs(a, b), "with a hook on RAM: %s", where(a, b));
+        CHECK(rl78_xl_insn_count(b) == before, "translated code ran with a hook on a page it treats as plain");
+        {
+            rl78_xl_plain_range(b, &lo, &hi);
+            CHECK(lo == 0xFFF00u - 0x100u, "plain range with the hook starts at %05X", (unsigned)lo);
+            CHECK(rl78_xl_attach(b, mod, err, sizeof err) != 0, "a module for another memory map was accepted");
+        }
+        rl78_clear_hooks(a);
+        rl78_clear_hooks(b);
+        CHECK(rl78_xl_attach(b, mod, err, sizeof err) == 0, "attach again without the hook: %s", err);
+        before = rl78_xl_insn_count(b);
+        rl78_run(a, 50000);
+        rl78_run(b, 50000);
+        CHECK(same_regs(a, b), "after the hook: %s", where(a, b));
+        CHECK(rl78_xl_insn_count(b) > before, "translated code was not used again after the hook was removed");
+    }
+
+    printf("== translated code: a hook installed from inside a hook, while translated code runs\n");
+    {
+        /* the first hook sits on a page that is slow anyway (below the plain range); when the program
+           reads there it installs a second hook on plain RAM.  Translated code that is running at that
+           moment must leave after the instruction, or it would miss the calls of the new hook */
+        uint32_t lo, hi;
+        int calls_a, calls_b;
+        rl78_xl_plain_range(b, &lo, &hi);
+        nest_lo = hi - 0x100u + 0x20u; nest_hi = hi - 0x100u + 0x40u;
+        nest_done = 0; hook_calls = 0;
+        CHECK(rl78_add_hook(a, 0xF1000u, lo, nest_rd, hook_wr, NULL) == 0, "outer hook on the reference CPU");
+        rl78_run(a, 10000);
+        calls_a = hook_calls;
+        nest_done = 0; hook_calls = 0;
+        CHECK(rl78_add_hook(b, 0xF1000u, lo, nest_rd, hook_wr, NULL) == 0, "outer hook on the translated CPU");
+        rl78_run(b, 10000);
+        calls_b = hook_calls;
+        CHECK(calls_a > 0, "the program never reached the hook installed from inside a hook (%d calls)", calls_a);
+        CHECK(calls_a == calls_b, "hook calls: %d interpreted, %d with translated code", calls_a, calls_b);
+        CHECK(same_regs(a, b), "with a hook installed from inside a hook: %s", where(a, b));
+        rl78_clear_hooks(a);
+        rl78_clear_hooks(b);
+        CHECK(rl78_xl_attach(b, mod, err, sizeof err) == 0, "attach again after the nested hooks: %s", err);
     }
 
     printf("== translated code: detach, and a module that does not fit\n");

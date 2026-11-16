@@ -118,10 +118,13 @@ static inline unsigned dec8(unsigned a, unsigned *f)
         }                                                                        \
     } while (0)
 
+/* Translated code overrides this for constant addresses in plain RAM (rl78_xlate_rt.h). */
+#define RL78_PLAIN(a) 0
+
 #define RD8(dst, addr)                                                           \
     do {                                                                         \
         uint32_t a_ = (addr);                                                    \
-        const uint8_t *p_ = C->rp[a_ >> 8];                                      \
+        const uint8_t *p_ = RL78_PLAIN(a_) ? M + (a_ & ~0xFFu) : C->rp[a_ >> 8]; \
         if (LIKELY(p_ != NULL)) {                                                \
             (dst) = p_[a_ & 0xFFu];                                              \
         } else {                                                                 \
@@ -140,7 +143,7 @@ static inline unsigned dec8(unsigned a, unsigned *f)
 #define WR8(addr, val)                                                           \
     do {                                                                         \
         uint32_t a_ = (addr);                                                    \
-        uint8_t *p_ = C->wp[a_ >> 8];                                            \
+        uint8_t *p_ = RL78_PLAIN(a_) ? M + (a_ & ~0xFFu) : C->wp[a_ >> 8];       \
         if (LIKELY(p_ != NULL)) {                                                \
             p_[a_ & 0xFFu] = (uint8_t)(val);                                     \
         } else {                                                                 \
@@ -152,7 +155,7 @@ static inline unsigned dec8(unsigned a, unsigned *f)
 #define RD16(dst, addr)                                                          \
     do {                                                                         \
         uint32_t a_ = (addr) & 0xFFFFEu;                                         \
-        const uint8_t *p_ = C->rp[a_ >> 8];                                      \
+        const uint8_t *p_ = RL78_PLAIN(a_) ? M + (a_ & ~0xFFu) : C->rp[a_ >> 8]; \
         if (LIKELY(p_ != NULL)) {                                                \
             (dst) = G16(p_ + (a_ & 0xFFu));                                      \
         } else {                                                                 \
@@ -170,7 +173,7 @@ static inline unsigned dec8(unsigned a, unsigned *f)
 #define WR16(addr, val)                                                          \
     do {                                                                         \
         uint32_t a_ = (addr) & 0xFFFFEu;                                         \
-        uint8_t *p_ = C->wp[a_ >> 8];                                            \
+        uint8_t *p_ = RL78_PLAIN(a_) ? M + (a_ & ~0xFFu) : C->wp[a_ >> 8];       \
         if (LIKELY(p_ != NULL)) {                                                \
             S16(p_ + (a_ & 0xFFu), (val));                                       \
         } else {                                                                 \

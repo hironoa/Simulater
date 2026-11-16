@@ -271,6 +271,10 @@ uint64_t rl78_xl_insn_count(const rl78_cpu *cpu);         /* instructions run by
    skip has the length of the next instruction built in).  Translated code does not see changes to such bytes
    (rl78_load after attaching): the caller has to stop using it (rl78_xl_set_enabled) while they differ. */
 int rl78_xl_covers(const rl78_cpu *cpu, uint32_t addr);
+/* The address range translated code reads and writes without the page tables (plain RAM below the
+   fixed SFRs).  It is fixed into the code when it is translated: code made for one range cannot be
+   attached while another memory map is in force, so the range belongs in a cache key. */
+void rl78_xl_plain_range(const rl78_cpu *cpu, uint32_t *lo, uint32_t *hi);
 /* Keep the module attached but interpret everything (0), or use it again (1). */
 void rl78_xl_set_enabled(rl78_cpu *cpu, int on);
 
