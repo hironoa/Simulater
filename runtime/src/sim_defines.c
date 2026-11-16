@@ -1861,7 +1861,7 @@ int sim_defines_load(sim_ctx *c,const sim_open_opts *o,char *err,size_t cap)
         sim_buf_printf(&info,"defines files=%zu variables=%u bits=%u arrays=%u guessed=%u unresolved=%u duplicates=%u pointer-skipped=%u value-excluded=%u (%.3f s)\n",d.nfiles,d.variables,d.bits,d.arrays,d.guessed,d.unresolved,d.duplicates,d.pointers,d.values,(double)(sim_now_ns()-t0)/1e9);
         sim_buf_printf(&info,"値の式のマクロ（対象外）: %u 件（--verbose で名前、ファイル名と行番号を表示）\n",d.values);
         sim_buf_printf(&info,"型を解決できなかった定義: %u 件。同じ名前で内容の違う定義: %u 件（defines_exclude で除外できます。--verbose でファイル名と行番号を表示）\n",d.unresolved,d.duplicates);
-        if (d.duplicates) sim_buf_printf(&info,"  内訳: 同じファイルの中 %u 件（インクルード元によって違う枝を読むヘッダなど。害はありません）、同じ名前で別のフォルダにあるファイル同士 %u 件（品種違いのファイルを両方読んでいる可能性があります）、名前の違うファイル同士 %u 件（その名前を CSV で使わなければ害はありません）\n",
+        if (d.duplicates) sim_buf_printf(&info,"  内訳: 同じファイルの中 %u 件（インクルード元によって違う枝を読むヘッダなど）、同じ名前で別のフォルダにあるファイル同士 %u 件（品種違いのファイルを両方読んでいる可能性があります）、名前の違うファイル同士 %u 件。どの場合も、使うのは最初に読んだ定義だけです。その名前を CSV や GUI で使うなら、--verbose で場所を見て、意図した定義かどうか確かめてください\n",
             d.dup_same_file,d.dup_same_name,d.dup_other_name);
         sim_buf_printf(&info,"var definitions=%u\n",d.explicit_vars);
         {
