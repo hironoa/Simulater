@@ -15,7 +15,7 @@
 
 #include "rl78_exec_defs.h"
 
-#define RL78_XL_ABI 1u
+#define RL78_XL_ABI 2u
 
 /* Return codes of a translated function (chunk) and of rl78_xl_exec1(). */
 #define RL78_XL_CONT 0   /* left the chunk: look the new pc up again */
@@ -43,6 +43,9 @@ struct rl78_xl_module {
     const rl78_xl_leader *leaders;  /* block starts, sorted by pc */
     uint32_t ninside;
     const uint32_t *inside;         /* translated instructions that are not block starts */
+    /* The code reads and writes constant addresses in [plain_lo, plain_hi) straight in the memory
+       image, without the page tables: every page there has to be plain RAM (see RL78_PLAIN). */
+    uint32_t plain_lo, plain_hi;
 };
 
 #ifdef RL78_XL_UNIT
@@ -53,6 +56,12 @@ struct rl78_xl_module {
 #undef B3
 #undef W1
 #undef W2
+/* A constant address in the plain range needs no page-table lookup.  The tables are data the
+   compiler cannot see through (any byte store might change them), so each lookup is a load and a
+   branch, and the slow path behind it keeps the whole CPU state alive.  rl78_xl_attach() and
+   rl78__rebuild_pages() make sure the range is plain while the code is used. */
+#undef RL78_PLAIN
+#define RL78_PLAIN(a) (__builtin_constant_p(a) && (a) >= RL78_XL_PLAIN_LO && (a) < RL78_XL_PLAIN_HI)
 /* instruction bytes are constants (pc moves by one after an ES: prefix) */
 #define B1 ((unsigned)ib[pc - pc0 + 1u])
 #define B2 ((unsigned)ib[pc - pc0 + 2u])
