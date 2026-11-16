@@ -24,6 +24,9 @@
  *   - <SourceItemN-BuildingTarget-M> が False のファイルは、そのモードではビルドしない。
  *   - インクルード・パスは 1 行に 1 個、改行区切りで、mtpj のフォルダからの相対パスか絶対パス。
  *     %BuildModeName% と %ProjectName% は置き換える（ほかの項目での使われ方から）。
+ *     利用者の製品のプロジェクトでは、同じ種類の項目 <AdditionalLibraryPaths-0> が「1 行に 1 個、改行区切り、
+ *     \ 区切りの相対パス（app_root\xxx\lib の形）、最後の行のあとにも改行」だった（hironoa/Simulater#18）。
+ *     インクルード・パスそのものの実例はまだ見ていない。
  */
 #ifndef SIM_MTPJ_H
 #define SIM_MTPJ_H
