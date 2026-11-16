@@ -1229,6 +1229,22 @@ static void add_implicit(defs *d, int kind)
     if (kind == 1 && d->char_unsigned) add_cdef(d, "__CHAR_UNSIGNED__", ORIGIN_IMPLICIT, "暗黙の定義");
 }
 
+/* UTF-8 の項目名を表示幅 26 桁にそろえる。長い名前にも区切りを置く。 */
+static void info_item(sim_buf *b, const char *label, const char *fmt, ...)
+{
+    const unsigned char *p=(const unsigned char *)label;
+    unsigned width=0, spaces;
+    va_list ap;
+    for (; *p; p++) if (*p<0x80) width++; else if (*p>=0xC0) width+=2;
+    sim_buf_adds(b,label);
+    spaces=width<26?26-width:2;
+    while (spaces--) sim_buf_addc(b,' ');
+    va_start(ap,fmt);
+    sim_buf_vprintf(b,fmt,ap);
+    va_end(ap);
+    sim_buf_addc(b,'\n');
+}
+
 static void list_origin(defs *d, sim_buf *b, int origin, const char *label)
 {
     size_t k, n = 0;
@@ -1256,11 +1272,15 @@ static void list_undefined(defs *d, sim_buf *b, int hidden, size_t limit)
     g_sort = d; qsort(ids, n, sizeof *ids, ref_cmp);
     if (!hidden) {
         d->undefined = (unsigned)n;
-        sim_buf_printf(b, "条件の判定で、どこにも定義がなく 0（未定義）とみなした識別子: %zu 個", n);
-        if (n > limit) sim_buf_printf(b, "（参照の多い順に上位 %zu 個。--verbose で全部）", limit);
-        if (n) sim_buf_adds(b, "。品種やビルド構成のスイッチなら cdef / mtpj で与えてください");
-        sim_buf_addc(b, '\n');
-    } else if (n) sim_buf_printf(b, "走査したファイルに #define はあるが、条件の場所からは見えず未定義とみなした識別子: %zu 個（.c の中で #define してからインクルードする形のスイッチは cdef で与えてください）\n", n);
+        if (n) {
+            info_item(b,"未定義で 0 とした識別子","%zu 個",n);
+            if (n > limit) sim_buf_printf(b,"  ※ 参照の多い順に上位 %zu 個。--verbose で全部を表示します\n",limit);
+            sim_buf_adds(b,"  ※ 品種やビルド構成のスイッチなら cdef / mtpj で与えてください\n");
+        }
+    } else if (n) {
+        info_item(b,"その場所から見えない識別子","%zu 個（走査したファイルに #define あり）",n);
+        sim_buf_adds(b,"  ※ .c で定義してからインクルードするスイッチは cdef で与えてください\n");
+    }
     for (k = 0; k < n && k < limit; k++) {
         const psym *p = &d->syms[ids[k]];
         sim_buf_printf(b, "  %s (%u)\n", p->name, hidden ? p->hidden_refs : p->undef_refs);
@@ -1861,75 +1881,81 @@ int sim_defines_load(sim_ctx *c,const sim_open_opts *o,char *err,size_t cap)
     sim_buf_init(&info);
     if (!d.error && (d.nfiles || d.explicit_vars || have_mtpj || n_cfg || n_cli)) {
         size_t limit=d.verbose?(size_t)-1:20;
-        sim_buf_printf(&info,"defines files=%zu variables=%u bits=%u arrays=%u guessed=%u unresolved=%u duplicates=%u pointer-skipped=%u value-excluded=%u (%.3f s)\n",d.nfiles,d.variables,d.bits,d.arrays,d.guessed,d.unresolved,d.duplicates,d.pointers,d.values,(double)(sim_now_ns()-t0)/1e9);
-        sim_buf_printf(&info,"値の式のマクロ（対象外）: %u 件（--verbose で名前、ファイル名と行番号を表示）\n",d.values);
-        sim_buf_printf(&info,"型を解決できなかった定義: %u 件。同じ名前で内容の違う定義: %u 件（defines_exclude で除外できます。--verbose でファイル名と行番号を表示）\n",d.unresolved,d.duplicates);
-        if (d.duplicates) sim_buf_printf(&info,"  内訳: 同じファイルの中 %u 件（インクルード元によって違う枝を読むヘッダなど）、同じ名前で別のフォルダにあるファイル同士 %u 件（品種違いのファイルを両方読んでいる可能性があります）、名前の違うファイル同士 %u 件。どの場合も、使うのは最初に読んだ定義だけです。その名前を CSV や GUI で使うなら、--verbose で場所を見て、意図した定義かどうか確かめてください\n",
-            d.dup_same_file,d.dup_same_name,d.dup_other_name);
-        sim_buf_printf(&info,"var definitions=%u\n",d.explicit_vars);
+        sim_buf_adds(&info,"== ヘッダの定義\n");
+        info_item(&info,"読んだファイル","%zu 個（%.2f 秒）",d.nfiles,(double)(sim_now_ns()-t0)/1e9);
+        info_item(&info,"取り込んだ定義","変数 %u、ビット %u、配列 %u",d.variables,d.bits,d.arrays);
+        info_item(&info,"取り込めなかった定義","型を解決できない %u、値の式のマクロ %u、ポインタ %u",d.unresolved,d.values,d.pointers);
+        if (d.unresolved || d.values || d.pointers) sim_buf_adds(&info,"  ※ 名前と場所は --verbose で表示します\n");
+        info_item(&info,"同じ名前で内容が違う定義","%u 件",d.duplicates);
+        if (d.duplicates) {
+            /* 内訳の右に、その分類が何を意味するかを一言だけ添える（0 件の行には付けない） */
+            info_item(&info,"  同じファイルの中","%u%s",d.dup_same_file,d.dup_same_file?"  （インクルード元によって違う枝を読むヘッダ）":"");
+            info_item(&info,"  同じ名前で別のフォルダ","%u%s",d.dup_same_name,d.dup_same_name?"  （品種違いのファイルを両方読んでいる可能性）":"");
+            info_item(&info,"  名前の違うファイル同士","%u",d.dup_other_name);
+            sim_buf_adds(&info,"  ※ 使うのは最初に読んだ定義です。CSV や GUI で使う名前なら、--verbose で場所を確かめてください\n");
+        }
+        if (d.explicit_vars) info_item(&info,"明示した定義（var）","%u 個",d.explicit_vars);
         {
             unsigned bad=0;
             for (k=0;k<d.nsrc;k++) if (d.src[k].bad_line) bad++;
-            sim_buf_printf(&info,"UTF-16 のため読まなかったファイル: %u 件\n構文を追えなかったファイル: %u 件\n",d.enc_utf16,bad);
-            if (d.verbose) {
-                sim_buf_printf(&info,"defines encoding: UTF8=%u ShiftJIS=%u ASCII=%u\n",d.enc_utf8,d.enc_sjis,d.enc_ascii);
-                for (k=0;k<d.nsrc;k++) if (d.src[k].bad_line)
-                    sim_buf_printf(&info,"  構文を追えなかったファイル: %s:%u\n",d.src[k].path,d.src[k].bad_line);
+            if (d.enc_utf16) info_item(&info,"UTF-16 で読めないファイル","%u 個",d.enc_utf16);
+            if (bad) info_item(&info,"構文を追えないファイル","%u 個",bad);
+            if (d.verbose) for (k=0;k<d.nsrc;k++) if (d.src[k].bad_line)
+                sim_buf_printf(&info,"  構文を追えなかったファイル: %s:%u\n",d.src[k].path,d.src[k].bad_line);
+        }
+        if (d.scope) {
+            size_t j;
+            sim_buf_adds(&info,"\n== 読む範囲（defines_scope = mtpj）\n");
+            info_item(&info,"プロジェクト","%s（ビルド・モード %s）",mtpj_path,mtpj.modes[mtpj.mode]);
+            info_item(&info,"登録ファイル","%d 個（読んだ %u、.h / .c / .inc 以外 %u、ビルド対象外 %d、除外 %u、見つからない %u）",
+                mtpj.files_total,d.scope_registered,scope_other,mtpj.files_off,scope_skipped,scope_nmissing);
+            sim_buf_adds(&info,sim_buf_cstr(&scope_missing));
+            if (scope_nmissing>20 && !d.verbose) sim_buf_printf(&info,"  …ほか %u 個（--verbose で全部を表示）\n",scope_nmissing-20);
+            info_item(&info,"#include から足した","%u 個",d.scope_added);
+            info_item(&info,"インクルード・パス","%zu 個（mtpj %d、defines_include %u）",d.nincdirs,mtpj.nincs,scope_cfg_incs);
+            if (d.verbose || !mtpj.inc_element) sim_buf_printf(&info,"  mtpj の要素: <%s>\n",mtpj.inc_element?mtpj.inc_element:"AdditionalIncludePaths（要素なし）");
+            for (j=0;j<d.nincdirs;j++) {
+                int exists=sim_path_kind(d.incdirs[j])==2;
+                if (!exists || d.verbose) sim_buf_printf(&info,"  %s%s\n",d.incdirs[j],exists?"":"（フォルダがありません）");
             }
+            if (d.scope_fallback) {
+                info_item(&info,"名前で探した #include","%u 箇所",d.scope_fallback);
+                sim_buf_adds(&info,"  ※ インクルード・パスの順では見つからず、読んだファイルの中から探しました。パスが足りなければ defines_include で足せます\n");
+            }
+            sim_buf_adds(&info,"  ※ ビルド対象の判定とインクルード・パスの書式は実例からの推定です。CS+ の画面と見比べてください\n");
         }
-        if (d.nfiles) {
-            sim_buf_printf(&info,"defines time: scan=%.3f s read=%.3f s cond=%.3f s resolve=%.3f s (%.1f MB, %zu directives)\n",
-                (double)d.t_scan/1e9,(double)d.t_read/1e9,(double)d.t_cond/1e9,(double)(sim_now_ns()-t1)/1e9,(double)d.bytes/1048576.0,d.ndirectives);
-            sim_buf_printf(&info,"defines cond=%s roots=%u includes=%u include-reused=%u include-missing=%u include-cut=%u if-evaluated=%u if-indeterminate=%u\n",
-                d.cond?"on":"off",d.roots,d.includes,d.memo_hits,d.include_missing,d.include_cut,d.if_evaluated,d.if_indeterminate);
-            if (d.cond) sim_buf_printf(&info,"条件付きコンパイル: 起点 %u ファイル、#include の展開 %u 回（走査した中に見つからない #include %u 箇所、循環・深さの上限で打ち切り %u 回）。"
-                "評価した #if / #ifdef / #ifndef / #elif %u 箇所、判定不能 %u 箇所（判定不能の系列はすべての枝を読みます）\n",
-                d.roots,d.includes,d.include_missing,d.include_cut,d.if_evaluated,d.if_indeterminate);
-            else sim_buf_adds(&info,"条件付きコンパイル: defines_cond = off（#if を評価せず、すべての枝を読みます）\n");
-            if (d.nmissing) {
-                unsigned total = 0;
-                for (k=0;k<d.nmissing;k++) total += d.missing[k].count;
-                qsort(d.missing,d.nmissing,sizeof *d.missing,missing_cmp);
-                sim_buf_printf(&info,"有効な枝で見つからなかった #include: %u 箇所、%zu 種類（標準ヘッダなら問題ありません。プロジェクトのヘッダがあれば、インクルード・パスが足りていません。defines_scope = mtpj なら defines_include で足せます。無効な #if の枝に書かれたものは数えていません）\n",total,d.nmissing);
-                for (k=0;k<d.nmissing && k<limit;k++)
-                    sim_buf_printf(&info,"  %s × %u（最初: %s:%u）\n",d.missing[k].name,d.missing[k].count,d.missing[k].file,d.missing[k].line);
-                if (k<d.nmissing) sim_buf_printf(&info,"  …ほか %zu 種類（--verbose で全部を表示）\n",d.nmissing-k);
-            } else if (d.include_missing) sim_buf_printf(&info,"有効な枝で見つからなかった #include はありません（見つからない #include %u 箇所は、すべて無効な #if の枝に書かれたものです）\n",d.include_missing);
-        }
-        sim_buf_printf(&info,"cdef implicit=%u mtpj=%u cfg=%u cli=%u cundef=%u\n",n_implicit,n_mtpj,n_cfg,n_cli,n_cundef);
+        sim_buf_adds(&info,"\n== コンパイルスイッチ\n");
+        if (have_mtpj && !d.scope) info_item(&info,"プロジェクト","%s（ビルド・モード %s）",mtpj_path,mtpj.modes[mtpj.mode]);
+        info_item(&info,"定義マクロ","mtpj %u 個、cdef %u 個、--cdef %u 個、暗黙 %u 個",n_mtpj,n_cfg,n_cli,n_implicit);
         if (d.verbose) {
-            sim_buf_printf(&info,"コンパイラが暗黙に定義するマクロ（%s。品種・メモリモデル・オプションで変わるものは含めません）:%s\n",
-                kind==1?"CA78K0R":kind==2?"CC-RL":"ロードモジュールの種類が不明のため定義なし",n_implicit?"":" なし");
+            sim_buf_printf(&info,"  暗黙の定義の対象: %s%s\n",
+                kind==1?"CA78K0R":kind==2?"CC-RL":"ロードモジュールの種類が不明のため定義なし",n_implicit?"":"（なし）");
+            sim_buf_adds(&info,"  ※ 品種・メモリモデル・オプションで変わるマクロは含めません\n");
             list_origin(&d,&info,ORIGIN_IMPLICIT,"  implicit: ");
         }
         if (have_mtpj) {
-            sim_buf_printf(&info,"mtpj: %s、ビルド・モード %s（%d 個中 %d 番目",mtpj_path,mtpj.modes[mtpj.mode],mtpj.nmodes,mtpj.mode+1);
-            for (i=0;i<mtpj.nmodes;i++) sim_buf_printf(&info,"%s%s",i?", ":"。全モード: ",mtpj.modes[i]);
-            sim_buf_adds(&info,"）\n");
-            if (!mtpj.def_element) sim_buf_printf(&info,"mtpj: 定義マクロの要素 <MacroDefinitions-%d> が見つかりません。定義マクロは読んでいません（CA78K0R 以外のプロジェクトか、未対応の版です）\n",mtpj.mode);
-            else {
-                sim_buf_printf(&info,"mtpj: 定義マクロは要素 <%s> から読みました%s。中身の書式（1 行に 名前 または 名前=値）は実例からの推定です。CS+ のコンパイル・オプションの「定義マクロ」と見比べてください\n",
-                    mtpj.def_element,mtpj.compiler_instance?"":"（コンパイラのオプションの Instance を特定できず、最初に現れたものを使いました）");
+            sim_buf_printf(&info,"  ビルド・モード %s（%d 個中 %d 番目）\n",mtpj.modes[mtpj.mode],mtpj.nmodes,mtpj.mode+1);
+            sim_buf_adds(&info,"  全モード: ");
+            for (i=0;i<mtpj.nmodes;i++) sim_buf_printf(&info,"%s%s",i?", ":"",mtpj.modes[i]);
+            sim_buf_addc(&info,'\n');
+            if (!mtpj.def_element) {
+                sim_buf_printf(&info,"  ※ 定義マクロの要素 <MacroDefinitions-%d> が見つかりません\n",mtpj.mode);
+                sim_buf_adds(&info,"  ※ 定義マクロは未読です（CA78K0R 以外のプロジェクトか、未対応の版）\n");
+            } else {
+                sim_buf_printf(&info,"  mtpj: 定義マクロは要素 <%s> から読みました\n",mtpj.def_element);
+                if (!mtpj.compiler_instance) sim_buf_adds(&info,"  ※ コンパイラのオプションの Instance を特定できず、最初の要素を使用\n");
+                sim_buf_adds(&info,"  ※ 書式（1 行に 名前 または 名前=値）は実例からの推定です。CS+ の「定義マクロ」と見比べてください\n");
                 sim_buf_printf(&info,"  mtpj macro definitions (%d):",mtpj.ndefs);
                 for (i=0;i<mtpj.ndefs;i++) sim_buf_printf(&info,"%s %s",i?",":"",mtpj.defs[i]);
                 sim_buf_printf(&info,"%s\n  mtpj macro undefinitions (%d):",mtpj.ndefs?"":" なし",mtpj.nundefs);
                 for (i=0;i<mtpj.nundefs;i++) sim_buf_printf(&info,"%s %s",i?",":"",mtpj.undefs[i]);
                 sim_buf_printf(&info,"%s\n",mtpj.nundefs?"":" なし");
             }
-            for (i=0;i<mtpj.nbad;i++) sim_buf_printf(&info,"mtpj: 名前として読めない行を無視しました: %s\n",mtpj.bad[i]);
-            if (d.scope) {
-                size_t j;
-                sim_buf_printf(&info,"defines_scope = mtpj: 登録ファイル %d 個のうち、読んだもの %u 個（ビルド対象外 %d 個、.h / .c / .inc 以外 %u 個、defines_exclude などで外したもの %u 個、見つからないもの %u 個）。#include をたどって足したファイル %u 個\n",
-                    mtpj.files_total,d.scope_registered,mtpj.files_off,scope_other,scope_skipped,scope_nmissing,d.scope_added);
-                sim_buf_adds(&info,sim_buf_cstr(&scope_missing));
-                if (scope_nmissing>20 && !d.verbose) sim_buf_printf(&info,"  …ほか %u 個（--verbose で全部を表示）\n",scope_nmissing-20);
-                sim_buf_printf(&info,"インクルード・パス %zu 個（mtpj の <%s> から %d 個、defines_include から %u 個）。#include は、インクルード元のフォルダ、インクルード・パスの順に探します\n",
-                    d.nincdirs,mtpj.inc_element?mtpj.inc_element:"AdditionalIncludePaths（要素なし）",mtpj.nincs,scope_cfg_incs);
-                for (j=0;j<d.nincdirs;j++) sim_buf_printf(&info,"  %s%s\n",d.incdirs[j],sim_path_kind(d.incdirs[j])==2?"":"（フォルダがありません）");
-                if (d.scope_fallback) sim_buf_printf(&info,"上の順番で見つからず、読んだファイルの中からファイル名で探した #include: %u 箇所（インクルード・パスが足りない可能性があります。CS+ の「追加のインクルード・パス」と見比べ、足りなければ defines_include で足してください）\n",d.scope_fallback);
-                sim_buf_adds(&info,"mtpj: 登録ファイルのビルド対象の判定とインクルード・パスの書式は、実例からの推定です\n");
+            for (i=0;i<mtpj.nbad;i++) sim_buf_printf(&info,"  mtpj: 名前として読めない行を無視しました: %s\n",mtpj.bad[i]);
+            if (mtpj.individual) {
+                sim_buf_printf(&info,"  個別コンパイル・オプションらしい定義マクロ: %d 件\n",mtpj.individual);
+                sim_buf_adds(&info,"  ※ 個別の定義マクロは読んでいません。必要なら cdef で与えてください\n");
             }
-            if (mtpj.individual) sim_buf_printf(&info,"mtpj: ファイルごとの個別コンパイル・オプションらしい定義マクロが %d 件あります（読んでいません。必要なら cdef で与えてください）\n",mtpj.individual);
         }
         list_origin(&d,&info,ORIGIN_MTPJ,"  有効な定義マクロ（mtpj）: ");
         list_origin(&d,&info,ORIGIN_CFG,"  有効な定義マクロ（cdef）: ");
@@ -1939,17 +1965,50 @@ int sim_defines_load(sim_ctx *c,const sim_open_opts *o,char *err,size_t cap)
             for (i=0,rc=0;i<d.cfg.n;i++) if (!strcmp(d.cfg.e[i].key,"cundef")) sim_buf_printf(&info,"%s %s",rc++?",":"",d.cfg.e[i].value);
             sim_buf_addc(&info,'\n');
         }
-        if (d.nfiles && d.cond) {
-            list_undefined(&d,&info,0,limit);
-            if (d.verbose) {
-                list_undefined(&d,&info,1,limit);
+        if (d.nfiles) {
+            if (d.cond) {
+                info_item(&info,"評価した #if","%u 箇所（判定不能 %u）",d.if_evaluated,d.if_indeterminate);
+                if (d.if_indeterminate) sim_buf_adds(&info,"  ※ 判定不能の系列は、すべての枝を読みます\n");
+                {
                 for (k=0;k<d.nsrc;k++) { size_t j; for (j=0;j<d.src[k].ndirs;j++) if (d.src[k].dirs[j].indeterminate) {
                     const directive *x=&d.src[k].dirs[j];
                     sim_buf_printf(&info,"  判定不能: %s:%u: #%s %s\n",d.src[k].path,d.src[k].line_no[x->line],
                         x->kind==D_ELIF?"elif":x->kind==D_IF?"if":x->kind==D_IFDEF?"ifdef":"ifndef",skip_blank(x->arg));
                 } }
+                }
+            } else info_item(&info,"defines_cond = off","#if を評価せず、すべての枝を読みます");
+            if (d.include_cut) info_item(&info,"打ち切った #include","%u 回（循環、または深さの上限）",d.include_cut);
+            if (d.nmissing) {
+                unsigned total=0;
+                for (k=0;k<d.nmissing;k++) total+=d.missing[k].count;
+                qsort(d.missing,d.nmissing,sizeof *d.missing,missing_cmp);
+                info_item(&info,"見つからない #include","%u 箇所、%zu 種類（有効な枝のみ。無効な枝を含めると %u 箇所）",total,d.nmissing,d.include_missing);
+                sim_buf_adds(&info,"  ※ 標準ヘッダなら問題ありません。プロジェクトのヘッダならパスを確認してください\n");
+                for (k=0;k<d.nmissing && k<limit;k++)
+                    sim_buf_printf(&info,"  %s × %u（最初: %s:%u）\n",d.missing[k].name,d.missing[k].count,d.missing[k].file,d.missing[k].line);
+                if (k<d.nmissing) sim_buf_printf(&info,"  …ほか %zu 種類（--verbose で全部を表示）\n",d.nmissing-k);
+            } else if (d.include_missing) info_item(&info,"見つからない #include","0 箇所（有効な枝のみ。無効な枝を含めると %u 箇所）",d.include_missing);
+            if (d.cond) {
+                list_undefined(&d,&info,0,limit);
+                if (d.verbose) list_undefined(&d,&info,1,limit);
             }
         }
+        sim_buf_adds(&info,"\n== 詳細（数値）\n");
+        sim_buf_printf(&info,"defines files=%zu variables=%u bits=%u arrays=%u guessed=%u unresolved=%u duplicates=%u pointer-skipped=%u value-excluded=%u (%.3f s)\n",d.nfiles,d.variables,d.bits,d.arrays,d.guessed,d.unresolved,d.duplicates,d.pointers,d.values,(double)(sim_now_ns()-t0)/1e9);
+        if (d.nfiles) {
+            sim_buf_printf(&info,"defines time: scan=%.3f s read=%.3f s cond=%.3f s resolve=%.3f s (%.1f MB, %zu directives)\n",
+                (double)d.t_scan/1e9,(double)d.t_read/1e9,(double)d.t_cond/1e9,(double)(sim_now_ns()-t1)/1e9,(double)d.bytes/1048576.0,d.ndirectives);
+            sim_buf_printf(&info,"defines cond=%s roots=%u includes=%u include-reused=%u include-missing=%u include-cut=%u if-evaluated=%u if-indeterminate=%u\n",
+                d.cond?"on":"off",d.roots,d.includes,d.memo_hits,d.include_missing,d.include_cut,d.if_evaluated,d.if_indeterminate);
+        }
+        sim_buf_printf(&info,"cdef implicit=%u mtpj=%u cfg=%u cli=%u cundef=%u\n",n_implicit,n_mtpj,n_cfg,n_cli,n_cundef);
+        sim_buf_printf(&info,"var definitions=%u\n",d.explicit_vars);
+        {   /* 上の「ヘッダの定義」では 0 件のとき省くので、件数はここに必ず出す（テストがこの 2 行を探す） */
+            unsigned bad=0;
+            for (k=0;k<d.nsrc;k++) if (d.src[k].bad_line) bad++;
+            sim_buf_printf(&info,"UTF-16 のため読まなかったファイル: %u 件\n構文を追えなかったファイル: %u 件\n",d.enc_utf16,bad);
+        }
+        if (d.verbose) sim_buf_printf(&info,"defines encoding: UTF8=%u ShiftJIS=%u ASCII=%u\n",d.enc_utf8,d.enc_sjis,d.enc_ascii);
         sim_ctx_set_definition_info(c,sim_buf_cstr(&info));
         if (d.verbose) fputs(sim_buf_cstr(&info),stderr);
     }

@@ -43,7 +43,7 @@ static void variable(sim_ctx *c,const char *name,uint64_t addr,unsigned size,uns
 static void info_has(sim_ctx *c,const char *text)
 {
     FILE *f=tmpfile();
-    char buf[16384]; size_t n;
+    static char buf[262144]; size_t n;    /* 表示は --verbose だと長い。件数の行は末尾の「詳細（数値）」にある */
     CHECK(f!=NULL); if (!f) return;
     sim_ctx_print_definition_info(c,f); rewind(f);
     n=fread(buf,1,sizeof buf-1,f); buf[n]=0; fclose(f);
