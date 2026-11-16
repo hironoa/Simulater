@@ -96,6 +96,15 @@ mkdir "%WORK%\autocfg"
 copy /y "%TP%" "%WORK%\autocfg\prog.abs" >nul
 copy /y "%R%\cfg\stub.cfg" "%WORK%\autocfg\sim.cfg" >nul
 call :run "sim.cfg next to the .abs is read" 0 "OK 3, NG 0" --abs "%WORK%\autocfg\prog.abs" "%R%\csv\synth_stub.csv"
+mkdir "%WORK%\cfgcwd\module"
+copy /y "%TP%" "%WORK%\cfgcwd\module\prog.abs" >nul
+copy /y "%R%\cfg\stub.cfg" "%WORK%\cfgcwd\sim.cfg" >nul
+pushd "%WORK%\cfgcwd"
+call :run "sim.cfg in the current folder is read as fallback" 0 "OK 3, NG 0" --abs "module\prog.abs" "%R%\csv\synth_stub.csv"
+copy /y "%R%\cfg\stub.cfg" "module\sim.cfg" >nul
+> "sim.cfg" echo init_end = no_such_func
+call :run "sim.cfg next to the .abs takes priority over the current folder" 0 "OK 3, NG 0" --abs "module\prog.abs" "%R%\csv\synth_stub.csv"
+popd
 
 echo == LMF CA78K0R
 "%CC%" %GCC_FLAGS% -std=c11 -O2 -Wall -Wextra -o "%WORK%\mklmf.exe" "%T%\tools\mklmf.c" > "%WORK%\mklmf.log" 2>&1

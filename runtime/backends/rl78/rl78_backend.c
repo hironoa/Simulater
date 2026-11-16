@@ -1212,17 +1212,10 @@ sim_backend *sim_backend_open(const sim_open_opts *o, char *err, size_t errlen)
     z->w.verbose = o->verbose;
     z->w.lmf_names = o->lmf_names || o->verbose >= 2;
     sim_cfg_init(&z->cfg);
-    /* 設定ファイル: --cfg、なければ .abs と同じフォルダの sim.cfg、どちらもなければカレントの sim.cfg */
+    /* 設定ファイル: --cfg、ロードモジュールのフォルダ、カレントの順に探す */
     {
-        char *cp = NULL;
+        char *cp = sim_cfg_locate(o->cfg_path, o->abs_path);
         int rc;
-        if (o->cfg_path) cp = sim_xstrdup(o->cfg_path);
-        else if (o->abs_path) {
-            const char *bn = sim_basename(o->abs_path);
-            char *dir = bn > o->abs_path ? sim_xstrndup(o->abs_path, (size_t)(bn - o->abs_path)) : sim_xstrdup("");
-            cp = sim_path_join(dir[0] ? dir : ".", "sim.cfg");
-            free(dir);
-        } else cp = sim_xstrdup("sim.cfg");
         rc = sim_cfg_load(&z->cfg, cp, cerr, sizeof cerr);
         if (rc == -2) { snprintf(err, errlen, "%s", cerr); free(cp); be_free(z); return NULL; }
         if (rc == -1 && o->cfg_path) { snprintf(err, errlen, "設定ファイル %s を読めません", cp); free(cp); be_free(z); return NULL; }
@@ -1360,7 +1353,14 @@ sim_backend *sim_backend_open(const sim_open_opts *o, char *err, size_t errlen)
     s = sim_cfg_get(&z->cfg, "init_end");
     if ((i = resolve_code(z, s ? s : "main", &z->init_end, &z->init_end_name))) {
         if (s) snprintf(err, errlen, "sim.cfg: init_end = %s が%s", s, i == -2 ? ADDR_BAD : "見つかりません");
-        else snprintf(err, errlen, "初期設定終了アドレスが分かりません（main がありません）。sim.cfg の init_end = 関数名 または 0xアドレス で指定してください");
+        else if (!z->cfg.path) {
+            /* 設定なしで開いたことが分かるようにする（--abs を付けるとカレントの sim.cfg を読まなかった頃の取り違えを防ぐ） */
+            const char *bn = sim_basename(z->abs_path);
+            int n = snprintf(err, errlen, "初期設定終了アドレスが分かりません（main がありません）。sim.cfg の init_end = 関数名 または 0xアドレス で指定してください。設定ファイルは読んでいません（探した場所: ");
+            if (n > 0 && (size_t)n < errlen && bn > z->abs_path)
+                n += snprintf(err + n, errlen - (size_t)n, "%.*ssim.cfg、", (int)(bn - z->abs_path), z->abs_path);
+            if (n > 0 && (size_t)n < errlen) snprintf(err + n, errlen - (size_t)n, "カレントフォルダの sim.cfg。--cfg で指定できます）");
+        } else snprintf(err, errlen, "初期設定終了アドレスが分かりません（main がありません）。sim.cfg の init_end = 関数名 または 0xアドレス で指定してください");
         be_free(z);
         return NULL;
     }

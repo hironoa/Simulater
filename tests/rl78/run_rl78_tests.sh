@@ -181,6 +181,21 @@ mkdir -p "$WORK/autocfg"
 cp "$TP" "$WORK/autocfg/prog.abs"
 cp "$R/cfg/stub.cfg" "$WORK/autocfg/sim.cfg"
 rl78_run ".abs と同じフォルダの sim.cfg を自動で読む" 0 "合計: 総数 3, OK 3, NG 0" -- --abs "$WORK/autocfg/prog.abs" "$R/csv/synth_stub.csv"
+mkdir -p "$WORK/cfgcwd/module"
+cp "$TP" "$WORK/cfgcwd/module/prog.abs"
+cp "$R/cfg/stub.cfg" "$WORK/cfgcwd/sim.cfg"
+# カレントフォルダから見るので、そこへ移って実行する（終わったら元のフォルダへ戻る）
+_here=$PWD
+cd "$WORK/cfgcwd"
+rl78_run ".abs のフォルダになければカレントの sim.cfg を読む" 0 "合計: 総数 3, OK 3, NG 0" -- --abs module/prog.abs "$R/csv/synth_stub.csv"
+"$RS" info --abs module/prog.abs > "$WORK/cfgcwd_info.txt" 2>&1
+check "カレントの sim.cfg を読んだことが sim info で分かる" contains "$WORK/cfgcwd_info.txt" "設定ファイル: sim.cfg"
+cp "$R/cfg/stub.cfg" module/sim.cfg
+printf 'init_end = no_such_func\n' > sim.cfg
+rl78_run "両方に sim.cfg があれば .abs のフォルダを優先する" 0 "合計: 総数 3, OK 3, NG 0" -- --abs module/prog.abs "$R/csv/synth_stub.csv"
+rm sim.cfg module/sim.cfg
+rl78_run "どちらにも sim.cfg がなくても設定なしで開ける" 0 "合計: 総数 1, OK 1, NG 0" -- --abs module/prog.abs "$R/csv/synth_nostub.csv"
+cd "$_here"
 printf 'abs = prog.abs\n' > "$WORK/autocfg/only_abs.cfg"
 rl78_run "sim.cfg の abs = で .abs を指定（--abs なし）" 0 "合計: 総数 1, OK 1, NG 0" -- --cfg "$WORK/autocfg/only_abs.cfg" "$R/csv/synth_nostub.csv"
 
