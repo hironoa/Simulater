@@ -17,6 +17,7 @@ typedef struct {
     unsigned char kind, funclike;
     unsigned char evaluated, indeterminate; /* 評価したことがある／判定不能だったことがある */
     unsigned char logged;                   /* 未定義の識別子を数え済み */
+    unsigned char missing_counted;          /* 有効な枝の見つからない #include を数え済み */
     uint32_t line;      /* 論理行の番号 */
     uint32_t sym;       /* #define / #undef / #ifdef / #ifndef の名前 */
     uint32_t guard;     /* 条件の直後の #define の名前（インクルードガード）。なければ 0 */
@@ -643,7 +644,6 @@ static void count_missing_include(defs *d, const source *s, const directive *x)
     char *key = lower_path(x->arg);
     missing_include *m;
     size_t k;
-    d->include_missing++;
     for (k = 0; k < d->nmissing; k++) if (!strcmp(d->missing[k].key, key)) {
         d->missing[k].count++; free(key); return;
     }
@@ -961,7 +961,10 @@ static unsigned process_file(defs *d, uint32_t fi, unsigned depth)
             unsigned h;
             if (!d->cond) break;
             if (x->target == -2) x->target = resolve_include(d, s, x->arg);
-            if (x->target < 0) break;
+            if (x->target < 0) {
+                if (!x->missing_counted) { x->missing_counted = 1; count_missing_include(d, s, x); }
+                break;
+            }
             /* 自分自身を含め、読んでいる途中のファイルもそのまま読む（インクルードガードが普通に効く）。
                ガードのない循環は深さの上限で打ち切る */
             if (depth >= MAX_INCLUDE_DEPTH || d->root_includes >= MAX_ROOT_INCLUDES) { d->include_cut++; break; }
@@ -1128,7 +1131,7 @@ static void preprocess(defs *d)
             /* 範囲を絞らない方式、または上の順番で見つからなかったもの: 読んだファイルの中からファイル名で探す */
             x->target = resolve_include(d, &d->src[k], x->arg);
             if (x->target >= 0) { d->src[x->target].included = 1; if (d->scope) d->scope_fallback++; }
-            else count_missing_include(d, &d->src[k], x);
+            else d->include_missing++;
         }
     for (i = 0; i < 2; i++)
         for (k = 0; k < d->nsrc; k++) {
@@ -1884,12 +1887,14 @@ int sim_defines_load(sim_ctx *c,const sim_open_opts *o,char *err,size_t cap)
                 d.roots,d.includes,d.include_missing,d.include_cut,d.if_evaluated,d.if_indeterminate);
             else sim_buf_adds(&info,"条件付きコンパイル: defines_cond = off（#if を評価せず、すべての枝を読みます）\n");
             if (d.nmissing) {
+                unsigned total = 0;
+                for (k=0;k<d.nmissing;k++) total += d.missing[k].count;
                 qsort(d.missing,d.nmissing,sizeof *d.missing,missing_cmp);
-                sim_buf_printf(&info,"見つからなかった #include: %u 箇所、%zu 種類（標準ヘッダなら問題ありません。プロジェクトのヘッダがあれば、インクルード・パスが足りていません。defines_scope = mtpj なら defines_include で足せます）\n",d.include_missing,d.nmissing);
+                sim_buf_printf(&info,"有効な枝で見つからなかった #include: %u 箇所、%zu 種類（標準ヘッダなら問題ありません。プロジェクトのヘッダがあれば、インクルード・パスが足りていません。defines_scope = mtpj なら defines_include で足せます。無効な #if の枝に書かれたものは数えていません）\n",total,d.nmissing);
                 for (k=0;k<d.nmissing && k<limit;k++)
                     sim_buf_printf(&info,"  %s × %u（最初: %s:%u）\n",d.missing[k].name,d.missing[k].count,d.missing[k].file,d.missing[k].line);
                 if (k<d.nmissing) sim_buf_printf(&info,"  …ほか %zu 種類（--verbose で全部を表示）\n",d.nmissing-k);
-            }
+            } else if (d.include_missing) sim_buf_printf(&info,"有効な枝で見つからなかった #include はありません（見つからない #include %u 箇所は、すべて無効な #if の枝に書かれたものです）\n",d.include_missing);
         }
         sim_buf_printf(&info,"cdef implicit=%u mtpj=%u cfg=%u cli=%u cundef=%u\n",n_implicit,n_mtpj,n_cfg,n_cli,n_cundef);
         if (d.verbose) {
