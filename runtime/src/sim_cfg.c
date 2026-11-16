@@ -9,6 +9,21 @@
 
 void sim_cfg_init(sim_cfg *c) { memset(c, 0, sizeof *c); }
 
+char *sim_cfg_locate(const char *cfg_path, const char *abs_path)
+{
+    if (cfg_path) return sim_xstrdup(cfg_path);
+    if (abs_path) {
+        const char *b = sim_basename(abs_path);
+        char *dir = sim_xstrndup(abs_path, (size_t)(b - abs_path));
+        char *path = sim_path_join(dir[0] ? dir : ".", "sim.cfg");
+        FILE *fp = sim_fopen(path, "rb");
+        free(dir);
+        if (fp) { fclose(fp); return path; }
+        free(path);
+    }
+    return sim_xstrdup("sim.cfg");
+}
+
 void sim_cfg_free(sim_cfg *c)
 {
     int i;

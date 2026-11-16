@@ -18,6 +18,9 @@ typedef struct {
     int n;
 } sim_cfg;
 
+/* --cfg、ロードモジュールのフォルダ、カレントの順に読むパスを決める（呼び出し側で free）。
+ * --cfg は開けなくてもそのパスを返す。自動探索で見つからなければ "sim.cfg" を返す。 */
+char *sim_cfg_locate(const char *cfg_path, const char *abs_path);
 /* 読む。ファイルがなければ -1（cfg は空のまま使える）。書式の誤りは err に書いて -2 */
 int sim_cfg_load(sim_cfg *c, const char *path, char *err, size_t errlen);
 void sim_cfg_init(sim_cfg *c);

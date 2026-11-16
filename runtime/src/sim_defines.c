@@ -1600,9 +1600,7 @@ int sim_defines_load(sim_ctx *c,const sim_open_opts *o,char *err,size_t cap)
     d.env.lookup=lookup_cb; d.env.ctx=&d;
     memset(&mtpj,0,sizeof mtpj);
     sim_cfg_init(&d.cfg);
-    if (o->cfg_path) path=sim_xstrdup(o->cfg_path);
-    else if (o->abs_path) { const char *b=sim_basename(o->abs_path); char *dir=sim_xstrndup(o->abs_path,(size_t)(b-o->abs_path)); path=sim_path_join(dir[0]?dir:".","sim.cfg"); free(dir); }
-    else path=sim_xstrdup("sim.cfg");
+    path=sim_cfg_locate(o->cfg_path,o->abs_path);
     rc=sim_cfg_load(&d.cfg,path,err,cap); free(path);
     if (rc==-2 || (rc==-1 && o->cfg_path)) { if (rc==-1) snprintf(err,cap,"設定ファイルを読めません"); sim_cfg_free(&d.cfg); return -1; }
     d.recursive=onoff(&d,"defines_recursive",1); d.guess=onoff(&d,"defines_guess_bits",1);
