@@ -654,6 +654,14 @@ else
     "$RS" xlate --abs "$XW/tp.abs" > "$XW/all.log" 2>&1
     check "sim xlate: すべての関数を変換する（終了コード 0）" test $? -eq 0
     check "sim xlate: 変換できた" contains "$XW/all.log" "変換: できました"
+    xl_cc_times_valid() {
+        for _times in "$XW"/.simxl/*/cc_times.txt; do
+            [ -f "$_times" ] || return 1
+            awk -F '\t' 'NF != 2 || $1 !~ /^[A-Za-z0-9_]+[.]c$/ || $2 !~ /^[0-9]+[.][0-9]$/ { bad = 1 }
+                END { exit (NR == 0 || bad) }' "$_times" || return 1
+        done
+    }
+    check "sim xlate: キャッシュに名前と秒数を記録した cc_times.txt がある（1 行以上）" xl_cc_times_valid
     "$RS" info --exec xlate --abs "$XW/tp.abs" > "$XW/info.log" 2>&1
     check "sim info: 実行方式と変換済みの関数の数を表示する" grep -q "変換済みの関数: [1-9][0-9]* 個、フォルダ: " "$XW/info.log"
     xl_same "sim xlate の後: すべての関数を変換した状態でも結果は同じ" xlate

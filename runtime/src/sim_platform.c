@@ -277,6 +277,20 @@ int sim_proc_wait(sim_proc *p)
     return (int)code;
 }
 
+int sim_proc_poll(sim_proc *p, int *exit_code)
+{
+    DWORD code = (DWORD)-1;
+    DWORD r;
+    if (!p) { *exit_code = -1; return 1; }
+    r = WaitForSingleObject(p->h, 0);
+    if (r == WAIT_TIMEOUT) return 0;
+    if (r == WAIT_OBJECT_0 && !GetExitCodeProcess(p->h, &code)) code = (DWORD)-1;
+    CloseHandle(p->h);
+    free(p);
+    *exit_code = (int)code;
+    return 1;
+}
+
 int sim_cpu_count(void)
 {
     SYSTEM_INFO si;
@@ -600,6 +614,18 @@ int sim_proc_wait(sim_proc *p)
     free(p);
     if (r < 0 || !WIFEXITED(st)) return -1;
     return WEXITSTATUS(st);
+}
+
+int sim_proc_poll(sim_proc *p, int *exit_code)
+{
+    int st = 0;
+    pid_t r;
+    if (!p) { *exit_code = -1; return 1; }
+    do { r = waitpid(p->pid, &st, WNOHANG); } while (r < 0 && errno == EINTR);
+    if (r == 0) return 0;
+    free(p);
+    *exit_code = r < 0 || !WIFEXITED(st) ? -1 : WEXITSTATUS(st);
+    return 1;
 }
 
 int sim_cpu_count(void)

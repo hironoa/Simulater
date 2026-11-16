@@ -15,6 +15,7 @@
  *   xl-N.dll      できあがり（読み込み中のファイルは上書きできないので、作るたびに番号を進める）
  *   current.txt   いま使う DLL の名前
  *   cc.log        コンパイラの出力
+ *   cc_times.txt  今回コンパイルしたファイルの所要秒数（長い順）
  */
 #include "rl78_xl.h"
 
@@ -390,7 +391,80 @@ void rl78_xl_resume(rl78_xl *x)
 
 /* ---- 変換してコンパイルする ---- */
 
-typedef struct { char *src, *obj; sim_proc *proc; } job_t;
+typedef struct {
+    char *src, *obj;
+    sim_proc *proc;
+    uint64_t started, elapsed;
+    int compiled;
+} job_t;
+
+static void compile_progress(rl78_xl *x, job_t **slots, size_t nslots,
+                             size_t done, size_t total, uint64_t start, uint64_t now)
+{
+    job_t *top[3] = {NULL, NULL, NULL};
+    size_t i, j, running = 0;
+    sim_buf line;
+    /* 長く動いているものを先に見せ、止まって見える原因を探しやすくする */
+    for (i = 0; i < nslots; i++) {
+        job_t *job = slots[i];
+        if (!job) continue;
+        running++;
+        for (j = 0; j < 3; j++) {
+            if (!top[j] || job->started < top[j]->started) {
+                size_t k;
+                for (k = 2; k > j; k--) top[k] = top[k - 1];
+                top[j] = job;
+                break;
+            }
+        }
+    }
+    sim_buf_init(&line);
+    sim_buf_printf(&line, "変換: コンパイル中 %u/%u ファイル（経過 %.0f 秒。実行中: ",
+                   (unsigned)done, (unsigned)total, (double)((now - start) / 1000000000ULL));
+    for (i = 0; i < 3 && top[i]; i++)
+        sim_buf_printf(&line, "%s%s %.0f 秒", i ? ", " : "", sim_basename(top[i]->src),
+                       (double)((now - top[i]->started) / 1000000000ULL));
+    if (!running) sim_buf_adds(&line, "なし");
+    if (running > 3) sim_buf_printf(&line, " ほか %u 個", (unsigned)(running - 3));
+    sim_buf_adds(&line, "）\n");
+    say(x, "%s", sim_buf_cstr(&line));
+    sim_buf_free(&line);
+}
+
+static int compile_time_cmp(const void *a, const void *b)
+{
+    const job_t *ja = *(job_t *const *)a, *jb = *(job_t *const *)b;
+    return ja->elapsed > jb->elapsed ? -1 : ja->elapsed < jb->elapsed;
+}
+
+static void compile_times(rl78_xl *x, job_t *jobs, size_t njobs)
+{
+    job_t **order = sim_xcalloc(njobs, sizeof *order);
+    size_t i, count = 0;
+    sim_buf times, slow;
+    char *path;
+    for (i = 0; i < njobs; i++) if (jobs[i].compiled) order[count++] = &jobs[i];
+    /* 使い回しただけのときは、前回の診断情報を残す。main.c は毎回作り直すので、それだけのときも同じ
+     * （sim xlate は変換を 2 回かけるので、2 回目に 1 回目の記録を消してしまう） */
+    if (count < 2) { free(order); return; }
+    qsort(order, count, sizeof *order, compile_time_cmp);
+    sim_buf_init(&times);
+    sim_buf_init(&slow);
+    for (i = 0; i < count; i++) {
+        job_t *job = order[i];
+        sim_buf_printf(&times, "%s\t%.1f\n", sim_basename(job->src), (double)job->elapsed / 1e9);
+        if (i < 5 && job->elapsed >= 30000000000ULL)
+            sim_buf_printf(&slow, "%s%s %.0f 秒", i ? ", " : "", sim_basename(job->src),
+                           (double)(job->elapsed / 1000000000ULL));
+    }
+    path = join(x->dir, "cc_times.txt");
+    if (sim_write_file(path, times.p, times.len)) say(x, "変換: %s に書けません\n", path);
+    if (slow.len) say(x, "変換: 時間のかかったファイル: %s\n", sim_buf_cstr(&slow));
+    free(path);
+    sim_buf_free(&times);
+    sim_buf_free(&slow);
+    free(order);
+}
 
 int rl78_xl_update(rl78_xl *x, const uint32_t *extra, size_t nextra)
 {
@@ -496,22 +570,52 @@ int rl78_xl_update(rl78_xl *x, const uint32_t *extra, size_t nextra)
     rl78_load(x->cpu, 0, cur_rom, x->rom_size);
     free(cur_rom);
 
-    /* コンパイル: x->jobs 個ずつ並べて走らせる */
+    /* 遅いファイルがあっても他の枠を止めないよう、全枠の終了を調べて補充する */
     if (!failed) {
         size_t next = 0, done = 0;
+        size_t nslots = (size_t)x->jobs < njobs ? (size_t)x->jobs : njobs;
+        job_t **slots = sim_xcalloc(nslots, sizeof *slots);
+        uint64_t start = sim_now_ns(), last = start;
         say(x, "変換: %u 命令のうち %u 命令（%u ファイル）をコンパイルします\n", (unsigned)ntotal, (unsigned)ninsns, (unsigned)njobs);
         while (done < njobs) {
-            while (next < njobs && next - done < (size_t)x->jobs) {
-                const char *argv[24];
-                compile_args(x, argv, jobs[next].src, jobs[next].obj);
-                jobs[next].proc = sim_proc_spawn(argv, log);
-                if (!jobs[next].proc) failed = 1;
-                next++;
+            int finished = 0;
+            uint64_t now;
+            for (i = 0; i < nslots; i++) {
+                job_t *job = slots[i];
+                int code;
+                if (job && sim_proc_poll(job->proc, &code)) {
+                    job->elapsed = sim_now_ns() - job->started;
+                    job->proc = NULL;
+                    slots[i] = NULL;
+                    if (code != 0) failed = 1;
+                    done++;
+                    finished = 1;
+                }
+                while (!slots[i] && next < njobs) {
+                    const char *argv[24];
+                    job = &jobs[next++];
+                    compile_args(x, argv, job->src, job->obj);
+                    job->started = sim_now_ns();
+                    job->proc = sim_proc_spawn(argv, log);
+                    if (job->proc) {
+                        job->compiled = 1;
+                        slots[i] = job;
+                    } else {
+                        failed = 1;
+                        done++;
+                    }
+                }
             }
-            if (jobs[done].proc && sim_proc_wait(jobs[done].proc) != 0) failed = 1;
-            jobs[done].proc = NULL;
-            done++;
+            now = sim_now_ns();
+            if (now - start > 5000000000ULL &&
+                ((finished && now - last >= 5000000000ULL) || now - last >= 10000000000ULL)) {
+                compile_progress(x, slots, nslots, done, njobs, start, now);
+                last = now;
+            }
+            if (done < njobs) sim_sleep_ms(15);
         }
+        free(slots);
+        compile_times(x, jobs, njobs);
         if (failed) say(x, "変換: コンパイルに失敗しました。コンパイラの出力は %s にあります。結果には影響しません（解釈実行のまま）\n", log);
     }
 
