@@ -78,6 +78,36 @@ uint64_t sim_now_ns(void)
 
 void sim_sleep_ms(int ms) { Sleep(ms < 0 ? 0 : (DWORD)ms); }
 
+/* MMRESULT は UINT。winmm へのリンクを増やさず、実行時に関数を取得する */
+typedef UINT (WINAPI *sim_time_period_fn)(UINT);
+static HMODULE fine_timer_lib;
+static sim_time_period_fn fine_timer_end;
+
+/* Windows は既定の刻みが約 15.6 ms で、Sleep(1) と条件変数の待ちがその単位に
+ * 切り上げられる。周期 5 ms では遅れが積み上がってオーバーランになるため、1 ms にする */
+void sim_timer_fine_begin(void)
+{
+    HMODULE lib;
+    sim_time_period_fn begin, end;
+    if (fine_timer_lib) return;
+    lib = LoadLibraryA("winmm.dll");
+    if (!lib) return;
+    begin = (sim_time_period_fn)(void (*)(void))GetProcAddress(lib, "timeBeginPeriod");
+    end = (sim_time_period_fn)(void (*)(void))GetProcAddress(lib, "timeEndPeriod");
+    if (!begin || !end || begin(1) != 0) { FreeLibrary(lib); return; }
+    fine_timer_lib = lib;
+    fine_timer_end = end;
+}
+
+void sim_timer_fine_end(void)
+{
+    if (!fine_timer_lib) return;
+    fine_timer_end(1);
+    FreeLibrary(fine_timer_lib);
+    fine_timer_lib = NULL;
+    fine_timer_end = NULL;
+}
+
 #ifndef CREATE_WAITABLE_TIMER_HIGH_RESOLUTION
 #define CREATE_WAITABLE_TIMER_HIGH_RESOLUTION 0x00000002
 #endif
@@ -357,6 +387,9 @@ int sim_same_file(const char *a, const char *b)
 }
 
 #else /* POSIX */
+
+void sim_timer_fine_begin(void) {}
+void sim_timer_fine_end(void) {}
 
 #include <errno.h>
 #include <fcntl.h>

@@ -33,6 +33,10 @@ int sim_thread_start(sim_thread_fn fn, void *arg);
 /* 単調増加の時刻（ナノ秒） */
 uint64_t sim_now_ns(void);
 void sim_sleep_ms(int ms);
+/* Windows のタイマ刻みを 1 ms にする。重複した begin は無視し、成功した設定だけ end で戻す。
+ * 利用できない場合と Windows 以外では何もしない。スレッドの開始前・終了時に呼ぶ */
+void sim_timer_fine_begin(void);
+void sim_timer_fine_end(void);
 /* 高精度に ns だけ待つ（ミリ秒未満は短いスリープとスピン） */
 void sim_sleep_until_ns(uint64_t deadline_ns);
 
