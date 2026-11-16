@@ -81,6 +81,9 @@ typedef struct sim_proc sim_proc;
 sim_proc *sim_proc_spawn(const char *const *argv, const char *log_path);
 /* 終わるまで待って終了コードを返し、p を解放する（異常終了は -1） */
 int sim_proc_wait(sim_proc *p);
+/* 待たずに調べる。実行中は 0、終了（確認の失敗を含む）は 1。
+ * 終了時は *exit_code に終了コード（異常なら -1）を入れて p を解放する */
+int sim_proc_poll(sim_proc *p, int *exit_code);
 /* 論理 CPU の数（分からなければ 1） */
 int sim_cpu_count(void);
 /* 共有ライブラリ（DLL）を読み込む。失敗したら NULL で err に理由 */
