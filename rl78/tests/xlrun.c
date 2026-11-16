@@ -8,6 +8,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #ifdef _WIN32
 #include <windows.h>
 #else
@@ -141,6 +142,24 @@ int main(int argc, char **argv)
         fib = tasm_label("fib");
         ot2 = tasm_label("ot2");
         if (sub < 0 || fib < 0 || ot2 < 0) { fprintf(stderr, "xlrun: labels not found\n"); return 2; }
+    }
+
+    if (argc > 3 && !strcmp(argv[3], "bench")) {
+        /* xlrun <dir> <dll> bench: speed of this call-heavy program, interpreted and translated */
+        const uint64_t N = 300000000;
+        clock_t t0, t1, t2;
+        a = mk(img);
+        b = mk(img);
+        if (rl78_xl_attach(b, mod, err, sizeof err)) { fprintf(stderr, "xlrun: attach: %s\n", err); return 2; }
+        t0 = clock();
+        rl78_run(a, N);
+        t1 = clock();
+        rl78_run(b, N);
+        t2 = clock();
+        printf("bench: interpreted %.0f M insn/s, translated %.0f M insn/s (%.2fx), %llu of %llu instructions translated\n",
+               (double)N / 1e6 / ((double)(t1 - t0) / CLOCKS_PER_SEC), (double)N / 1e6 / ((double)(t2 - t1) / CLOCKS_PER_SEC),
+               (double)(t1 - t0) / (double)(t2 - t1), (unsigned long long)rl78_xl_insn_count(b), (unsigned long long)N);
+        return same_regs(a, b) ? 0 : 1;
     }
 
     printf("== translated code: one long run\n");

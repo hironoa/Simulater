@@ -57,11 +57,22 @@ int main(int argc, char **argv)
     printf("\n");
     if (n < 8) { fprintf(stderr, "xlgen: the call profile found too few functions\n"); return 1; }
 
+    /* two C files, every other function in each: calls between the files, and the private copies
+       of small functions of the other file, get tested as well as calls inside one file */
     rl78_xl_leaders_init(&ld);
-    snprintf(path, sizeof path, "%s/xl_unit.c", dir);
-    if (!(f = fopen(path, "w"))) return 1;
-    if (rl78_xlate_unit(c, list, n, entries, put, f, &ld, &ninsns)) { fprintf(stderr, "xlgen: translation failed\n"); return 1; }
-    fclose(f);
+    {
+        static uint32_t half[2][256];
+        size_t nh[2] = {0, 0}, i, part;
+        int k;
+        for (i = 0; i < n; i++) half[i & 1][nh[i & 1]++] = list[i];
+        for (k = 0; k < 2; k++) {
+            snprintf(path, sizeof path, k ? "%s/xl_unit2.c" : "%s/xl_unit.c", dir);
+            if (!(f = fopen(path, "w"))) return 1;
+            if (rl78_xlate_unit(c, half[k], nh[k], entries, put, f, &ld, &part)) { fprintf(stderr, "xlgen: translation failed\n"); return 1; }
+            fclose(f);
+            ninsns += part;
+        }
+    }
     snprintf(path, sizeof path, "%s/xl_main.c", dir);
     if (!(f = fopen(path, "w"))) return 1;
     if (rl78_xlate_main(c, &ld, put, f)) return 1;

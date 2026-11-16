@@ -90,6 +90,7 @@ struct rl78_cpu {
     uint32_t xl_plain_lo, xl_plain_hi; /* the attached module's plain range (rl78_xl_module) */
     int xl_map_bad;     /* a page the translated code treats as plain RAM is not plain any more: not used while set */
     unsigned xl_miss;   /* consecutive lookups that found no translated code (interpreter burst length) */
+    unsigned xl_depth;  /* translated functions that called each other directly and have not returned (RL78_XL_MAX_DEPTH) */
     rl78_fault fault;
 };
 
