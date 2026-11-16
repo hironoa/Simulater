@@ -15,11 +15,11 @@
 
 | 項目 | 内容 |
 | --- | --- |
-| ビルド元 | `8d95301`（C への変換方式、実行したフォルダの `sim.cfg` を読む変更、`defines_scope = mtpj` を含む） |
+| ビルド元 | `bd3786c`（C への変換方式、実行したフォルダの `sim.cfg` を読む変更、`defines_scope = mtpj` を含む） |
 | ビルドした日 | 2026-11-16 |
 | ビルド方法 | macOS の上で `tools/build_windows_cross.sh`（MinGW-w64 の gcc 16.2.0、`build.bat` の `CC=gcc` と同じ設定） |
 | 依存する DLL | Windows 標準のものだけ（KERNEL32、SHELL32、WS2_32、UCRT）。MinGW の DLL は要らない |
-| 確認 | **Windows では実行していない**（ビルドした機械では実行できないため）。ビルド元のソースは macOS でテスト 1,080 件が成功 |
+| 確認 | **Windows では実行していない**（ビルドした機械では実行できないため）。ビルド元のソースは macOS でテスト 1,084 件が成功 |
 
 普段の配布物は CI（GitHub Actions の `windows` ジョブの成果物 `sim-windows-x64`）が作ります。
 このフォルダは、CI を使えなかったときの代わりに置いたものです。ソースを変えても自動では作り直されないので、
