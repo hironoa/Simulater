@@ -240,9 +240,62 @@ static size_t list_index(const scan_t *s, uint32_t a)
     return lo;      /* the caller knows a is in the list */
 }
 
+/* A long function is written as several C functions ("parts"), each a run of its instructions in
+   address order, cut at a block start.  The C compiler needs much more than twice the time for a
+   function twice as long (a function of 3400 instructions took a minute, and real programs have
+   them), so the parts keep the time in proportion to the size.
+   A jump from one part to another leaves the part like a jump to an unknown address; the function
+   itself (xl_iNNNNN) is then only a loop that runs the part the pc is in.  That costs a return and
+   a call per crossing, which is nothing next to a trip through the dispatcher. */
+#ifndef XL_PART_INSNS
+#define XL_PART_INSNS 200u      /* a part has at least this many instructions (but the last) */
+#endif
+#define XL_PART_MAX (4u * XL_PART_INSNS)    /* and at most about this many */
+
+/* part[i]: the part list[i] belongs to.  Returns the number of parts, 0 when out of memory.
+   A cut inside a loop would make every turn of the loop cross parts, so a cut goes where no
+   backward jump reaches over it; when there is no such place within XL_PART_MAX instructions
+   (the whole function is one loop, say), where the fewest do. */
+static unsigned plan_parts(rl78_cpu *c, const scan_t *s, unsigned *part)
+{
+    size_t i, start = 0, best = 0;
+    unsigned np = 0;
+    int *over;      /* over[i]: backward jumps from list[i] or later to before list[i] */
+    if (s->n <= XL_PART_INSNS) {
+        for (i = 0; i < s->n; i++) part[i] = 0;
+        return 1;
+    }
+    over = (int *)calloc(s->n + 1, sizeof *over);
+    if (!over) return 0;
+    for (i = 0; i < s->n; i++) {
+        flow_t f;
+        flow_of(c, s->list[i], &f);
+        if (f.has_target && !f.is_call && f.target <= s->list[i] && (s->mark[f.target] & 3) == 3) {
+            over[list_index(s, f.target) + 1]++;    /* cuts at target+1 .. i split the loop */
+            over[i + 1]--;
+        }
+    }
+    for (i = 1; i <= s->n; i++) over[i] += over[i - 1];
+    for (i = 0; i < s->n; i++) {
+        if (i - start >= XL_PART_INSNS && (s->mark[s->list[i]] & 2)) {
+            if (best <= start || over[i] < over[best]) best = i;
+            if (over[i] == 0 || i - start >= XL_PART_MAX) {
+                size_t k;
+                np++;
+                for (k = best; k < i; k++) part[k] = np;    /* the cut is at best, which may be behind i */
+                start = best;
+            }
+        }
+        part[i] = np;
+    }
+    free(over);
+    return np + 1;
+}
+
 /* rem[i]: instructions from list[i] to the next check, the longest way.  edge[i]: XL_FREE_* of
-   list[i].  open[i]: list[i] is entered without its check from somewhere. */
-static void plan_checks(rl78_cpu *c, const scan_t *s, uint32_t *rem, uint8_t *edge, uint8_t *open)
+   list[i].  open[i]: list[i] is entered without its check from somewhere.
+   A jump into another part always goes through the check there. */
+static void plan_checks(rl78_cpu *c, const scan_t *s, const unsigned *part, uint32_t *rem, uint8_t *edge, uint8_t *open)
 {
     size_t i = s->n;
     memset(edge, 0, s->n);
@@ -256,7 +309,7 @@ static void plan_checks(rl78_cpu *c, const scan_t *s, uint32_t *rem, uint8_t *ed
         if (i + 1 < s->n && s->list[i + 1] == next) {
             if (!(s->mark[next] & 2)) {
                 r = 1 + rem[i + 1];                         /* same block: no check in between */
-            } else if (f.falls && !f.is_call && 1 + rem[i + 1] <= XL_FREE_MAX) {
+            } else if (f.falls && !f.is_call && part[i + 1] == part[i] && 1 + rem[i + 1] <= XL_FREE_MAX) {
                 edge[i] |= XL_FREE_FALL;
                 open[i + 1] = 1;
                 r = 1 + rem[i + 1];
@@ -264,7 +317,7 @@ static void plan_checks(rl78_cpu *c, const scan_t *s, uint32_t *rem, uint8_t *ed
         }
         if (f.has_target && !f.is_call && f.target > pc && HERE(f.target)) {
             size_t j = list_index(s, f.target);
-            if (1 + rem[j] <= XL_FREE_MAX) {
+            if (part[j] == part[i] && 1 + rem[j] <= XL_FREE_MAX) {
                 edge[i] |= XL_FREE_TARGET;
                 open[j] = 1;
                 if (1 + rem[j] > r) r = 1 + rem[j];
@@ -273,7 +326,7 @@ static void plan_checks(rl78_cpu *c, const scan_t *s, uint32_t *rem, uint8_t *ed
         after = next + (uint32_t)rl78__insn_len(c, next);
         if (f.is_skip && HERE(after)) {
             size_t j = list_index(s, after);     /* the skipped instruction counts as one executed: 2 */
-            if (2 + rem[j] <= XL_FREE_MAX) {
+            if (part[j] == part[i] && 2 + rem[j] <= XL_FREE_MAX) {
                 edge[i] |= XL_FREE_SKIP;
                 open[j] = 1;
                 if (2 + rem[j] > r) r = 2 + rem[j];
@@ -287,26 +340,37 @@ static void plan_checks(rl78_cpu *c, const scan_t *s, uint32_t *rem, uint8_t *ed
 static int emit_function(rl78_cpu *c, uint32_t entry, const uint8_t *entries, const unit_fn *fn, size_t nfn,
                          scan_t *s, out_t *o, rl78_xl_leaders *ld)
 {
-    size_t i;
+    size_t i, j;
+    unsigned nparts;
     const uint8_t *img = c->mem;
     const unit_fn *self = unit_find(fn, nfn, entry);
     uint32_t *rem = (uint32_t *)malloc((s->n ? s->n : 1) * sizeof *rem);
+    unsigned *part = (unsigned *)malloc((s->n ? s->n : 1) * sizeof *part);
     uint8_t *edge = (uint8_t *)malloc(s->n ? s->n : 1), *open = (uint8_t *)malloc(s->n ? s->n : 1);
-    if (!rem || !edge || !open) { free(rem); free(edge); free(open); return -1; }
-    plan_checks(c, s, rem, edge, open);
+    if (!rem || !part || !edge || !open) { free(rem); free(part); free(edge); free(open); return -1; }
+    nparts = plan_parts(c, s, part);
+    if (!nparts) { free(rem); free(part); free(edge); free(open); return -1; }
+    plan_checks(c, s, part, rem, edge, open);
     if (self && self->copy) ld = NULL;  /* the block starts are listed by the file the function belongs to */
-    outf(o, "static %sxl_state xl_i%05X(rl78_cpu *C, xl_state s_, uint64_t lim)\n{\n",
-         self && self->inl ? "inline __attribute__((always_inline)) " : "", (unsigned)entry);
-    outf(o, "    uint8_t *const M = C->mem; uint8_t *R = s_.R; unsigned F = s_.F;\n");
-    outf(o, "    uint64_t cyc = s_.cyc, n = s_.n; uint32_t pc = s_.pc; int st = 0;\n");
-    outf(o, "dyn:\n    switch (pc) {\n");
-    for (i = 0; i < s->n; i++)
-        if (s->mark[s->list[i]] & 2) outf(o, "    case 0x%05X: goto L_%05X;\n", (unsigned)s->list[i], (unsigned)s->list[i]);
-    outf(o, "    default: goto out;\n    }\n");
     for (i = 0; i < s->n; i++) {
         uint32_t pc = s->list[i], next;
         flow_t f;
         int k, nl;
+        if (i == 0 || part[i] != part[i - 1]) {
+            /* a C function starts: the whole function, or one part of it */
+            if (nparts == 1)
+                outf(o, "static %sxl_state xl_i%05X(rl78_cpu *C, xl_state s_, uint64_t lim)\n{\n",
+                     self && self->inl ? "inline __attribute__((always_inline)) " : "", (unsigned)entry);
+            else
+                outf(o, "static __attribute__((noinline)) xl_state xl_i%05X_p%u(rl78_cpu *C, xl_state s_, uint64_t lim)\n{\n",
+                     (unsigned)entry, part[i]);
+            outf(o, "    uint8_t *const M = C->mem; uint8_t *R = s_.R; unsigned F = s_.F;\n");
+            outf(o, "    uint64_t cyc = s_.cyc, n = s_.n; uint32_t pc = s_.pc; int st = 0;\n");
+            outf(o, "dyn:\n    switch (pc) {\n");
+            for (j = i; j < s->n && part[j] == part[i]; j++)
+                if (s->mark[s->list[j]] & 2) outf(o, "    case 0x%05X: goto L_%05X;\n", (unsigned)s->list[j], (unsigned)s->list[j]);
+            outf(o, "    default: goto out;\n    }\n");
+        }
         flow_of(c, pc, &f);
         next = pc + (uint32_t)f.len;
         nl = rl78__insn_len(c, next);
@@ -356,7 +420,9 @@ static int emit_function(rl78_cpu *c, uint32_t entry, const uint8_t *entries, co
                     "        if (st) goto out;\n"
                     "    }\n", (unsigned)f.target, (unsigned)f.target, (unsigned)f.target);
         }
-#define HERE(t) ((s->mark[t] & 3) == 3)
+        /* a jump to a block of this part goes there; any other address is looked up (dyn), which
+           leaves the part when the address is not in it */
+#define HERE(t) ((s->mark[t] & 3) == 3 && part[list_index(s, (t))] == part[i])
         if (f.has_target && HERE(f.target))
             outf(o, "    if (pc == 0x%05X) goto %c_%05X;\n", (unsigned)f.target,
                  (edge[i] & XL_FREE_TARGET) ? 'U' : 'L', (unsigned)f.target);
@@ -364,15 +430,34 @@ static int emit_function(rl78_cpu *c, uint32_t entry, const uint8_t *entries, co
             outf(o, "    if (pc == 0x%05X) goto %c_%05X;\n", (unsigned)(next + (uint32_t)nl),
                  (edge[i] & XL_FREE_SKIP) ? 'U' : 'L', (unsigned)(next + (uint32_t)nl));
 #undef HERE
-        if (i + 1 < s->n && s->list[i + 1] == next) {
+        if (i + 1 < s->n && s->list[i + 1] == next && part[i + 1] == part[i]) {
             outf(o, "    if (pc != 0x%05X) goto dyn;\n", (unsigned)next);
             if (edge[i] & XL_FREE_FALL) outf(o, "    goto U_%05X;\n", (unsigned)next);
         } else {
             outf(o, "    goto dyn;\n");
         }
+        if (i + 1 == s->n || part[i + 1] != part[i])
+            outf(o, "out:\n    s_.cyc = cyc; s_.n = n; s_.R = R; s_.pc = pc; s_.F = F; s_.st = st;\n    return s_;\n}\n\n");
     }
-    outf(o, "out:\n    s_.cyc = cyc; s_.n = n; s_.R = R; s_.pc = pc; s_.F = F; s_.st = st;\n    return s_;\n}\n\n");
+    if (nparts > 1) {
+        /* the function: run the part the pc is in, until a part stops or the pc is in none.  A part
+           that comes back with the pc still in its own range does not know the address (it is not
+           a block start): that is for the dispatcher, like any address the function does not know. */
+        outf(o, "static xl_state xl_i%05X(rl78_cpu *C, xl_state s_, uint64_t lim)\n{\n    for (;;) {\n", (unsigned)entry);
+        for (i = 0; i < s->n; i = j) {
+            for (j = i; j < s->n && part[j] == part[i]; j++) {}
+            outf(o, "        if (s_.pc >= 0x%05X && s_.pc <= 0x%05X) {\n"
+                    "            s_ = xl_i%05X_p%u(C, s_, lim);\n"
+                    "            if (s_.st || (s_.pc >= 0x%05X && s_.pc <= 0x%05X)) break;\n"
+                    "            continue;\n"
+                    "        }\n",
+                 (unsigned)s->list[i], (unsigned)s->list[j - 1], (unsigned)entry, part[i],
+                 (unsigned)s->list[i], (unsigned)s->list[j - 1]);
+        }
+        outf(o, "        break;\n    }\n    return s_;\n}\n\n");
+    }
     free(rem);
+    free(part);
     free(edge);
     free(open);
     if (self && self->copy) return 0;

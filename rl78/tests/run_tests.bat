@@ -61,6 +61,21 @@ if errorlevel 1 (
 )
 "%BUILD%\xlrun.exe" "%BUILD%\xl" "%BUILD%\xl\xl.dll"
 if errorlevel 1 set STATUS=1
+rem the same again with every function cut into parts of a few instructions (XL_PART_INSNS in rl78_xlate.c)
+echo == translation to C: functions cut into parts
+if not exist "%BUILD%\xlp" mkdir "%BUILD%\xlp"
+"%CC%" %CFLAGS% -DXL_PART_INSNS=4u -I"%ROOT%\include" -I"%HERE%." "%ROOT%\src\rl78_exec.c" "%ROOT%\src\rl78_sys.c" "%ROOT%\src\rl78_disasm.c" "%ROOT%\src\rl78_xlate.c" "%HERE%tasm.c" "%HERE%xlgen.c" -o "%BUILD%\xlgen_parts.exe"
+if errorlevel 1 exit /b 1
+"%BUILD%\xlgen_parts.exe" "%BUILD%\xlp"
+if errorlevel 1 set STATUS=1
+"%XLCC%" -O2 -fno-unroll-loops -ffreestanding -nostdlib -shared -fuse-ld=lld -Wl,/noentry -mno-stack-arg-probe -DRL78_XL_DLL -I"%ROOT%\include" -I"%ROOT%\src" "%BUILD%\xlp\xl_unit.c" "%BUILD%\xlp\xl_unit2.c" "%BUILD%\xlp\xl_main.c" -o "%BUILD%\xlp\xl.dll"
+if errorlevel 1 (
+  echo translation in parts: FAIL ^(cannot build the DLL^)
+  set STATUS=1
+  goto after_xl
+)
+"%BUILD%\xlrun.exe" "%BUILD%\xlp" "%BUILD%\xlp\xl.dll" parts
+if errorlevel 1 set STATUS=1
 :after_xl
 
 if "%RL78_GNU_BIN%"=="" (
