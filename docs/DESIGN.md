@@ -504,6 +504,9 @@ clang のビルドも残し、CI では別の出力フォルダへビルドし�
 
 ### 周期の待機と制御要求
 
+Windows の GUI 起動時は `timeBeginPeriod(1)` でタイマ刻みを 1 ms にし、既定の約 15.6 ms への Sleep(1)・条件変数待ちの切り上げによる遅れの蓄積を抑える。
+実行時に API を取得できない場合は従来の刻みで動作し、設定成功時は正常終了・起動失敗時に `timeEndPeriod(1)` で戻す（`sim run` には適用しない）。
+
 1 周期の間隔は `periodMs / speed`（最大 60000 / 0.1 = 10 分）。周期実行のスレッドは次の期限まで条件変数で待ち、
 `/api/control`（run / pause / step / reset、`speed`・`periodMs`・`func` の変更）と `/api/load-csv` の通知ですぐに起きて、
 実行状態と期限を確かめ直す。古い周期の終わりまで待たされることはない。

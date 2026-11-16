@@ -1784,10 +1784,14 @@ int sim_gui_run(sim_ctx *c, const sim_gui_opts *o)
         }
     }
     if (!sim_ctx_func(c)) fprintf(stderr, "sim gui: 対象関数が未設定です。画面で選ぶか --func で指定してください\n");
-    if (sim_net_init()) { fprintf(stderr, "sim gui: ネットワークの初期化に失敗しました\n"); return 2; }
+    /* Windows は既定の刻みが約 15.6 ms で、Sleep(1) と条件変数の待ちがその単位に
+     * 切り上げられ、周期 5 ms では遅れが積み上がってオーバーランになる。
+     * スレッド開始前に 1 ms にし、正常終了時は atexit、起動失敗時は明示的に戻す */
+    if (atexit(sim_timer_fine_end) == 0) sim_timer_fine_begin();
+    if (sim_net_init()) { fprintf(stderr, "sim gui: ネットワークの初期化に失敗しました\n"); sim_timer_fine_end(); return 2; }
     ls = sim_listen_local(o->port, err, sizeof err);
-    if (ls == SIM_SOCK_INVALID) { fprintf(stderr, "sim gui: %s\n", err); return 2; }
-    if (sim_thread_start(sim_loop, NULL)) { fprintf(stderr, "sim gui: スレッドを作れません\n"); return 2; }
+    if (ls == SIM_SOCK_INVALID) { fprintf(stderr, "sim gui: %s\n", err); sim_timer_fine_end(); return 2; }
+    if (sim_thread_start(sim_loop, NULL)) { fprintf(stderr, "sim gui: スレッドを作れません\n"); sim_timer_fine_end(); return 2; }
     snprintf(url, sizeof url, "http://127.0.0.1:%d/", o->port);
     fprintf(stdout, "sim gui: %s で待ち受けています（周期 %g ms、関数 %s）。止めるには Ctrl+C\n", url, G.period_ms,
             G.func[0] ? G.func : "未設定");
