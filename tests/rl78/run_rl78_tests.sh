@@ -368,7 +368,11 @@ if command -v curl > /dev/null 2>&1; then
 data: {"step":0,"names":["TEST_cycle_cnt","g_ms_tick","g_st.fb"],"values":[0,0,0]}'
     check "GUI: 停止中の書き込みはすぐには反映せず state の pending に出す" contains "$WORK/rsse.txt" '"pending":[{"name":"g_st.fb","value":"7"}]'
     check "GUI: 停止中の書き込みの後も event: values はメモリの値（g_st.fb = 0）" sh -c "! grep -q '\"step\":0,\"names\":\[\"TEST_cycle_cnt\",\"g_ms_tick\",\"g_st.fb\"\],\"values\":\[0,0,7\]' '$WORK/rsse.txt'"
-    check "GUI: ステップの後の samples（実行した値）" contains "$WORK/rsse.txt" '"rows":[[1,10,7],[2,20,7],[3,30,7]]'
+    # 3 周期ぶんの行は、1 回の event: samples にまとまるとは限らない（実行の合間に通知が出ると 2〜3 回に分かれる。
+    # CPU が混んでいると起きる）。届いた行をつないで、3 行が順番どおりに 1 回ずつあることを確かめる
+    check "GUI: ステップの後の samples（実行した値。通知が分かれて届いてもよい）" sh -c '
+        rows=$(grep -o "\"rows\":\[\[.*\]\]}" "$1" | sed -e "s/^\"rows\":\[//" -e "s/\]}\$//" | tr "\n" ",")
+        [ "$rows" = "[1,10,7],[2,20,7],[3,30,7]," ]' sh "$WORK/rsse.txt"
     check "GUI: reset の後に event: values で初期状態の値" sh -c "grep -A1 'event: values' '$WORK/rsse.txt' | tail -1 | grep -q '\"values\":\[0,0,0\]'"
     # 呼び出し失敗は通常の測定点として保存しない。復旧後の記録は再実行できる。
     for fault in f_undef f_loop; do
