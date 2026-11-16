@@ -152,7 +152,7 @@ cond_suite() {
     check "$_t: scope follows the build mode (other folder with the same file names)" sh -c 'grep -q -E "^var  0x${1}B1 SCOPE_DEV " "$2" && grep -q -E "^var  0x${1}B2 SCOPE_MODE " "$2" && grep -q "duplicates=0 " "$3"' sh "$COND_HI" "$WORK/scope_list.log" "$WORK/scope_info.log"
     check "$_t: scope expands %BuildModeName% and flags a missing include folder" contains "$WORK/scope_info.log" "no_such_ProductB（フォルダがありません）"
     scope_run "mtpj = $SCOPE/proj/scope_test.mtpj" 'defines_scope = mtpj' 'mtpj_mode = NoInc'
-    check "$_t: 見つからない include の箇所数と種類数" contains "$WORK/scope_info.log" "見つからなかった #include: 1 箇所、1 種類"
+    check "$_t: 見つからない include の箇所数と種類数" contains "$WORK/scope_info.log" "有効な枝で見つからなかった #include: 1 箇所、1 種類"
     check "$_t: 見つからない include の名前と回数" contains "$WORK/scope_info.log" "reg.h × 1"
     check "$_t: 見つからない include の最初の場所" contains "$WORK/scope_info.log" "（最初: $SCOPE/common/app.c:3）"
     check "$_t: scope without include paths falls back to the file name and says so" sh -c 'grep -q "ファイル名で探した #include: 1 箇所" "$1" && ! grep -q "SCOPE_REG" "$2" && grep -q -E "SCOPE_MODE" "$2"' sh "$WORK/scope_info.log" "$WORK/scope_list.log"
@@ -172,6 +172,22 @@ cond_suite() {
     # ガードのない同じヘッダを、別の起点から違う条件で読む
     scope_run "defines = $T/defines_dup"
     check "$_t: 同じファイルの異なる枝の重複は 1 件" sh -c 'grep -q "duplicates=1 " "$1" && grep -q "同じファイルの中 1 件" "$1" && grep -q "同じ名前で別のフォルダにあるファイル同士 0 件" "$1" && grep -q "名前の違うファイル同士 0 件" "$1"' sh "$WORK/scope_info.log"
+    # 一覧は有効な枝だけ、走査時の統計は無効な枝も含める
+    scope_run "defines = $T/defines_missing/active"
+    check "$_t: 有効な枝の見つからない include を一覧に出す" contains "$WORK/scope_info.log" "no_such_active.h × 1"
+    check "$_t: 無効な枝の見つからない include は一覧に出さない" lacks "$WORK/scope_info.log" "no_such_inactive.h"
+    check "$_t: 有効な枝だけの箇所数と種類数" contains "$WORK/scope_info.log" "有効な枝で見つからなかった #include: 1 箇所、1 種類"
+    check "$_t: 走査時の統計は無効な枝も含めて 2 箇所" contains "$WORK/scope_info.log" "include-missing=2 "
+    check "$_t: 条件付きコンパイルの説明も無効な枝を含めて 2 箇所" contains "$WORK/scope_info.log" "走査した中に見つからない #include 2 箇所、"
+    scope_run "defines = $T/defines_missing/active" 'cdef = NEVER_DEFINED'
+    check "$_t: cdef で有効にした枝の include も一覧に出す" contains "$WORK/scope_info.log" "no_such_inactive.h × 1"
+    check "$_t: cdef で有効になった後も元の include は 1 箇所" contains "$WORK/scope_info.log" "no_such_active.h × 1"
+    check "$_t: 両方の枝が有効なら一覧も 2 箇所 2 種類" contains "$WORK/scope_info.log" "有効な枝で見つからなかった #include: 2 箇所、2 種類"
+    check "$_t: cdef でも走査時の統計は 2 箇所のまま" contains "$WORK/scope_info.log" "include-missing=2 "
+    scope_run "defines = $T/defines_missing/inactive"
+    check "$_t: すべて無効な枝なら一覧の代わりに説明を出す" contains "$WORK/scope_info.log" "有効な枝で見つからなかった #include はありません（見つからない #include 1 箇所は、すべて無効な #if の枝に書かれたものです）"
+    check "$_t: すべて無効な枝なら include の名前は出さない" lacks "$WORK/scope_info.log" "no_such_inactive.h"
+    check "$_t: すべて無効な枝でも走査時の統計は 1 箇所" contains "$WORK/scope_info.log" "include-missing=1 "
     for _bad in 'defines_scope = mtpj' 'defines_scope = all' "defines_include = $SCOPE/inc"; do
         scope_run "$_bad"
         check "$_t: rejects $_bad without what it needs (exit 2)" test "$SCOPE_RC" -eq 2
