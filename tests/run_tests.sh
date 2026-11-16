@@ -126,8 +126,8 @@ cond_suite() {
     check "$_t: mtpj macro definitions of the current build mode" sh -c 'grep -q -E "^var  0x${1}60 COND_REG +u8 " "$2" && grep -q -E "^var  0x${1}66 COND_SIM +u8 " "$2"' sh "$COND_HI" "$WORK/cond_list.log"
     check "$_t: mtpj macro undefinition removes COND_A" cond_at 69 COND_AB u8
     check "$_t: mtpj value with XML escapes ((1<<4))" cond_at 82 COND_ESC u8
-    check "$_t: info lists what was read from the mtpj" sh -c 'grep -q -F "mtpj macro definitions (5): PRODUCT=1, SIM, COND_A, COND_SHIFT=(1<<4), MTPJ_ONLY=0x10" "$1" && grep -q -F "mtpj macro undefinitions (1): COND_A" "$1" && grep -q "ビルド・モード DefaultBuild（2 個中 1 番目。全モード: DefaultBuild, ProductB）" "$1"' sh "$WORK/cond_info.log"
-    check "$_t: info says the mtpj format is inferred and names the element" sh -c 'grep -q "<MacroDefinitions-0> から読みました。.*推定" "$1"' sh "$WORK/cond_info.log"
+    check "$_t: info lists what was read from the mtpj" sh -c 'grep -q -F "mtpj macro definitions (5): PRODUCT=1, SIM, COND_A, COND_SHIFT=(1<<4), MTPJ_ONLY=0x10" "$1" && grep -q -F "mtpj macro undefinitions (1): COND_A" "$1" && grep -q "ビルド・モード DefaultBuild（2 個中 1 番目）" "$1" && grep -q "全モード: DefaultBuild, ProductB" "$1"' sh "$WORK/cond_info.log"
+    check "$_t: info says the mtpj format is inferred and names the element" sh -c 'grep -q "<MacroDefinitions-0> から読みました" "$1" && grep -q "書式.*推定" "$1"' sh "$WORK/cond_info.log"
     check "$_t: assembler macro definitions are not used" lacks "$WORK/cond_info.log" "ASM_ONLY"
     cond_cfg "mtpj = $COND/cond_test.mtpj" 'mtpj_mode = ProductB' 'cdef = SIM'
     cond_list
@@ -138,13 +138,17 @@ cond_suite() {
     check "$_t: --mtpj on the command line" cond_at 60 COND_REG u8
     cond_list --mtpj "$T/ca78k0r_probe/ca78k0r_probe.mtpj"
     check "$_t: real CS+ project file without macro definitions" sh -c 'grep -q -F "mtpj macro definitions (0): なし" "$1" && grep -q "ビルド・モード DefaultBuild（1 個中 1 番目" "$1"' sh "$WORK/cond_info.log"
+    check "$_t: mtpj のマクロだけ読む場合は読む範囲の見出しを出さない" lacks "$WORK/cond_info.log" "== 読む範囲（defines_scope = mtpj）"
     # defines_scope = mtpj: プロジェクトに登録されたファイルと、#include でたどれるファイルだけを読む
     scope_run "mtpj = $SCOPE/proj/scope_test.mtpj" 'defines_scope = mtpj'
-    check "$_t: 重複なしでは内訳を表示しない" lacks "$WORK/scope_info.log" "  内訳:"
+    check "$_t: 定義・スイッチ・詳細の見出しを表示する" sh -c 'grep -q -x "== ヘッダの定義" "$1" && grep -q -x "== コンパイルスイッチ" "$1" && grep -q -x "== 詳細（数値）" "$1"' sh "$WORK/scope_info.log"
+    check "$_t: mtpj の範囲なら読む範囲の見出しを表示する" contains "$WORK/scope_info.log" "== 読む範囲（defines_scope = mtpj）"
+    check "$_t: 項目名の後に空白を置いて値を表示する" sh -c 'grep -q -E "^読んだファイル {2,}[0-9]+ 個" "$1" && grep -q -E "^取り込んだ定義 {2,}変数 [0-9]+" "$1"' sh "$WORK/scope_info.log"
+    check "$_t: 重複なしでは内訳を表示しない" lacks "$WORK/scope_info.log" "  同じファイルの中"
     check "$_t: scope reads build targets of the current mode and follows include paths" sh -c 'grep -q -E "^var  0x${1}A0 SCOPE_APP " "$2" && grep -q -E "^var  0x${1}A1 SCOPE_DEV " "$2" && grep -q -E "^var  0x${1}A2 SCOPE_MODE " "$2" && grep -q -E "^var  0x${1}A3 SCOPE_REG " "$2"' sh "$COND_HI" "$WORK/scope_list.log"
     check "$_t: scope does not read unregistered files or inactive includes" sh -c '! grep -q -E "SCOPE_STRAY|SCOPE_OLD" "$1" && grep -q "duplicates=0 " "$2"' sh "$WORK/scope_list.log" "$WORK/scope_info.log"
-    check "$_t: scope info counts registered / excluded / missing / followed files" contains "$WORK/scope_info.log" "登録ファイル 5 個のうち、読んだもの 2 個（ビルド対象外 1 個、.h / .c / .inc 以外 1 個、defines_exclude などで外したもの 0 個、見つからないもの 1 個）。#include をたどって足したファイル 3 個"
-    check "$_t: scope info lists the include paths of the compiler, not the assembler" sh -c 'grep -q "インクルード・パス 2 個（mtpj の <AdditionalIncludePaths-0> から 2 個" "$1" && ! grep -q "asm_only" "$1" && grep -q "common/gone.c" "$1"' sh "$WORK/scope_info.log"
+    check "$_t: scope info counts registered / excluded / missing / followed files" sh -c 'grep -q "登録ファイル  *5 個（読んだ 2、.h / .c / .inc 以外 1、ビルド対象外 1、除外 0、見つからない 1）" "$1" && grep -q "#include から足した  *3 個" "$1"' sh "$WORK/scope_info.log"
+    check "$_t: scope info lists the include paths of the compiler, not the assembler" sh -c 'grep -q "インクルード・パス  *2 個（mtpj 2、defines_include 0）" "$1" && ! grep -q "asm_only" "$1" && grep -q "common/gone.c" "$1"' sh "$WORK/scope_info.log"
     check "$_t: scope ignores #pragma pack in a header that is only included from an inactive branch" sh -c 'grep -q -E "^var  0x${1}A7 SCOPE_PK " "$2"' sh "$COND_HI" "$WORK/scope_list.log"
     scope_run "mtpj = $SCOPE/proj/scope_test.mtpj" 'defines_scope = mtpj' 'cdef = USE_OLD'
     check "$_t: scope applies #pragma pack once the header is read through an active branch" sh -c 'grep -q "SCOPE_OLD" "$1" && ! grep -q "SCOPE_PK" "$1"' sh "$WORK/scope_list.log"
@@ -152,40 +156,42 @@ cond_suite() {
     check "$_t: scope follows the build mode (other folder with the same file names)" sh -c 'grep -q -E "^var  0x${1}B1 SCOPE_DEV " "$2" && grep -q -E "^var  0x${1}B2 SCOPE_MODE " "$2" && grep -q "duplicates=0 " "$3"' sh "$COND_HI" "$WORK/scope_list.log" "$WORK/scope_info.log"
     check "$_t: scope expands %BuildModeName% and flags a missing include folder" contains "$WORK/scope_info.log" "no_such_ProductB（フォルダがありません）"
     scope_run "mtpj = $SCOPE/proj/scope_test.mtpj" 'defines_scope = mtpj' 'mtpj_mode = NoInc'
-    check "$_t: 見つからない include の箇所数と種類数" contains "$WORK/scope_info.log" "有効な枝で見つからなかった #include: 1 箇所、1 種類"
+    check "$_t: 見つからない include の箇所数と種類数" contains "$WORK/scope_info.log" "見つからない #include     1 箇所、1 種類"
     check "$_t: 見つからない include の名前と回数" contains "$WORK/scope_info.log" "reg.h × 1"
     check "$_t: 見つからない include の最初の場所" contains "$WORK/scope_info.log" "（最初: $SCOPE/common/app.c:3）"
-    check "$_t: scope without include paths falls back to the file name and says so" sh -c 'grep -q "ファイル名で探した #include: 1 箇所" "$1" && ! grep -q "SCOPE_REG" "$2" && grep -q -E "SCOPE_MODE" "$2"' sh "$WORK/scope_info.log" "$WORK/scope_list.log"
+    check "$_t: scope without include paths falls back to the file name and says so" sh -c 'grep -q "名前で探した #include  *1 箇所" "$1" && ! grep -q "SCOPE_REG" "$2" && grep -q -E "SCOPE_MODE" "$2"' sh "$WORK/scope_info.log" "$WORK/scope_list.log"
     scope_run "mtpj = $SCOPE/proj/scope_test.mtpj" 'defines_scope = mtpj' 'mtpj_mode = NoInc' "defines_include = $SCOPE/inc"
-    check "$_t: defines_include adds an include path" sh -c 'grep -q -E "^var  0x${1}A3 SCOPE_REG " "$2" && grep -q "defines_include から 1 個" "$3"' sh "$COND_HI" "$WORK/scope_list.log" "$WORK/scope_info.log"
+    check "$_t: defines_include adds an include path" sh -c 'grep -q -E "^var  0x${1}A3 SCOPE_REG " "$2" && grep -q "defines_include 1）" "$3"' sh "$COND_HI" "$WORK/scope_list.log" "$WORK/scope_info.log"
     scope_run "mtpj = $SCOPE/proj/scope_test.mtpj" 'defines_scope = mtpj' "defines = $SCOPE/unused/stray.h" 'defines_exclude = prodA/dev.c'
-    check "$_t: scope keeps defines = (added) and defines_exclude (removed)" sh -c 'grep -q "SCOPE_STRAY" "$1" && ! grep -q "SCOPE_DEV" "$1" && grep -q "defines_exclude などで外したもの 1 個" "$2"' sh "$WORK/scope_list.log" "$WORK/scope_info.log"
+    check "$_t: scope keeps defines = (added) and defines_exclude (removed)" sh -c 'grep -q "SCOPE_STRAY" "$1" && ! grep -q "SCOPE_DEV" "$1" && grep -q "除外 1、" "$2"' sh "$WORK/scope_list.log" "$WORK/scope_info.log"
     scope_run "defines = $SCOPE"
+    check "$_t: フォルダを読む場合は読む範囲の見出しを出さない" lacks "$WORK/scope_info.log" "== 読む範囲（defines_scope = mtpj）"
     check "$_t: without scope the whole folder is read (duplicates)" sh -c 'grep -q "SCOPE_STRAY" "$1" && grep -q -E "duplicates=[1-9]" "$2"' sh "$WORK/scope_list.log" "$WORK/scope_info.log"
-    check "$_t: 同名で別フォルダの重複がある" sh -c 'grep -q -E "同じ名前で別のフォルダにあるファイル同士 [1-9][0-9]* 件" "$1"' sh "$WORK/scope_info.log"
+    check "$_t: 同名で別フォルダの重複がある" sh -c 'grep -q -E "^  同じ名前で別のフォルダ  +[1-9][0-9]*  （品種違い" "$1"' sh "$WORK/scope_info.log"
     check "$_t: 重複の内訳の合計が duplicates と一致する" sh -c '
         total=$(sed -n "s/^defines files=.* duplicates=\([0-9]*\) .*/\1/p" "$1")
-        parts=$(sed -n "s/^  内訳: 同じファイルの中 \([0-9]*\) 件.*別のフォルダにあるファイル同士 \([0-9]*\) 件.*名前の違うファイル同士 \([0-9]*\) 件.*/\1 \2 \3/p" "$1")
+        parts=$(sed -n -e "s/^  同じファイルの中  *\([0-9][0-9]*\).*/\1/p" -e "s/^  同じ名前で別のフォルダ  *\([0-9][0-9]*\).*/\1/p" -e "s/^  名前の違うファイル同士  *\([0-9][0-9]*\).*/\1/p" "$1")
         [ -n "$total" ] && [ -n "$parts" ] || exit 1
         set -- $parts
+        [ "$#" -eq 3 ] || exit 1
         [ $(($1 + $2 + $3)) -eq "$total" ]' sh "$WORK/scope_info.log"
     # ガードのない同じヘッダを、別の起点から違う条件で読む
     scope_run "defines = $T/defines_dup"
-    check "$_t: 同じファイルの異なる枝の重複は 1 件" sh -c 'grep -q "duplicates=1 " "$1" && grep -q "同じファイルの中 1 件" "$1" && grep -q "同じ名前で別のフォルダにあるファイル同士 0 件" "$1" && grep -q "名前の違うファイル同士 0 件" "$1"' sh "$WORK/scope_info.log"
+    check "$_t: 同じファイルの異なる枝の重複は 1 件" sh -c 'grep -q "duplicates=1 " "$1" && grep -q "^  同じファイルの中  *1  （インクルード元" "$1" && grep -q "^  同じ名前で別のフォルダ  *0$" "$1" && grep -q "^  名前の違うファイル同士  *0$" "$1"' sh "$WORK/scope_info.log"
     # 一覧は有効な枝だけ、走査時の統計は無効な枝も含める
     scope_run "defines = $T/defines_missing/active"
     check "$_t: 有効な枝の見つからない include を一覧に出す" contains "$WORK/scope_info.log" "no_such_active.h × 1"
     check "$_t: 無効な枝の見つからない include は一覧に出さない" lacks "$WORK/scope_info.log" "no_such_inactive.h"
-    check "$_t: 有効な枝だけの箇所数と種類数" contains "$WORK/scope_info.log" "有効な枝で見つからなかった #include: 1 箇所、1 種類"
+    check "$_t: 有効な枝だけの箇所数と種類数" contains "$WORK/scope_info.log" "見つからない #include     1 箇所、1 種類"
     check "$_t: 走査時の統計は無効な枝も含めて 2 箇所" contains "$WORK/scope_info.log" "include-missing=2 "
-    check "$_t: 条件付きコンパイルの説明も無効な枝を含めて 2 箇所" contains "$WORK/scope_info.log" "走査した中に見つからない #include 2 箇所、"
+    check "$_t: 条件付きコンパイルの説明も無効な枝を含めて 2 箇所" contains "$WORK/scope_info.log" "無効な枝を含めると 2 箇所"
     scope_run "defines = $T/defines_missing/active" 'cdef = NEVER_DEFINED'
     check "$_t: cdef で有効にした枝の include も一覧に出す" contains "$WORK/scope_info.log" "no_such_inactive.h × 1"
     check "$_t: cdef で有効になった後も元の include は 1 箇所" contains "$WORK/scope_info.log" "no_such_active.h × 1"
-    check "$_t: 両方の枝が有効なら一覧も 2 箇所 2 種類" contains "$WORK/scope_info.log" "有効な枝で見つからなかった #include: 2 箇所、2 種類"
+    check "$_t: 両方の枝が有効なら一覧も 2 箇所 2 種類" contains "$WORK/scope_info.log" "見つからない #include     2 箇所、2 種類"
     check "$_t: cdef でも走査時の統計は 2 箇所のまま" contains "$WORK/scope_info.log" "include-missing=2 "
     scope_run "defines = $T/defines_missing/inactive"
-    check "$_t: すべて無効な枝なら一覧の代わりに説明を出す" contains "$WORK/scope_info.log" "有効な枝で見つからなかった #include はありません（見つからない #include 1 箇所は、すべて無効な #if の枝に書かれたものです）"
+    check "$_t: すべて無効な枝なら一覧の代わりに説明を出す" contains "$WORK/scope_info.log" "見つからない #include     0 箇所（有効な枝のみ。無効な枝を含めると 1 箇所）"
     check "$_t: すべて無効な枝なら include の名前は出さない" lacks "$WORK/scope_info.log" "no_such_inactive.h"
     check "$_t: すべて無効な枝でも走査時の統計は 1 箇所" contains "$WORK/scope_info.log" "include-missing=1 "
     for _bad in 'defines_scope = mtpj' 'defines_scope = all' "defines_include = $SCOPE/inc"; do
