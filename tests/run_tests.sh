@@ -144,6 +144,9 @@ cond_suite() {
     check "$_t: scope does not read unregistered files or inactive includes" sh -c '! grep -q -E "SCOPE_STRAY|SCOPE_OLD" "$1" && grep -q "duplicates=0 " "$2"' sh "$WORK/scope_list.log" "$WORK/scope_info.log"
     check "$_t: scope info counts registered / excluded / missing / followed files" contains "$WORK/scope_info.log" "登録ファイル 5 個のうち、読んだもの 2 個（ビルド対象外 1 個、.h / .c / .inc 以外 1 個、defines_exclude などで外したもの 0 個、見つからないもの 1 個）。#include をたどって足したファイル 3 個"
     check "$_t: scope info lists the include paths of the compiler, not the assembler" sh -c 'grep -q "インクルード・パス 2 個（mtpj の <AdditionalIncludePaths-0> から 2 個" "$1" && ! grep -q "asm_only" "$1" && grep -q "common/gone.c" "$1"' sh "$WORK/scope_info.log"
+    check "$_t: scope ignores #pragma pack in a header that is only included from an inactive branch" sh -c 'grep -q -E "^var  0x${1}A7 SCOPE_PK " "$2"' sh "$COND_HI" "$WORK/scope_list.log"
+    scope_run "mtpj = $SCOPE/proj/scope_test.mtpj" 'defines_scope = mtpj' 'cdef = USE_OLD'
+    check "$_t: scope applies #pragma pack once the header is read through an active branch" sh -c 'grep -q "SCOPE_OLD" "$1" && ! grep -q "SCOPE_PK" "$1"' sh "$WORK/scope_list.log"
     scope_run "mtpj = $SCOPE/proj/scope_test.mtpj" 'defines_scope = mtpj' 'mtpj_mode = ProductB'
     check "$_t: scope follows the build mode (other folder with the same file names)" sh -c 'grep -q -E "^var  0x${1}B1 SCOPE_DEV " "$2" && grep -q -E "^var  0x${1}B2 SCOPE_MODE " "$2" && grep -q "duplicates=0 " "$3"' sh "$COND_HI" "$WORK/scope_list.log" "$WORK/scope_info.log"
     check "$_t: scope expands %BuildModeName% and flags a missing include folder" contains "$WORK/scope_info.log" "no_such_ProductB（フォルダがありません）"

@@ -40,6 +40,7 @@ typedef struct {
     unsigned nmemos;
     unsigned char included, visited, has_types;
     unsigned char closure;  /* defines_scope = mtpj で、#include をたどって足したファイル（起点にしない） */
+    unsigned char packing;  /* 配置指定（#pragma pack / __packed / __attribute__）がある */
 } source;
 /* マクロの名前。状態は起点ごと（gen が今の世代なら kind / body、違えば定義マクロの base_*） */
 typedef struct {
@@ -550,7 +551,7 @@ static void load_source(defs *d, source *s)
         check_delimiters(s);
     }
     free(raw);
-    if (strstr(s->text,"__packed") || strstr(s->text,"__attribute__")) d->packing=1;
+    if (strstr(s->text,"__packed") || strstr(s->text,"__attribute__")) s->packing=1;
     s->has_types = strstr(s->text, "typedef") || strstr(s->text, "struct") || strstr(s->text, "union");
     for (k = 0, s->nlines = 1; k < s->len; k++) if (s->text[k] == '\n') s->nlines++;
     s->line_off = sim_xmalloc(s->nlines * sizeof *s->line_off);
@@ -562,7 +563,7 @@ static void load_source(defs *d, source *s)
         lexer m;
         if (*q != '#') continue;
         m = lex(q + 1);
-        if (!strcmp(m.tok,"pragma")) { lexer x=m; next(&x); if (!strcmp(x.tok,"pack")) d->packing=1; }
+        if (!strcmp(m.tok,"pragma")) { lexer x=m; next(&x); if (!strcmp(x.tok,"pack")) s->packing=1; }
         memset(&x, 0, sizeof x);
         x.line = (uint32_t)li; x.next = UINT32_MAX; x.target = -2; x.arg = "";
         if (!strcmp(m.tok, "define") || !strcmp(m.tok, "undef")) {
@@ -884,6 +885,7 @@ static unsigned process_file(defs *d, uint32_t fi, unsigned depth)
     uint32_t i = 0, t0 = d->tick;
     unsigned height = 0, cuts0 = d->include_cut, inc0 = d->includes;
     s->visited = 1;
+    if (s->packing) d->packing = 1;     /* たどって足したファイルの配置指定は、実際に読まれたときに効かせる */
     while (i < s->ndirs) {
         directive *x = &s->dirs[i];
         switch (x->kind) {
@@ -1063,6 +1065,9 @@ static void preprocess(defs *d)
         d->src[k].path = d->files[k]; d->src[k].lower = lower_path(d->files[k]);
         d->src[k].closure = d->file_closure ? d->file_closure[k] : 0;
         load_source(d, &d->src[k]);
+        /* 配置指定があれば全レコードを保守的に拒否する。ただし #include をたどって足しただけのファイルは、
+           無効な枝からしか参照されていないかもしれないので、ここでは効かせない（読まれたときに process_file が効かせる） */
+        if (d->src[k].packing && !(d->scope && d->cond && d->src[k].closure)) d->packing = 1;
         if (d->scope && !d->error)
             for (i = 0; i < d->src[k].ndirs; i++) {
                 directive *x = &d->src[k].dirs[i];
