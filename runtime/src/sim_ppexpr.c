@@ -6,6 +6,8 @@
 #define MAX_TOKENS 1024
 #define MAX_EXPAND 32   /* マクロ展開の入れ子 */
 #define MAX_NEST 128    /* 括弧・単項・?: の入れ子 */
+#define MAX_PARAMS 16   /* 関数形式マクロの引数 */
+#define SCRATCH 8192    /* 関数形式マクロの、引数を置き換えた本体を置く場所（1 つの式の合計） */
 
 enum { T_END, T_NUM, T_OP, T_BAD };
 enum {
@@ -30,6 +32,8 @@ typedef struct {
     size_t hide_len[MAX_EXPAND];
     int bits;
     unsigned nest;
+    char scratch[SCRATCH];          /* 字句は元の文字列を指すので、置き換えた本体は式の評価が終わるまで残す */
+    size_t nscratch;
 } pp;
 
 typedef struct { uint64_t v; int uns, bad; } val;
@@ -47,6 +51,89 @@ static void push(pp *p, int type, int op, const char *s, size_t n)
 }
 
 static const char *skip_space(const char *s) { while (space((unsigned char)*s)) s++; return s; }
+
+typedef struct { const char *s; size_t n; } span;
+
+/* 文字・文字列の定数の終わり（閉じる引用符の次）。閉じていなければ NULL */
+static const char *skip_quoted(const char *s)
+{
+    char q = *s++;
+    while (*s && *s != q) { if (*s == '\\' && s[1]) s++; s++; }
+    return *s ? s + 1 : NULL;
+}
+
+/* 開き括弧の位置 s から、最上位のコンマで区切った引数を取り出す。*end は閉じ括弧の次。
+   引数の数（MAX_PARAMS を超えたら MAX_PARAMS + 1）、括弧や引用符が閉じていなければ -1 */
+static int call_args(const char *s, span *arg, const char **end)
+{
+    int level = 0, n = 0;
+    const char *b = s + 1;
+    for (;; s++) {
+        if (!*s) return -1;
+        if (*s == '\'' || *s == '"') { s = skip_quoted(s); if (!s) return -1; s--; continue; }
+        if (*s == '(') { level++; continue; }
+        if ((*s == ',' && level == 1) || (*s == ')' && level == 1)) {
+            const char *e = s;
+            b = skip_space(b);
+            while (e > b && space((unsigned char)e[-1])) e--;
+            if (n < MAX_PARAMS) { arg[n].s = b; arg[n].n = (size_t)(e - b); }
+            if (n <= MAX_PARAMS) n++;
+            b = s + 1;
+        }
+        if (*s == ')' && --level == 0) { *end = s + 1; return n; }
+    }
+}
+
+/* 関数形式マクロの本体（"(仮引数, …) 置き換えるトークン列"）の仮引数を引数で置き換え、scratch に置く。
+   置き換えた文字列を返す。扱えない形（可変長引数、# / ##、引数の数の違い、場所が足りない）なら NULL。
+   引数は置き換えたあとでまとめて展開する（C は引数を先に展開するが、#if で値を求めるかぎり結果は同じ。
+   引数の中で同じマクロをもう一度呼ぶ形だけは違うので、呼び出し側が判定不能にする） */
+static const char *substitute(pp *p, const char *body, const span *arg, int nargs)
+{
+    span param[MAX_PARAMS];
+    int nparams = 0, k;
+    size_t start = p->nscratch, o = p->nscratch;
+    const char *s = skip_space(body + 1);
+    if (*s != ')') for (;;) {
+        const char *b = s;
+        if (!ident_start((unsigned char)*s) || nparams >= MAX_PARAMS) return NULL;  /* ... もここで外れる */
+        while (ident_char((unsigned char)*s)) s++;
+        param[nparams].s = b; param[nparams].n = (size_t)(s - b); nparams++;
+        s = skip_space(s);
+        if (*s == ')') break;
+        if (*s != ',') return NULL;
+        s = skip_space(s + 1);
+    }
+    s++;
+    /* F() は、仮引数がなければ引数 0 個、1 個なら空の引数 1 個 */
+    if (nargs == 1 && nparams == 0 && arg[0].n == 0) nargs = 0;
+    if (nargs != nparams) return NULL;
+#define PUT(text, len) do { if (o + (len) + 1 > SCRATCH) return NULL; memcpy(p->scratch + o, (text), (len)); o += (len); } while (0)
+    while (*s) {
+        const char *b = s;
+        if (*s == '#') return NULL;
+        if (*s == '\'' || *s == '"') { s = skip_quoted(s); if (!s) return NULL; PUT(b, (size_t)(s - b)); continue; }
+        if (digit((unsigned char)*s) || (*s == '.' && digit((unsigned char)s[1]))) {
+            /* 数の中の英字（0x1F、10UL）を仮引数と取り違えない */
+            while (ident_char((unsigned char)*s) || *s == '.') s++;
+            PUT(b, (size_t)(s - b)); continue;
+        }
+        if (ident_start((unsigned char)*s)) {
+            size_t n;
+            while (ident_char((unsigned char)*s)) s++;
+            n = (size_t)(s - b);
+            for (k = 0; k < nparams; k++) if (param[k].n == n && !memcmp(param[k].s, b, n)) break;
+            if (k < nparams) { PUT(" ", 1); PUT(arg[k].s, arg[k].n); PUT(" ", 1); }    /* 前後の字句とつながらないように空白で囲む */
+            else PUT(b, n);
+            continue;
+        }
+        s++; PUT(b, 1);
+    }
+#undef PUT
+    p->scratch[o++] = 0;
+    p->nscratch = o;
+    return p->scratch + start;
+}
 
 /* text を字句に分け、マクロを展開して p->tok に足す */
 static void expand(pp *p, const char *s, unsigned depth)
@@ -93,21 +180,35 @@ static void expand(pp *p, const char *s, unsigned depth)
             for (k = 0; k < depth; k++)
                 if (p->hide_len[k] == n && !memcmp(p->hide[k], b, n)) break;
             if (k < depth && p->strict) { p->error = 1; return; }
+            if (k < depth && *skip_space(s) == '(') {
+                /* 展開中のマクロの呼び出し（自己参照、または引数の中での同じマクロの呼び出し）: 値は判定不能 */
+                span skipped[MAX_PARAMS];
+                const char *e;
+                if (call_args(skip_space(s), skipped, &e) < 0) { p->error = 1; return; }
+                s = e;
+                push(p, T_BAD, 0, b, n);
+                continue;
+            }
             if (k < depth) { push(p, p->strict ? T_BAD : T_NUM, 0, "0", 1); continue; }   /* 自己参照は識別子のまま = 0 */
             kind = p->env && p->env->lookup ? p->env->lookup(p->env->ctx, b, n, &body, 0) : SIM_PP_UNDEF;
             if (p->strict && kind != SIM_PP_OBJECT) { p->error = 1; return; }
             if (kind == SIM_PP_FUNCTION) {
                 const char *q = skip_space(s);
                 if (*q == '(') {
-                    /* 関数形式マクロの呼び出し: 値は判定不能。引数を読み飛ばす */
-                    int level = 0;
-                    for (; *q; q++) {
-                        if (*q == '(') level++;
-                        else if (*q == ')' && --level == 0) { q++; break; }
+                    /* 関数形式マクロの呼び出し: 仮引数を引数で置き換えた本体を展開する。
+                       置き換えられない形（本体が分からない、可変長引数、# / ## など）は、値を判定不能にする */
+                    span arg[MAX_PARAMS];
+                    const char *e, *text;
+                    int nargs = call_args(q, arg, &e);
+                    if (nargs < 0) { p->error = 1; return; }
+                    s = e;
+                    text = body && *body == '(' && nargs <= MAX_PARAMS ? substitute(p, body, arg, nargs) : NULL;
+                    if (!text) push(p, T_BAD, 0, b, n);
+                    else {
+                        if (depth >= MAX_EXPAND) { p->error = 1; return; }
+                        p->hide[depth] = b; p->hide_len[depth] = n;
+                        expand(p, text, depth + 1);
                     }
-                    if (level) { p->error = 1; return; }
-                    s = q;
-                    push(p, T_BAD, 0, b, n);
                 } else push(p, T_NUM, 0, "0", 1);
             } else if (kind == SIM_PP_OBJECT && body) {
                 if (depth >= MAX_EXPAND) { p->error=1; return; }
@@ -397,7 +498,7 @@ static int parse(pp *p, int bits, val *out)
 
 static int prepare(pp *p, const char *expr, const sim_pp_env *env, int strict, int prefix)
 {
-    p->env = env; p->ntok = 0; p->error = 0; p->strict = strict; p->steps = 0;
+    p->env = env; p->ntok = 0; p->error = 0; p->strict = strict; p->steps = 0; p->nscratch = 0;
     p->prefix=prefix; p->parens=0; p->end=NULL;
     expand(p, expr, 0);
     if (p->error || !p->ntok) return -1;

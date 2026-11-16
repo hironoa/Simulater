@@ -14,6 +14,15 @@ static const struct { const char *name, *body; int kind; } macros[] = {
     {"PRODUCT", "2", SIM_PP_OBJECT}, {"TYPE_B", "2", SIM_PP_OBJECT},
     {"ADDR", "0xFF91CUL", SIM_PP_OBJECT}, {"TEXT", "\"abc\"", SIM_PP_OBJECT},
     {"FN", NULL, SIM_PP_FUNCTION}, {"HALF", "1 +", SIM_PP_OBJECT},
+    /* 関数形式マクロ: 本体は「(仮引数) 置き換えるトークン列」。FN は本体が分からないもの */
+    {"ABC", "1000", SIM_PP_OBJECT}, {"DEF", "24", SIM_PP_OBJECT}, {"GHI", "2", SIM_PP_OBJECT},
+    {"CNT", "(ch)                 (((ABC              +DEF)-1)/GHI)", SIM_PP_FUNCTION},
+    {"DBL", "(x) ((x) * 2)", SIM_PP_FUNCTION}, {"ADD", "(a, b) ((a) + (b))", SIM_PP_FUNCTION},
+    {"RAW", "(x) x * 2", SIM_PP_FUNCTION},              /* 括弧なし: トークン列として置き換える */
+    {"NONE", "() 7", SIM_PP_FUNCTION}, {"HEX", "(F) (0x1F + F)", SIM_PP_FUNCTION},
+    {"VAR", "(a, ...) (a)", SIM_PP_FUNCTION}, {"CAT", "(a, b) a ## b", SIM_PP_FUNCTION},
+    {"STR", "(a) #a", SIM_PP_FUNCTION}, {"LOOP", "(x) LOOP(x)", SIM_PP_FUNCTION},
+    {"DIV", "(a, b) ((a) / (b))", SIM_PP_FUNCTION}, {"CH", "(c) ((c) == ',')", SIM_PP_FUNCTION},
     {"D0", "D1", SIM_PP_OBJECT}, {"D1", "D2", SIM_PP_OBJECT}, {"D2", "D3", SIM_PP_OBJECT}, {"D3", "7", SIM_PP_OBJECT}
 };
 static int lookups;
@@ -111,6 +120,21 @@ static const struct { const char *expr; int bits, ok; long long value; int uns; 
     /* defined */
     {"defined(ONE)", 0, 1, 0, 0}, {"defined ONE", 0, 1, 0, 0}, {"defined ( ONE )", 0, 1, 0, 0},
     {"defined(UNDEFINED)", 0, 0, 0, 0}, {"!defined(UNDEFINED)", 0, 1, 0, 0}, {"defined(EMPTY)", 0, 1, 0, 0},
+    /* 関数形式マクロの呼び出し */
+    {"( CNT(0) > 255 )", 0, 1, 0, 0}, {"CNT(0)", 64, 0, 511, 0}, {"CNT(0) > 600", 0, 0, 0, 0},
+    {"DBL(3)", 64, 0, 6, 0}, {"DBL(1 + 2)", 64, 0, 6, 0}, {"DBL (4)", 64, 0, 8, 0}, {"DBL(ONE)", 64, 0, 2, 0},
+    {"ADD(1, 2)", 64, 0, 3, 0}, {"ADD((1, 2), 3)", 64, BAD, 0, 0}, {"ADD(DBL(2), DBL(3))", 64, 0, 10, 0},
+    {"ADD(ADD(1, 2), 3)", 64, BAD, 0, 0},        /* 引数の中で同じマクロを呼ぶ形は判定不能 */
+    {"RAW(1 + 2)", 64, 0, 5, 0},                 /* 1 + 2 * 2 */
+    {"NONE()", 64, 0, 7, 0}, {"NONE( )", 64, 0, 7, 0}, {"NONE(1)", 64, BAD, 0, 0},
+    {"HEX(1)", 64, 0, 32, 0},                    /* 0x1F の F を仮引数と取り違えない */
+    {"DBL()", 64, BAD, 0, 0}, {"DBL(1, 2)", 64, BAD, 0, 0}, {"ADD(1)", 64, BAD, 0, 0},
+    {"VAR(1, 2)", 64, BAD, 0, 0}, {"CAT(1, 2)", 64, BAD, 0, 0}, {"STR(1)", 64, BAD, 0, 0},
+    {"LOOP(1)", 64, BAD, 0, 0}, {"DIV(4, 0)", 64, BAD, 0, 0}, {"DIV(9, 3)", 64, 0, 3, 0},
+    {"CH(',')", 64, 0, 1, 0}, {"CH('a')", 64, 0, 0, 0},
+    {"DBL(1", 0, BAD, 0, 0}, {"DBL", 0, 0, 0, 0}, {"DBL + 1", 64, 0, 1, 0},
+    {"0 && STR(1)", 0, 0, 0, 0}, {"0 && DBL()", 0, BAD, 0, 0},   /* 空の引数で式が壊れるのは構文の誤り */ {"1 || CAT(1, 2)", 0, 1, 0, 0}, {"defined(DBL) && DBL(1) == 2", 0, 1, 0, 0},
+    {"DBL(UNDEFINED)", 64, 0, 0, 0}, {"DBL(DBL)", 64, 0, 0, 0},
     {"defined(FN)", 0, 1, 0, 0}, {"defined(ONE) && !defined(UNDEFINED)", 0, 1, 0, 0},
     {"defined(ONE) + defined(TWO)", 64, 0, 2, 0}, {"defined", 0, BAD, 0, 0}, {"defined(", 0, BAD, 0, 0},
     {"defined(ONE", 0, BAD, 0, 0}, {"defined(1)", 0, BAD, 0, 0}, {"definedONE", 0, 0, 0, 0},

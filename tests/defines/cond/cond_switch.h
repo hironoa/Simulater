@@ -3,7 +3,7 @@
 #define COND_SWITCH_H
 
 #define COND_BOARD 3
-#define COND_FUNC(x) (x)
+#define COND_FUNC(x) (x ## 0)
 
 #ifdef SIM
 #define COND_HAS_SIM 1
