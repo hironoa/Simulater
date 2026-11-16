@@ -342,14 +342,28 @@ static int emit_function(rl78_cpu *c, uint32_t entry, const uint8_t *entries, co
 {
     size_t i, j;
     unsigned nparts;
+    int whole;
     const uint8_t *img = c->mem;
     const unit_fn *self = unit_find(fn, nfn, entry);
     uint32_t *rem = (uint32_t *)malloc((s->n ? s->n : 1) * sizeof *rem);
     unsigned *part = (unsigned *)malloc((s->n ? s->n : 1) * sizeof *part);
     uint8_t *edge = (uint8_t *)malloc(s->n ? s->n : 1), *open = (uint8_t *)malloc(s->n ? s->n : 1);
     if (!rem || !part || !edge || !open) { free(rem); free(part); free(edge); free(open); return -1; }
+    /* No C function looks an address up in a loop.  A jump to an address that is not a block start
+       of the C function leaves it, and whoever called it goes on from there (the caller, or in the
+       end the dispatcher).  With the lookup inside (a switch that every such jump went back to),
+       the whole C function was one loop, and clang 18 spent minutes in its loop optimisations on
+       some functions (LICM: 280 of 360 seconds for one file).
+       A short function is one C function.  The price: a RET of a recursive function, which lands
+       in the function itself, goes through the dispatcher.
+       A long one is its parts and a small loop that runs them (see plan_parts). */
     nparts = plan_parts(c, s, part);
     if (!nparts) { free(rem); free(part); free(edge); free(open); return -1; }
+    if (self && self->inl && nparts > 1) {      /* inlined: never cut (the tests cut very short parts) */
+        for (i = 0; i < s->n; i++) part[i] = 0;
+        nparts = 1;
+    }
+    whole = nparts == 1;
     plan_checks(c, s, part, rem, edge, open);
     if (self && self->copy) ld = NULL;  /* the block starts are listed by the file the function belongs to */
     for (i = 0; i < s->n; i++) {
@@ -358,7 +372,7 @@ static int emit_function(rl78_cpu *c, uint32_t entry, const uint8_t *entries, co
         int k, nl;
         if (i == 0 || part[i] != part[i - 1]) {
             /* a C function starts: the whole function, or one part of it */
-            if (nparts == 1)
+            if (whole)
                 outf(o, "static %sxl_state xl_i%05X(rl78_cpu *C, xl_state s_, uint64_t lim)\n{\n",
                      self && self->inl ? "inline __attribute__((always_inline)) " : "", (unsigned)entry);
             else
@@ -366,10 +380,12 @@ static int emit_function(rl78_cpu *c, uint32_t entry, const uint8_t *entries, co
                      (unsigned)entry, part[i]);
             outf(o, "    uint8_t *const M = C->mem; uint8_t *R = s_.R; unsigned F = s_.F;\n");
             outf(o, "    uint64_t cyc = s_.cyc, n = s_.n; uint32_t pc = s_.pc; int st = 0;\n");
-            outf(o, "dyn:\n    switch (pc) {\n");
+            /* entered at any block start; an address that is none of them is not for this C function
+               (a part says so, see the loop that runs the parts) */
+            outf(o, "    switch (pc) {\n");
             for (j = i; j < s->n && part[j] == part[i]; j++)
                 if (s->mark[s->list[j]] & 2) outf(o, "    case 0x%05X: goto L_%05X;\n", (unsigned)s->list[j], (unsigned)s->list[j]);
-            outf(o, "    default: goto out;\n    }\n");
+            outf(o, "    default: %sgoto out;\n    }\n", whole ? "" : "st = XL_UNKNOWN; ");
         }
         flow_of(c, pc, &f);
         next = pc + (uint32_t)f.len;
@@ -420,8 +436,8 @@ static int emit_function(rl78_cpu *c, uint32_t entry, const uint8_t *entries, co
                     "        if (st) goto out;\n"
                     "    }\n", (unsigned)f.target, (unsigned)f.target, (unsigned)f.target);
         }
-        /* a jump to a block of this part goes there; any other address is looked up (dyn), which
-           leaves the part when the address is not in it */
+        /* a jump to a block of this part goes there; with any other address the C function is left
+           (out), and whoever called it looks the address up */
 #define HERE(t) ((s->mark[t] & 3) == 3 && part[list_index(s, (t))] == part[i])
         if (f.has_target && HERE(f.target))
             outf(o, "    if (pc == 0x%05X) goto %c_%05X;\n", (unsigned)f.target,
@@ -431,30 +447,30 @@ static int emit_function(rl78_cpu *c, uint32_t entry, const uint8_t *entries, co
                  (edge[i] & XL_FREE_SKIP) ? 'U' : 'L', (unsigned)(next + (uint32_t)nl));
 #undef HERE
         if (i + 1 < s->n && s->list[i + 1] == next && part[i + 1] == part[i]) {
-            outf(o, "    if (pc != 0x%05X) goto dyn;\n", (unsigned)next);
+            outf(o, "    if (pc != 0x%05X) goto out;\n", (unsigned)next);
             if (edge[i] & XL_FREE_FALL) outf(o, "    goto U_%05X;\n", (unsigned)next);
         } else {
-            outf(o, "    goto dyn;\n");
+            outf(o, "    goto out;\n");
         }
         if (i + 1 == s->n || part[i + 1] != part[i])
             outf(o, "out:\n    s_.cyc = cyc; s_.n = n; s_.R = R; s_.pc = pc; s_.F = F; s_.st = st;\n    return s_;\n}\n\n");
     }
-    if (nparts > 1) {
-        /* the function: run the part the pc is in, until a part stops or the pc is in none.  A part
-           that comes back with the pc still in its own range does not know the address (it is not
-           a block start): that is for the dispatcher, like any address the function does not know. */
+    if (!whole) {
+        /* the function: run the part the pc is in, until a part stops or the pc is in none of them.
+           A part comes back with 0 when it has a pc to look up (it executed something), and with
+           XL_UNKNOWN when it does not know the pc it was given: that one is for the dispatcher,
+           like any address the function does not know. */
         outf(o, "static xl_state xl_i%05X(rl78_cpu *C, xl_state s_, uint64_t lim)\n{\n    for (;;) {\n", (unsigned)entry);
         for (i = 0; i < s->n; i = j) {
             for (j = i; j < s->n && part[j] == part[i]; j++) {}
             outf(o, "        if (s_.pc >= 0x%05X && s_.pc <= 0x%05X) {\n"
                     "            s_ = xl_i%05X_p%u(C, s_, lim);\n"
-                    "            if (s_.st || (s_.pc >= 0x%05X && s_.pc <= 0x%05X)) break;\n"
+                    "            if (s_.st) break;\n"
                     "            continue;\n"
                     "        }\n",
-                 (unsigned)s->list[i], (unsigned)s->list[j - 1], (unsigned)entry, part[i],
-                 (unsigned)s->list[i], (unsigned)s->list[j - 1]);
+                 (unsigned)s->list[i], (unsigned)s->list[j - 1], (unsigned)entry, part[i]);
         }
-        outf(o, "        break;\n    }\n    return s_;\n}\n\n");
+        outf(o, "        break;\n    }\n    if (s_.st == XL_UNKNOWN) s_.st = 0;\n    return s_;\n}\n\n");
     }
     free(rem);
     free(part);
@@ -514,7 +530,9 @@ int rl78_xlate_unit(rl78_cpu *c, const uint32_t *unit, size_t nunit, const uint8
     rl78_xl_plain_range(c, &plain_lo, &plain_hi);
     outf(&o, "/* generated by the RL78 translator: do not edit */\n#define RL78_XL_UNIT 1\n#define RL78_XL_S1 %d\n#define RL78_XL_S3 %d\n"
              "#define RL78_XL_PLAIN_LO 0x%05Xu\n#define RL78_XL_PLAIN_HI 0x%05Xu\n"
-             "#include \"rl78_xlate_rt.h\"\n\n", s1, s3, (unsigned)plain_lo, (unsigned)plain_hi);
+             "#include \"rl78_xlate_rt.h\"\n"
+             "#define XL_UNKNOWN 97  /* a part: the pc is not one of my block starts (never leaves this file) */\n\n",
+             s1, s3, (unsigned)plain_lo, (unsigned)plain_hi);
     /* first pass: which functions this file gets, and which of them are small leaves.  The list
        grows while it is walked: a small leaf of another file that a function here calls is added
        as a private copy, so that the call can be inlined across files too (most calls in real
