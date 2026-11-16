@@ -1,0 +1,98 @@
+<CubeSuiteProject>
+  <!-- テスト用の合成データ。tests/ca78k0r_probe/ca78k0r_probe.mtpj（CS+ 5.02、CA78K0R V1.60）の構造を写し、
+       登録ファイルを増やして、ビルド対象（SourceItemN-BuildingTarget-M）とインクルード・パス
+       （AdditionalIncludePaths-M）に値を入れた。値の書式は実例からの推定で、CS+ が保存した実物ではない。
+       ビルド・モード: DefaultBuild（prodA をビルド）、ProductB（prodB をビルド）、NoInc（インクルード・パスなし）。 -->
+  <ProductVersion>5.02.00.00</ProductVersion>
+  <Class Guid="68f4a651-b9cd-473b-a595-b00447132ffa">
+    <Instance Guid="f31c9f11-6a66-492b-83f7-62c718d00ea5">
+      <Name>スタートアップ</Name>
+      <Type>Category</Type>
+    </Instance>
+    <Instance Guid="a0000000-0000-0000-0000-000000000001">
+      <Name>app.c</Name>
+      <Type>File</Type>
+      <RelativePath>..\common\app.c</RelativePath>
+      <ParentItem>f072d5ef-98af-4a13-9020-57d2f1b830e1</ParentItem>
+    </Instance>
+    <Instance Guid="a0000000-0000-0000-0000-000000000002">
+      <Name>dev.c</Name>
+      <Type>File</Type>
+      <RelativePath>..\prodA\dev.c</RelativePath>
+      <ParentItem>f072d5ef-98af-4a13-9020-57d2f1b830e1</ParentItem>
+    </Instance>
+    <Instance Guid="a0000000-0000-0000-0000-000000000003">
+      <Name>dev.c</Name>
+      <Type>File</Type>
+      <RelativePath>..\prodB\dev.c</RelativePath>
+      <ParentItem>f072d5ef-98af-4a13-9020-57d2f1b830e1</ParentItem>
+    </Instance>
+    <Instance Guid="a0000000-0000-0000-0000-000000000004">
+      <Name>link.dr</Name>
+      <Type>File</Type>
+      <RelativePath>..\link.dr</RelativePath>
+      <ParentItem>f072d5ef-98af-4a13-9020-57d2f1b830e1</ParentItem>
+    </Instance>
+    <Instance Guid="a0000000-0000-0000-0000-000000000005">
+      <Name>gone.c</Name>
+      <Type>File</Type>
+      <RelativePath>..\common\gone.c</RelativePath>
+      <ParentItem>f072d5ef-98af-4a13-9020-57d2f1b830e1</ParentItem>
+    </Instance>
+  </Class>
+  <Class Guid="11ff4962-ca73-4419-bb4a-67e9b8de9571">
+    <Instance Guid="11ff4962-ca73-4419-bb4a-67e9b8de9571">
+      <DataFormatVersion>1.1</DataFormatVersion>
+      <BuildModeCount>3</BuildModeCount>
+      <BuildMode0>RABlAGYAYQB1AGwAdABCAHUAaQBsAGQA</BuildMode0>
+      <BuildMode1>UAByAG8AZAB1AGMAdABCAA==</BuildMode1>
+      <BuildMode2>TgBvAEkAbgBjAA==</BuildMode2>
+      <CurrentBuildMode>DefaultBuild</CurrentBuildMode>
+      <SourceItemGuid0>a0000000-0000-0000-0000-000000000001</SourceItemGuid0>
+      <SourceItemType0>CSource</SourceItemType0>
+      <SourceItemGuid1>a0000000-0000-0000-0000-000000000002</SourceItemGuid1>
+      <SourceItemType1>CSource</SourceItemType1>
+      <SourceItemGuid2>a0000000-0000-0000-0000-000000000003</SourceItemGuid2>
+      <SourceItemType2>CSource</SourceItemType2>
+      <SourceItemGuid3>a0000000-0000-0000-0000-000000000004</SourceItemGuid3>
+      <SourceItemType3>LinkDirective</SourceItemType3>
+      <SourceItemGuid4>a0000000-0000-0000-0000-000000000005</SourceItemGuid4>
+      <SourceItemType4>CSource</SourceItemType4>
+      <SourceItemCount>5</SourceItemCount>
+    </Instance>
+    <Instance Guid="7465f21d-b667-41e3-a989-056755c20ba3">
+      <MacroDefinitions-0>ASM_ONLY=1
+</MacroDefinitions-0>
+      <AdditionalIncludePaths-0>..\asm_only
+</AdditionalIncludePaths-0>
+    </Instance>
+    <Instance Guid="86700a2f-4f2c-4aec-8af7-7d69ad94a4a1">
+      <MacroDefinitions-0 />
+      <MacroUndefinitions-0 />
+      <MacroDefinitions-1 />
+      <MacroUndefinitions-1 />
+      <MacroDefinitions-2 />
+      <MacroUndefinitions-2 />
+      <AdditionalIncludePaths-DefaultValue />
+      <AdditionalIncludePaths-0>..\inc
+..\prodA
+</AdditionalIncludePaths-0>
+      <AdditionalIncludePaths-1>..\inc
+..\prodB
+..\no_such_%BuildModeName%
+</AdditionalIncludePaths-1>
+      <AdditionalIncludePaths-2 />
+    </Instance>
+  </Class>
+  <Class Guid="78a5c5cd-76cb-4bcc-a031-3020011fbc9a">
+    <Instance Guid="fc999d8f-43d6-4cb3-af4b-cf6891d759fb">
+      <SourceItem0-BuildingTarget-0>True</SourceItem0-BuildingTarget-0>
+      <SourceItem0-BuildingTarget-1>True</SourceItem0-BuildingTarget-1>
+      <SourceItem1-BuildingTarget-0>True</SourceItem1-BuildingTarget-0>
+      <SourceItem1-BuildingTarget-1>False</SourceItem1-BuildingTarget-1>
+      <SourceItem2-BuildingTarget-0>False</SourceItem2-BuildingTarget-0>
+      <SourceItem2-BuildingTarget-1>True</SourceItem2-BuildingTarget-1>
+      <SourceItem2-BuildingTarget-2>False</SourceItem2-BuildingTarget-2>
+    </Instance>
+  </Class>
+</CubeSuiteProject>

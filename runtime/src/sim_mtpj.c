@@ -1,4 +1,4 @@
-/* sim_mtpj.c - CS+ のプロジェクトファイルから定義マクロを読む。形式と確度は sim_mtpj.h */
+/* sim_mtpj.c - CS+ のプロジェクトファイルから定義マクロ、登録ファイル、インクルード・パスを読む。形式と確度は sim_mtpj.h */
 #define _CRT_SECURE_NO_WARNINGS
 #include "sim_mtpj.h"
 #include "sim_util.h"
@@ -12,6 +12,7 @@ typedef struct {
     const char *p, *end;
     const char *name; size_t name_len;      /* 要素名 */
     const char *text; size_t text_len;      /* 開始タグの直後から次の '<' まで（終了タグ・空要素なら 0） */
+    const char *attrs; size_t attrs_len;    /* 要素名の直後からタグの終わりまで（属性） */
     int closing, empty;
 } xml;
 
@@ -45,6 +46,7 @@ static int xml_next(xml *x)
         }
         if (q >= x->end) break;
         x->empty = q > s && q[-1] == '/';
+        x->attrs = s; x->attrs_len = (size_t)(q - s);
         x->text = q + 1;
         {
             const char *t = memchr(q + 1, '<', (size_t)(x->end - (q + 1)));
@@ -184,6 +186,159 @@ static void split_lines(sim_mtpj *m, const char *text, size_t n, int undef)
     free(all);
 }
 
+/* ---------------------------------------------------------------- 登録ファイルとインクルード・パス */
+
+typedef struct { char guid[40]; char *path; int off; } mtpj_file;
+typedef struct { char guid[40]; int off; } mtpj_item;
+
+/* 開始タグの Guid="…" を取り出す。なければ空文字列 */
+static void attr_guid(const xml *x, char *out, size_t cap)
+{
+    size_t i;
+    out[0] = 0;
+    for (i = 0; i + 6 < x->attrs_len; i++)
+        if (!memcmp(x->attrs + i, "Guid=", 5) && (x->attrs[i + 5] == '"' || x->attrs[i + 5] == '\'')) {
+            const char *b = x->attrs + i + 6, *e = memchr(b, x->attrs[i + 5], x->attrs_len - (i + 6));
+            size_t n = e ? (size_t)(e - b) : 0;
+            if (n >= cap) n = cap - 1;
+            memcpy(out, b, n); out[n] = 0;
+            return;
+        }
+}
+
+/* 前後の空白を除いて写す */
+static char *trimmed(const char *text, size_t n)
+{
+    char *u = unescape(text, n), *p = u, *out;
+    size_t len;
+    while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') p++;
+    len = strlen(p);
+    while (len && (p[len - 1] == ' ' || p[len - 1] == '\t' || p[len - 1] == '\r' || p[len - 1] == '\n')) len--;
+    out = sim_xstrndup(p, len);
+    free(u);
+    return out;
+}
+
+/* 要素名 prefix<N>suffix の N を返す。形が違えば -1 */
+static long indexed_name(const xml *x, const char *prefix, const char *suffix)
+{
+    size_t pl = strlen(prefix), sl = strlen(suffix), k;
+    long v = 0;
+    if (x->name_len <= pl + sl || memcmp(x->name, prefix, pl) || memcmp(x->name + x->name_len - sl, suffix, sl)) return -1;
+    for (k = pl; k < x->name_len - sl; k++) {
+        if (x->name[k] < '0' || x->name[k] > '9' || v > 1000000) return -1;
+        v = v * 10 + (x->name[k] - '0');
+    }
+    return v;
+}
+
+/* %名前% を置き換え、区切りを '/' にする */
+static char *expand_path(const sim_mtpj *m, const char *project, const char *s)
+{
+    sim_buf b;
+    char *out;
+    sim_buf_init(&b);
+    while (*s) {
+        if (!strncmp(s, "%BuildModeName%", 15)) { sim_buf_adds(&b, m->modes[m->mode]); s += 15; }
+        else if (!strncmp(s, "%ProjectName%", 13)) { sim_buf_adds(&b, project); s += 13; }
+        else { sim_buf_addc(&b, *s == '\\' ? '/' : *s); s++; }
+    }
+    out = sim_xstrdup(sim_buf_cstr(&b));
+    sim_buf_free(&b);
+    return out;
+}
+
+static void load_files(sim_mtpj *m, const char *path, const char *data, size_t len)
+{
+    xml x;
+    mtpj_file *files = NULL;
+    mtpj_item *items = NULL;
+    size_t nfiles = 0, nitems = 0, k, j;
+    char guid[40] = "", target_suffix[40], inc_name[64];
+    char *cur_path = NULL, *project;
+    const char *inc_text = NULL, *first_inc = NULL, *cur_inc = NULL;
+    size_t inc_len = 0, first_inc_len = 0, cur_inc_len = 0;
+    int in_instance = 0, cur_file = 0, cur_has_inc = 0, cur_has_undef = 0, found_inc = 0, compiler_inc = 0;
+    {
+        const char *b = sim_basename(path), *dot = strrchr(b, '.');
+        project = sim_xstrndup(b, dot ? (size_t)(dot - b) : strlen(b));
+    }
+    snprintf(target_suffix, sizeof target_suffix, "-BuildingTarget-%d", m->mode);
+    snprintf(inc_name, sizeof inc_name, "AdditionalIncludePaths-%d", m->mode);
+    memset(&x, 0, sizeof x);
+    x.p = data; x.end = data + len;
+    for (;;) {
+        int more = xml_next(&x);
+        int boundary = !more || name_is(&x, "Instance");
+        if (boundary && in_instance) {
+            if (cur_file && cur_path && *cur_path) {
+                files = sim_xrealloc(files, (nfiles + 1) * sizeof *files);
+                memcpy(files[nfiles].guid, guid, sizeof guid);
+                files[nfiles].path = cur_path; files[nfiles].off = 0; cur_path = NULL;
+                nfiles++;
+            }
+            if (cur_has_inc) {
+                if (!found_inc) { found_inc = 1; first_inc = cur_inc; first_inc_len = cur_inc_len; }
+                if (cur_has_undef && !compiler_inc) { compiler_inc = 1; inc_text = cur_inc; inc_len = cur_inc_len; }
+            }
+            free(cur_path); cur_path = NULL;
+            in_instance = 0;
+        }
+        if (!more) break;
+        if (boundary && !x.closing) {
+            in_instance = 1; cur_file = cur_has_inc = cur_has_undef = 0;
+            cur_inc = NULL; cur_inc_len = 0;
+            attr_guid(&x, guid, sizeof guid);
+            continue;
+        }
+        if (x.closing) continue;
+        if (name_is(&x, "Type")) { char *t = trimmed(x.text, x.text_len); cur_file = !strcmp(t, "File"); free(t); }
+        else if (name_is(&x, "RelativePath")) { free(cur_path); cur_path = trimmed(x.text, x.text_len); }
+        else if (name_is(&x, inc_name)) { cur_has_inc = 1; cur_inc = x.text; cur_inc_len = x.text_len; }
+        else if (name_starts(&x, "MacroUndefinitions-")) cur_has_undef = 1;
+        else {
+            long n = indexed_name(&x, "SourceItemGuid", "");
+            int target = 0;
+            if (n < 0) { n = indexed_name(&x, "SourceItem", target_suffix); target = 1; }
+            if (n >= 0 && n < 100000) {
+                char *t = trimmed(x.text, x.text_len);
+                if ((size_t)n >= nitems) {
+                    items = sim_xrealloc(items, ((size_t)n + 1) * sizeof *items);
+                    memset(items + nitems, 0, ((size_t)n + 1 - nitems) * sizeof *items);
+                    nitems = (size_t)n + 1;
+                }
+                if (target) items[n].off = !strcmp(t, "False");
+                else snprintf(items[n].guid, sizeof items[n].guid, "%s", t);
+                free(t);
+            }
+        }
+    }
+    for (k = 0; k < nitems; k++) if (items[k].off && items[k].guid[0])
+        for (j = 0; j < nfiles; j++) if (!strcmp(files[j].guid, items[k].guid)) files[j].off = 1;
+    m->files_total = (int)nfiles;
+    for (j = 0; j < nfiles; j++) {
+        if (files[j].off) m->files_off++;
+        else { char *e = expand_path(m, project, files[j].path); add_string(&m->files, &m->nfiles, e); free(e); }
+        free(files[j].path);
+    }
+    if (!compiler_inc && found_inc) { inc_text = first_inc; inc_len = first_inc_len; }
+    if (found_inc) m->inc_element = sim_xstrdup(inc_name);
+    if (inc_text) {
+        char *all = unescape(inc_text, inc_len), *p = all;
+        while (*p) {
+            char *e = p + strcspn(p, "\n"), *q = e, saved = *e;
+            while (q > p && (q[-1] == ' ' || q[-1] == '\t' || q[-1] == '\r')) q--;
+            while (p < q && (*p == ' ' || *p == '\t')) p++;
+            *q = 0;
+            if (*p) { char *v = expand_path(m, project, p); add_string(&m->incs, &m->nincs, v); free(v); }
+            if (!saved) break;
+            p = e + 1;
+        }
+        free(all);
+    }
+    free(files); free(items); free(project);
+}
+
 void sim_mtpj_free(sim_mtpj *m)
 {
     int i;
@@ -191,8 +346,10 @@ void sim_mtpj_free(sim_mtpj *m)
     for (i = 0; i < m->ndefs; i++) free(m->defs[i]);
     for (i = 0; i < m->nundefs; i++) free(m->undefs[i]);
     for (i = 0; i < m->nbad; i++) free(m->bad[i]);
-    free(m->modes); free(m->defs); free(m->undefs); free(m->bad);
-    free(m->current); free(m->def_element); free(m->undef_element);
+    for (i = 0; i < m->nfiles; i++) free(m->files[i]);
+    for (i = 0; i < m->nincs; i++) free(m->incs[i]);
+    free(m->modes); free(m->defs); free(m->undefs); free(m->bad); free(m->files); free(m->incs);
+    free(m->current); free(m->def_element); free(m->undef_element); free(m->inc_element);
     memset(m, 0, sizeof *m);
 }
 
@@ -291,6 +448,7 @@ int sim_mtpj_load(sim_mtpj *m, const char *path, const char *mode, char *err, si
     if (found_first) m->def_element = sim_xstrdup(def_name);
     if (def_text) split_lines(m, def_text, def_len, 0);
     if (undef_text) split_lines(m, undef_text, undef_len, 1);
+    load_files(m, path, data, len);
     free(data);
     return 0;
 }

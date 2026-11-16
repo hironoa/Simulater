@@ -1040,6 +1040,19 @@ call :cond_list
 call :cond_has "0x0F962 COND_REG" "cond: mtpj_mode selects another build mode"
 call :cond_info_has "9BAD LINE" "cond: unreadable mtpj line reported"
 
+rem defines_scope = mtpj: only the files registered in the project and the files they include
+> "%WORK%\cond.cfg" echo defines_near_base = 0
+>> "%WORK%\cond.cfg" echo mtpj = %T%\defines_scope\proj\scope_test.mtpj
+>> "%WORK%\cond.cfg" echo defines_scope = mtpj
+"%SIM%" list --cfg "%WORK%\cond.cfg" SCOPE_ > "%WORK%\cond_list.log" 2>&1
+"%SIM%" info --cfg "%WORK%\cond.cfg" > "%WORK%\cond_info.log" 2>&1
+call :cond_has "0x0F9A2 SCOPE_MODE" "scope: header from the include path of the build mode"
+call :cond_has "0x0F9A3 SCOPE_REG" "scope: unregistered header found through the include path"
+call :cond_info_has "duplicates=0 " "scope: no duplicates from the other product folder"
+>> "%WORK%\cond.cfg" echo mtpj_mode = ProductB
+"%SIM%" list --cfg "%WORK%\cond.cfg" SCOPE_ > "%WORK%\cond_list.log" 2>&1
+call :cond_has "0x0F9B2 SCOPE_MODE" "scope: another build mode reads the other folder"
+
 call :cond_cfg
 >> "%WORK%\cond.cfg" echo cdef = 1BAD
 "%SIM%" info --cfg "%WORK%\cond.cfg" > "%WORK%\cond_info.log" 2>&1
