@@ -10,6 +10,7 @@
 #include <string.h>
 
 typedef struct { char *name, *body, *file; unsigned line; int state; const sim_type *type; } definition;
+typedef struct { char *key; const char *name, *file; unsigned count, line; } missing_include;
 /* 条件付きコンパイルの指令（#…）。ファイルを読んだときに 1 回だけ切り出す */
 enum { D_IF = 1, D_IFDEF, D_IFNDEF, D_ELIF, D_ELSE, D_ENDIF, D_DEFINE, D_UNDEF, D_INCLUDE };
 typedef struct {
@@ -77,6 +78,8 @@ typedef struct {
     const_type_entry *const_types; size_t nconst_types;
     uint64_t near_base;
     unsigned variables, bits, arrays, guessed, unresolved, duplicates, pointers, values, explicit_vars;
+    unsigned dup_same_file, dup_same_name, dup_other_name;
+    missing_include *missing; size_t nmissing, missing_alloc;
     char *err; size_t cap;
     /* 条件付きコンパイル */
     source *src; size_t nsrc;
@@ -399,6 +402,17 @@ static void index_definition(defs *d,int type)
         (*index)[slot]=count;
     }
 }
+/* 内容が違う重複だけを、定義元の関係で分類する */
+static void count_duplicate(defs *d, const char *previous, const char *file)
+{
+    const char *a, *b;
+    d->duplicates++;
+    if (!strcmp(previous,file)) { d->dup_same_file++; return; }
+    a=sim_basename(previous); b=sim_basename(file);
+    while (*a && *b && tolower((unsigned char)*a)==tolower((unsigned char)*b)) { a++; b++; }
+    if (!*a && !*b) d->dup_same_name++;
+    else d->dup_other_name++;
+}
 static void add_definition(defs *d, int type, const char *name, const char *body,const char *file,unsigned line)
 {
     definition **list=type==2?&d->tags:type?&d->types:&d->macros;
@@ -408,7 +422,7 @@ static void add_definition(defs *d, int type, const char *name, const char *body
         lexer a=lex(previous->body), b=lex(body);
         while (qualifier(a.tok)) next(&a);
         while (qualifier(b.tok)) next(&b);
-        if (strcmp(a.tok,b.tok)) { previous->state=3; d->duplicates++; return; }
+        if (strcmp(a.tok,b.tok)) { previous->state=3; count_duplicate(d,previous->file,file); return; }
         if (!strchr(body,'{')) return; /* 同じ種類の前方宣言 */
         if (!strchr(previous->body,'{') && previous->state!=3) {
             free(previous->body); previous->body=sim_xstrdup(body); return;
@@ -417,7 +431,7 @@ static void add_definition(defs *d, int type, const char *name, const char *body
     if (previous) {
         char *norm=normalized(body), *old=normalized(previous->body);
         if (strcmp(old,norm)) {
-            d->duplicates++;
+            count_duplicate(d,previous->file,file);
             if (d->verbose) fprintf(stderr,"defines: 異なる重複 %s: %s:%u / %s:%u（defines_exclude で除外できます）\n",name,previous->file,previous->line,file,line);
         }
         free(old); free(norm); return;
@@ -622,6 +636,30 @@ static char *lower_path(const char *p)
     char *s = sim_xstrdup(p), *q;
     for (q = s; *q; q++) *q = *q == '\\' ? '/' : (char)tolower((unsigned char)*q);
     return s;
+}
+/* 見つからなかった指令を名前ごとに集計する。表示名と場所は source から借りる */
+static void count_missing_include(defs *d, const source *s, const directive *x)
+{
+    char *key = lower_path(x->arg);
+    missing_include *m;
+    size_t k;
+    d->include_missing++;
+    for (k = 0; k < d->nmissing; k++) if (!strcmp(d->missing[k].key, key)) {
+        d->missing[k].count++; free(key); return;
+    }
+    if (d->nmissing == d->missing_alloc) {
+        d->missing_alloc = d->missing_alloc ? d->missing_alloc * 2 : 16;
+        d->missing = sim_xrealloc(d->missing, d->missing_alloc * sizeof *d->missing);
+    }
+    m = &d->missing[d->nmissing++];
+    m->key = key; m->name = x->arg; m->file = s->path;
+    m->count = 1; m->line = s->line_no[x->line];
+}
+static int missing_cmp(const void *a, const void *b)
+{
+    const missing_include *x = a, *y = b;
+    if (x->count != y->count) return x->count > y->count ? -1 : 1;
+    return strcmp(x->key, y->key);
 }
 static const char *base_of(const char *lower) { const char *b = strrchr(lower, '/'); return b ? b + 1 : lower; }
 static defs *g_sort;    /* qsort の比較用 */
@@ -961,6 +999,8 @@ static unsigned process_file(defs *d, uint32_t fi, unsigned depth)
 static void free_sources(defs *d)
 {
     size_t k;
+    for (k = 0; k < d->nmissing; k++) free(d->missing[k].key);
+    free(d->missing);
     for (k = 0; k < d->nsrc; k++) {
         source *s = &d->src[k];
         unsigned m;
@@ -1088,7 +1128,7 @@ static void preprocess(defs *d)
             /* 範囲を絞らない方式、または上の順番で見つからなかったもの: 読んだファイルの中からファイル名で探す */
             x->target = resolve_include(d, &d->src[k], x->arg);
             if (x->target >= 0) { d->src[x->target].included = 1; if (d->scope) d->scope_fallback++; }
-            else d->include_missing++;
+            else count_missing_include(d, &d->src[k], x);
         }
     for (i = 0; i < 2; i++)
         for (k = 0; k < d->nsrc; k++) {
@@ -1821,6 +1861,8 @@ int sim_defines_load(sim_ctx *c,const sim_open_opts *o,char *err,size_t cap)
         sim_buf_printf(&info,"defines files=%zu variables=%u bits=%u arrays=%u guessed=%u unresolved=%u duplicates=%u pointer-skipped=%u value-excluded=%u (%.3f s)\n",d.nfiles,d.variables,d.bits,d.arrays,d.guessed,d.unresolved,d.duplicates,d.pointers,d.values,(double)(sim_now_ns()-t0)/1e9);
         sim_buf_printf(&info,"値の式のマクロ（対象外）: %u 件（--verbose で名前、ファイル名と行番号を表示）\n",d.values);
         sim_buf_printf(&info,"型を解決できなかった定義: %u 件。同じ名前で内容の違う定義: %u 件（defines_exclude で除外できます。--verbose でファイル名と行番号を表示）\n",d.unresolved,d.duplicates);
+        if (d.duplicates) sim_buf_printf(&info,"  内訳: 同じファイルの中 %u 件（インクルード元によって違う枝を読むヘッダなど。害はありません）、同じ名前で別のフォルダにあるファイル同士 %u 件（品種違いのファイルを両方読んでいる可能性があります）、名前の違うファイル同士 %u 件（その名前を CSV で使わなければ害はありません）\n",
+            d.dup_same_file,d.dup_same_name,d.dup_other_name);
         sim_buf_printf(&info,"var definitions=%u\n",d.explicit_vars);
         {
             unsigned bad=0;
@@ -1841,6 +1883,13 @@ int sim_defines_load(sim_ctx *c,const sim_open_opts *o,char *err,size_t cap)
                 "評価した #if / #ifdef / #ifndef / #elif %u 箇所、判定不能 %u 箇所（判定不能の系列はすべての枝を読みます）\n",
                 d.roots,d.includes,d.include_missing,d.include_cut,d.if_evaluated,d.if_indeterminate);
             else sim_buf_adds(&info,"条件付きコンパイル: defines_cond = off（#if を評価せず、すべての枝を読みます）\n");
+            if (d.nmissing) {
+                qsort(d.missing,d.nmissing,sizeof *d.missing,missing_cmp);
+                sim_buf_printf(&info,"見つからなかった #include: %u 箇所、%zu 種類（標準ヘッダなら問題ありません。プロジェクトのヘッダがあれば、インクルード・パスが足りていません。defines_scope = mtpj なら defines_include で足せます）\n",d.include_missing,d.nmissing);
+                for (k=0;k<d.nmissing && k<limit;k++)
+                    sim_buf_printf(&info,"  %s × %u（最初: %s:%u）\n",d.missing[k].name,d.missing[k].count,d.missing[k].file,d.missing[k].line);
+                if (k<d.nmissing) sim_buf_printf(&info,"  …ほか %zu 種類（--verbose で全部を表示）\n",d.nmissing-k);
+            }
         }
         sim_buf_printf(&info,"cdef implicit=%u mtpj=%u cfg=%u cli=%u cundef=%u\n",n_implicit,n_mtpj,n_cfg,n_cli,n_cundef);
         if (d.verbose) {
