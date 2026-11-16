@@ -140,6 +140,7 @@ cond_suite() {
     check "$_t: real CS+ project file without macro definitions" sh -c 'grep -q -F "mtpj macro definitions (0): なし" "$1" && grep -q "ビルド・モード DefaultBuild（1 個中 1 番目" "$1"' sh "$WORK/cond_info.log"
     # defines_scope = mtpj: プロジェクトに登録されたファイルと、#include でたどれるファイルだけを読む
     scope_run "mtpj = $SCOPE/proj/scope_test.mtpj" 'defines_scope = mtpj'
+    check "$_t: 重複なしでは内訳を表示しない" lacks "$WORK/scope_info.log" "  内訳:"
     check "$_t: scope reads build targets of the current mode and follows include paths" sh -c 'grep -q -E "^var  0x${1}A0 SCOPE_APP " "$2" && grep -q -E "^var  0x${1}A1 SCOPE_DEV " "$2" && grep -q -E "^var  0x${1}A2 SCOPE_MODE " "$2" && grep -q -E "^var  0x${1}A3 SCOPE_REG " "$2"' sh "$COND_HI" "$WORK/scope_list.log"
     check "$_t: scope does not read unregistered files or inactive includes" sh -c '! grep -q -E "SCOPE_STRAY|SCOPE_OLD" "$1" && grep -q "duplicates=0 " "$2"' sh "$WORK/scope_list.log" "$WORK/scope_info.log"
     check "$_t: scope info counts registered / excluded / missing / followed files" contains "$WORK/scope_info.log" "登録ファイル 5 個のうち、読んだもの 2 個（ビルド対象外 1 個、.h / .c / .inc 以外 1 個、defines_exclude などで外したもの 0 個、見つからないもの 1 個）。#include をたどって足したファイル 3 個"
@@ -151,6 +152,9 @@ cond_suite() {
     check "$_t: scope follows the build mode (other folder with the same file names)" sh -c 'grep -q -E "^var  0x${1}B1 SCOPE_DEV " "$2" && grep -q -E "^var  0x${1}B2 SCOPE_MODE " "$2" && grep -q "duplicates=0 " "$3"' sh "$COND_HI" "$WORK/scope_list.log" "$WORK/scope_info.log"
     check "$_t: scope expands %BuildModeName% and flags a missing include folder" contains "$WORK/scope_info.log" "no_such_ProductB（フォルダがありません）"
     scope_run "mtpj = $SCOPE/proj/scope_test.mtpj" 'defines_scope = mtpj' 'mtpj_mode = NoInc'
+    check "$_t: 見つからない include の箇所数と種類数" contains "$WORK/scope_info.log" "見つからなかった #include: 1 箇所、1 種類"
+    check "$_t: 見つからない include の名前と回数" contains "$WORK/scope_info.log" "reg.h × 1"
+    check "$_t: 見つからない include の最初の場所" contains "$WORK/scope_info.log" "（最初: $SCOPE/common/app.c:3）"
     check "$_t: scope without include paths falls back to the file name and says so" sh -c 'grep -q "ファイル名で探した #include: 1 箇所" "$1" && ! grep -q "SCOPE_REG" "$2" && grep -q -E "SCOPE_MODE" "$2"' sh "$WORK/scope_info.log" "$WORK/scope_list.log"
     scope_run "mtpj = $SCOPE/proj/scope_test.mtpj" 'defines_scope = mtpj' 'mtpj_mode = NoInc' "defines_include = $SCOPE/inc"
     check "$_t: defines_include adds an include path" sh -c 'grep -q -E "^var  0x${1}A3 SCOPE_REG " "$2" && grep -q "defines_include から 1 個" "$3"' sh "$COND_HI" "$WORK/scope_list.log" "$WORK/scope_info.log"
@@ -158,6 +162,16 @@ cond_suite() {
     check "$_t: scope keeps defines = (added) and defines_exclude (removed)" sh -c 'grep -q "SCOPE_STRAY" "$1" && ! grep -q "SCOPE_DEV" "$1" && grep -q "defines_exclude などで外したもの 1 個" "$2"' sh "$WORK/scope_list.log" "$WORK/scope_info.log"
     scope_run "defines = $SCOPE"
     check "$_t: without scope the whole folder is read (duplicates)" sh -c 'grep -q "SCOPE_STRAY" "$1" && grep -q -E "duplicates=[1-9]" "$2"' sh "$WORK/scope_list.log" "$WORK/scope_info.log"
+    check "$_t: 同名で別フォルダの重複がある" sh -c 'grep -q -E "同じ名前で別のフォルダにあるファイル同士 [1-9][0-9]* 件" "$1"' sh "$WORK/scope_info.log"
+    check "$_t: 重複の内訳の合計が duplicates と一致する" sh -c '
+        total=$(sed -n "s/^defines files=.* duplicates=\([0-9]*\) .*/\1/p" "$1")
+        parts=$(sed -n "s/^  内訳: 同じファイルの中 \([0-9]*\) 件.*別のフォルダにあるファイル同士 \([0-9]*\) 件.*名前の違うファイル同士 \([0-9]*\) 件.*/\1 \2 \3/p" "$1")
+        [ -n "$total" ] && [ -n "$parts" ] || exit 1
+        set -- $parts
+        [ $(($1 + $2 + $3)) -eq "$total" ]' sh "$WORK/scope_info.log"
+    # ガードのない同じヘッダを、別の起点から違う条件で読む
+    scope_run "defines = $T/defines_dup"
+    check "$_t: 同じファイルの異なる枝の重複は 1 件" sh -c 'grep -q "duplicates=1 " "$1" && grep -q "同じファイルの中 1 件" "$1" && grep -q "同じ名前で別のフォルダにあるファイル同士 0 件" "$1" && grep -q "名前の違うファイル同士 0 件" "$1"' sh "$WORK/scope_info.log"
     for _bad in 'defines_scope = mtpj' 'defines_scope = all' "defines_include = $SCOPE/inc"; do
         scope_run "$_bad"
         check "$_t: rejects $_bad without what it needs (exit 2)" test "$SCOPE_RC" -eq 2
