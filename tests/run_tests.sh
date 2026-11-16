@@ -194,6 +194,13 @@ cond_suite() {
     check "$_t: すべて無効な枝なら一覧の代わりに説明を出す" contains "$WORK/scope_info.log" "見つからない #include     0 箇所（有効な枝のみ。無効な枝を含めると 1 箇所）"
     check "$_t: すべて無効な枝なら include の名前は出さない" lacks "$WORK/scope_info.log" "no_such_inactive.h"
     check "$_t: すべて無効な枝でも走査時の統計は 1 箇所" contains "$WORK/scope_info.log" "include-missing=1 "
+    # #if の中の関数形式マクロの呼び出しを展開して判定する
+    scope_run "defines = $T/defines_ppfn"
+    "$COND_SIM" list $COND_ARGS --cfg "$WORK/scope.cfg" PPFN_ > "$WORK/scope_list.log" 2>&1
+    check "$_t: function-like macro in #if is expanded and decides the branch" sh -c 'grep -q -E "^var  0x${1}F0 PPFN_BIG " "$2" && ! grep -q "PPFN_SMALL" "$2"' sh "$COND_HI" "$WORK/scope_list.log"
+    check "$_t: the #include in the branch it rules out is not reported as missing" sh -c 'grep -q "見つからない #include  *0 箇所（有効な枝のみ。無効な枝を含めると 1 箇所）" "$1" && ! grep -q "ppfn_no_such.h" "$1"' sh "$WORK/scope_info.log"
+    check "$_t: a macro that cannot be expanded (##) stays indeterminate and reads both branches" sh -c 'grep -q "PPFN_CAT_T" "$1" && grep -q "PPFN_CAT_F" "$1" && grep -q "評価した #if  *2 箇所（判定不能 1）" "$2" && grep -q "判定不能: .*a.h:16: #if PPFN_CAT(1, 2) > 5" "$2"' sh "$WORK/scope_list.log" "$WORK/scope_info.log"
+    check "$_t: notes are collected at the end of each section, not between the rows" sh -c '! grep -q "^  ※" "$1" && grep -q "^※ 判定不能の #if の系列は、すべての枝を読みます" "$1"' sh "$WORK/scope_info.log"
     for _bad in 'defines_scope = mtpj' 'defines_scope = all' "defines_include = $SCOPE/inc"; do
         scope_run "$_bad"
         check "$_t: rejects $_bad without what it needs (exit 2)" test "$SCOPE_RC" -eq 2
