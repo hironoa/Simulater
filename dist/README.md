@@ -15,7 +15,7 @@
 
 | 項目 | 内容 |
 | --- | --- |
-| ビルド元 | `e639a7b`（C への変換方式、実行したフォルダの `sim.cfg` を読む変更、`defines_scope = mtpj` を含む） |
+| ビルド元 | `ebc1d98`（C への変換方式、実行したフォルダの `sim.cfg` を読む変更、`defines_scope = mtpj` を含む） |
 | ビルドした日 | 2026-11-16 |
 | ビルド方法 | macOS の上で `tools/build_windows_cross.sh`（MinGW-w64 の gcc 16.2.0、`build.bat` の `CC=gcc` と同じ設定） |
 | 依存する DLL | Windows 標準のものだけ（KERNEL32、SHELL32、WS2_32、UCRT）。MinGW の DLL は要らない |
