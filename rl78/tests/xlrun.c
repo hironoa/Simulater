@@ -89,6 +89,18 @@ static void hook_wr(void *ctx, rl78_cpu *cpu, uint32_t addr, uint32_t val, int s
     rl78_load(cpu, addr, v, (size_t)size);     /* straight into the memory image, like plain RAM */
 }
 
+/* a read hook that installs a second hook (counted by hook_calls) the first time it is called */
+static uint32_t nest_lo, nest_hi;
+static int nest_done;
+static uint32_t nest_rd(void *ctx, rl78_cpu *cpu, uint32_t addr, int size)
+{
+    uint8_t v[2] = {0, 0};
+    (void)ctx;
+    if (!nest_done) { nest_done = 1; rl78_add_hook(cpu, nest_lo, nest_hi, hook_rd, hook_wr, NULL); }
+    rl78_peek(cpu, addr, v, (size_t)size);
+    return size == 2 ? (uint32_t)(v[0] | (v[1] << 8)) : v[0];
+}
+
 int main(int argc, char **argv)
 {
     char path[1024], err[256];
@@ -239,6 +251,31 @@ int main(int argc, char **argv)
         rl78_run(b, 50000);
         CHECK(same_regs(a, b), "after the hook: %s", where(a, b));
         CHECK(rl78_xl_insn_count(b) > before, "translated code was not used again after the hook was removed");
+    }
+
+    printf("== translated code: a hook installed from inside a hook, while translated code runs\n");
+    {
+        /* the first hook sits on a page that is slow anyway (below the plain range); when the program
+           reads there it installs a second hook on plain RAM.  Translated code that is running at that
+           moment must leave after the instruction, or it would miss the calls of the new hook */
+        uint32_t lo, hi;
+        int calls_a, calls_b;
+        rl78_xl_plain_range(b, &lo, &hi);
+        nest_lo = hi - 0x100u + 0x20u; nest_hi = hi - 0x100u + 0x40u;
+        nest_done = 0; hook_calls = 0;
+        CHECK(rl78_add_hook(a, 0xF1000u, lo, nest_rd, hook_wr, NULL) == 0, "outer hook on the reference CPU");
+        rl78_run(a, 10000);
+        calls_a = hook_calls;
+        nest_done = 0; hook_calls = 0;
+        CHECK(rl78_add_hook(b, 0xF1000u, lo, nest_rd, hook_wr, NULL) == 0, "outer hook on the translated CPU");
+        rl78_run(b, 10000);
+        calls_b = hook_calls;
+        CHECK(calls_a > 0, "the program never reached the hook installed from inside a hook (%d calls)", calls_a);
+        CHECK(calls_a == calls_b, "hook calls: %d interpreted, %d with translated code", calls_a, calls_b);
+        CHECK(same_regs(a, b), "with a hook installed from inside a hook: %s", where(a, b));
+        rl78_clear_hooks(a);
+        rl78_clear_hooks(b);
+        CHECK(rl78_xl_attach(b, mod, err, sizeof err) == 0, "attach again after the nested hooks: %s", err);
     }
 
     printf("== translated code: detach, and a module that does not fit\n");

@@ -106,7 +106,12 @@ void rl78__rebuild_pages(rl78_cpu *c)
         c->wp[pg] = slow ? NULL : w;
     }
     /* translated code was made for the memory map it was attached with */
-    if (c->xl_mod) c->xl_map_bad = !rl78__pages_plain(c, c->xl_plain_lo, c->xl_plain_hi);
+    if (c->xl_mod) {
+        c->xl_map_bad = !rl78__pages_plain(c, c->xl_plain_lo, c->xl_plain_hi);
+        /* a hook can install another hook: translated code that is running right now has to stop
+           after this instruction, or it would go on past the new hook */
+        if (c->xl_map_bad) c->exit_req = 1;
+    }
 }
 
 int rl78__pages_plain(const rl78_cpu *c, uint32_t lo, uint32_t hi)
