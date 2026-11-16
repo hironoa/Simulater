@@ -112,6 +112,7 @@ int main(int argc, char **argv)
     FILE *f;
     long sub, fib, ot2;
     int i;
+    int parts = 0;
 
     if (argc < 3) { fprintf(stderr, "usage: xlrun <dir> <dll>\n"); return 2; }
     snprintf(path, sizeof path, "%s/xl_image.bin", argv[1]);
@@ -144,6 +145,7 @@ int main(int argc, char **argv)
         if (sub < 0 || fib < 0 || ot2 < 0) { fprintf(stderr, "xlrun: labels not found\n"); return 2; }
     }
 
+    parts = argc > 3 && !strcmp(argv[3], "parts");   /* xlrun <dir> <dll> parts: the translation was made in parts */
     if (argc > 3 && !strcmp(argv[3], "bench")) {
         /* xlrun <dir> <dll> bench: speed of this call-heavy program, interpreted and translated */
         const uint64_t N = 300000000;
@@ -260,7 +262,8 @@ int main(int argc, char **argv)
                 CHECK(same_regs(a, b), "%s breakpoint %d: %s", names[k], i, where(a, b));
             }
             CHECK(rl78_get_reg(b, RL78_REG_PC) == (uint32_t)at, "stopped at %05X, not at %s", (unsigned)rl78_get_reg(b, RL78_REG_PC), names[k]);
-            CHECK(rl78_xl_insn_count(b) == before, "translated code ran with a breakpoint at %s", names[k]);
+            /* (with the functions cut into parts the jump may cross a part and meet the check after all) */
+            if (!parts) CHECK(rl78_xl_insn_count(b) == before, "translated code ran with a breakpoint at %s", names[k]);
             rl78_remove_breakpoint(a, (uint32_t)at);
             rl78_remove_breakpoint(b, (uint32_t)at);
             before = rl78_xl_insn_count(b);

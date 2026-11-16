@@ -51,6 +51,20 @@ else
         echo "translation: FAIL (cannot translate or build the DLL)"
         status=1
     fi
+    # the same again with every function cut into parts of a few instructions (a long function is
+    # written as several C functions: XL_PART_INSNS in rl78_xlate.c)
+    echo "== translation to C: functions cut into parts"
+    mkdir -p "$BUILD/xlp"
+    case "$XLDLL" in *.dylib) XLPDLL="$BUILD/xlp/xl.dylib" ;; *) XLPDLL="$BUILD/xlp/xl.so" ;; esac
+    $CC $CFLAGS -Werror -DXL_PART_INSNS=4u -I"$ROOT/include" -I"$HERE" "$ROOT"/src/*.c "$HERE"/tasm.c "$HERE"/xlgen.c -o "$BUILD/xlgen_parts" || exit 1
+    if "$BUILD/xlgen_parts" "$BUILD/xlp" && grep -q "_p1(" "$BUILD/xlp/xl_unit.c" &&
+       "$XLCC" -O2 -fno-unroll-loops -ffreestanding -fPIC $XLLINK -DRL78_XL_DLL -I"$ROOT/include" -I"$ROOT/src" \
+           "$BUILD/xlp/xl_unit.c" "$BUILD/xlp/xl_unit2.c" "$BUILD/xlp/xl_main.c" -o "$XLPDLL"; then
+        "$BUILD/xlrun" "$BUILD/xlp" "$XLPDLL" parts || status=1
+    else
+        echo "translation in parts: FAIL (cannot translate, no function was cut, or the DLL does not build)"
+        status=1
+    fi
 fi
 
 if [ -n "${RL78_GNU_BIN:-}" ]; then
