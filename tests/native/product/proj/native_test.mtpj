@@ -2,7 +2,7 @@
   <!-- テスト用の合成データ（PC 用 DLL の方式 exec = native の試験）。tests/defines_scope/proj/scope_test.mtpj と同じく、
        tests/ca78k0r_probe/ca78k0r_probe.mtpj（CS+ 5.02、CA78K0R V1.60）の構造を写したもので、CS+ が保存した実物ではない。
        登録ファイル: calc.c と io.c（ビルド対象）、broken.c（ビルド対象外）、startup.asm（アセンブラ）。
-       定義マクロ: GAIN=3。インクルード・パス: ..\inc。 -->
+       定義マクロ: GAIN=3。定義解除マクロ: FEATURE_X。インクルード・パス: ..\inc。 -->
   <ProductVersion>5.02.00.00</ProductVersion>
   <Class Guid="68f4a651-b9cd-473b-a595-b00447132ffa">
     <Instance Guid="b0000000-0000-0000-0000-000000000001">
@@ -49,7 +49,8 @@
     <Instance Guid="86700a2f-4f2c-4aec-8af7-7d69ad94a4a1">
       <MacroDefinitions-0>GAIN=3
 </MacroDefinitions-0>
-      <MacroUndefinitions-0 />
+      <MacroUndefinitions-0>FEATURE_X
+</MacroUndefinitions-0>
       <AdditionalIncludePaths-DefaultValue />
       <AdditionalIncludePaths-0>..\inc
 </AdditionalIncludePaths-0>

@@ -2,7 +2,7 @@
  * native_backend.c - PC 用 DLL の方式（exec = native）。段階 1: 土台
  *
  * やること:
- *   1. CS+ のプロジェクトファイル（mtpj）から、ビルド対象の .c、インクルード・パス、定義マクロを取る。
+ *   1. CS+ のプロジェクトファイル（mtpj）から、ビルド対象の .c、インクルード・パス、定義・定義解除マクロを取る。
  *      ドライバやスタブなど、製品とは別に管理するソースは native_src で足す。
  *   2. 各ソースの先頭に rt/sim_native_pre.h を差し込み（-include）、clang で並列にコンパイルする。
  *   3. オブジェクトを 1 つの DLL にまとめる（C ライブラリなし。LLVM の配布物の clang と lld-link だけで作れる）。
@@ -85,8 +85,7 @@ typedef struct {
     char **srcs; int nsrcs;
     char **asms; int nasms;
     char **incs; int nincs;
-    char **defs; int ndefs;
-    char **undefs; int nundefs;
+    char **macros; int nmacros;
     nfunc *funcs; int nfuncs;
     int ncompiled, nreused, linked;
     double build_sec;
@@ -138,6 +137,15 @@ static void push(char ***list, int *n, char *s)
 {
     *list = sim_xrealloc(*list, sizeof **list * (size_t)(*n + 1));
     (*list)[(*n)++] = s;
+}
+
+static void push_macro(nat *z, const char *flag, const char *value)
+{
+    sim_buf b;
+    sim_buf_init(&b);
+    sim_buf_printf(&b, "%s%s", flag, value);
+    push(&z->macros, &z->nmacros, sim_xstrdup(sim_buf_cstr(&b)));
+    sim_buf_free(&b);
 }
 
 static int is_abs_path(const char *p)
@@ -208,8 +216,7 @@ static void nat_free(nat *z)
     free_list(z->srcs, z->nsrcs);
     free_list(z->asms, z->nasms);
     free_list(z->incs, z->nincs);
-    free_list(z->defs, z->ndefs);
-    free_list(z->undefs, z->nundefs);
+    free_list(z->macros, z->nmacros);
     for (i = 0; i < z->nfuncs; i++) {
         free(z->funcs[i].name);
         for (k = 0; k < MAX_ARGS; k++) free(z->funcs[i].pnames[k]);
@@ -339,8 +346,8 @@ static int collect_sources(nat *z, const sim_open_opts *o, char *err, size_t err
                 push(&z->asms, &z->nasms, sim_xstrdup(m.files[i]));
         }
         for (i = 0; i < m.nincs; i++) push(&z->incs, &z->nincs, resolve(mdir, m.incs[i]));
-        for (i = 0; i < m.ndefs; i++) push(&z->defs, &z->ndefs, sim_xstrdup(m.defs[i]));
-        for (i = 0; i < m.nundefs; i++) push(&z->undefs, &z->nundefs, sim_xstrdup(m.undefs[i]));
+        for (i = 0; i < m.ndefs; i++) push_macro(z, "-D", m.defs[i]);
+        for (i = 0; i < m.nundefs; i++) push_macro(z, "-U", m.undefs[i]);
         sim_mtpj_free(&m);
         free(mdir);
     }
@@ -371,13 +378,17 @@ static int collect_sources(nat *z, const sim_open_opts *o, char *err, size_t err
             push(&z->incs, &z->nincs, sim_cfg_path(&z->cfg, e->value));
         } else if (!strcmp(e->key, "cdef")) {
             e->used = 1;
-            push(&z->defs, &z->ndefs, sim_xstrdup(e->value));
-        } else if (!strcmp(e->key, "cundef")) {
-            e->used = 1;
-            push(&z->undefs, &z->nundefs, sim_xstrdup(e->value));
+            push_macro(z, "-D", e->value);
         }
     }
-    for (i = 0; i < o->ncdefs; i++) push(&z->defs, &z->ndefs, sim_xstrdup(o->cdefs[i]));
+    for (i = 0; i < o->ncdefs; i++) push_macro(z, "-D", o->cdefs[i]);
+    for (i = 0; i < z->cfg.n; i++) {
+        sim_cfg_entry *e = &z->cfg.e[i];
+        if (!strcmp(e->key, "cundef")) {
+            e->used = 1;
+            push_macro(z, "-U", e->value);
+        }
+    }
     if (z->nsrcs == 0) {
         snprintf(err, errlen, "native: コンパイルする .c がありません。sim.cfg に mtpj = <製品の .mtpj>（または --mtpj）か、"
                               "native_src = <ドライバやスタブの .c、またはそのフォルダ> を書いてください");
@@ -578,20 +589,8 @@ static void common_flags(nat *z, char ***flags, int *n)
     };
     int i;
     for (i = 0; fixed[i]; i++) push(flags, n, sim_xstrdup(fixed[i]));
-    for (i = 0; i < z->ndefs; i++) {
-        sim_buf b;
-        sim_buf_init(&b);
-        sim_buf_printf(&b, "-D%s", z->defs[i]);
-        push(flags, n, sim_xstrdup(sim_buf_cstr(&b)));
-        sim_buf_free(&b);
-    }
-    for (i = 0; i < z->nundefs; i++) {
-        sim_buf b;
-        sim_buf_init(&b);
-        sim_buf_printf(&b, "-U%s", z->undefs[i]);
-        push(flags, n, sim_xstrdup(sim_buf_cstr(&b)));
-        sim_buf_free(&b);
-    }
+    /* sim_defines_load と同じ順（mtpj の定義・定義解除 → cdef → --cdef → cundef）を保つ。 */
+    for (i = 0; i < z->nmacros; i++) push(flags, n, sim_xstrdup(z->macros[i]));
     for (i = 0; i < z->nincs; i++) {
         push(flags, n, sim_xstrdup("-I"));
         push(flags, n, sim_xstrdup(z->incs[i]));
@@ -1004,7 +1003,11 @@ static const sim_func *b_func_at(sim_backend *b, size_t i) { return &((nat *)b->
 static void b_print_info(sim_backend *b, FILE *out)
 {
     nat *z = b->impl;
-    int i, k;
+    int i, k, ndefs = 0, nundefs = 0;
+    for (i = 0; i < z->nmacros; i++) {
+        if (!strncmp(z->macros[i], "-D", 2)) ndefs++;
+        else if (!strncmp(z->macros[i], "-U", 2)) nundefs++;
+    }
     fprintf(out, "実行方式: PC 用にコンパイルした DLL（exec = native）。RL78 の命令は再現しません\n");
     if (z->mtpj_path) {
         fprintf(out, "  プロジェクト: %s", z->mtpj_path);
@@ -1014,7 +1017,7 @@ static void b_print_info(sim_backend *b, FILE *out)
     fprintf(out, "  コンパイルする .c: %d 個（mtpj から %d 個、native_src から %d 個）\n", z->nsrcs, z->from_mtpj, z->from_extra);
     fprintf(out, "  アセンブラのソース: %d 個（コンパイルしません。中の関数は DLL に入りません）\n", z->nasms);
     for (i = 0; i < z->nasms; i++) fprintf(out, "    %s\n", z->asms[i]);
-    fprintf(out, "  インクルード・パス: %d 個、定義マクロ: %d 個、定義解除マクロ: %d 個\n", z->nincs, z->ndefs, z->nundefs);
+    fprintf(out, "  インクルード・パス: %d 個、定義マクロ: %d 個、定義解除マクロ: %d 個\n", z->nincs, ndefs, nundefs);
     fprintf(out, "  コンパイラ: %s\n", z->cc);
     fprintf(out, "  今回コンパイルしたもの: %d 個、使い回したもの: %d 個、DLL: %s\n",
             z->ncompiled, z->nreused, z->linked ? "作り直した" : "前回のまま");

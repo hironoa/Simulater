@@ -338,6 +338,12 @@ call :has "%NW%\info4.log" "compiled=1 reused=3 linked=1" "native: a header that
 del "%NW%\product\src\reg.h"
 "%RS%" info --cfg "%NC%" > "%NW%\info5.log" 2>&1
 call :has "%NW%\info5.log" "compiled=1 reused=3 linked=1" "native: removing the shadowing header recompiles again"
+rem a macro that the mtpj undefines and cdef defines again: the DLL sees the cdef value (same order as the defines loader)
+copy /y "%NC%" "%NW%\driver\feature.cfg" >nul
+>> "%NW%\driver\feature.cfg" echo cdef = FEATURE_X=7
+>> "%NW%\driver\feature.cfg" echo native_func = u16 calc_feature(void)
+"%RS%" run --cfg "%NW%\driver\feature.cfg" "%NW%\csv\native_feature.csv" -o "%NW%\out_feature" > "%NW%\feature.log" 2>&1
+call :has "%NW%\feature.log" "OK 1, NG 0, NO Check 0" "native: cdef overrides a macro that the mtpj undefines"
 rem an address that is not mapped (below 0x10000): the run stops with exit code 2 and names the address
 "%RS%" run --cfg "%NC%" "%NW%\csv\native_low.csv" -o "%NW%\out3" > "%NW%\low.log" 2>&1
 set RC=%ERRORLEVEL%

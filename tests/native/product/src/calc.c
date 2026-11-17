@@ -64,3 +64,13 @@ u2 calc_sum(const u1 __far *p, u1 n)
     while (n--) s = (u2)(s + *p++);
     return s;
 }
+
+/* FEATURE_X は mtpj が定義解除している。sim.cfg の cdef で定義し直せば、その値になる */
+#ifndef FEATURE_X
+#define FEATURE_X 0
+#endif
+
+u2 calc_feature(void)
+{
+    return (u2)FEATURE_X;
+}
