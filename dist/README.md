@@ -17,11 +17,11 @@
 
 | 項目 | 内容 |
 | --- | --- |
-| ビルド元 | `60374fd`（PC 用 DLL の方式 `exec = native` の土台、clang を並列に起動する部分の切り出しを含む） |
+| ビルド元 | `8a3a6b2`（PC 用 DLL の方式 `exec = native` の土台、clang を並列に起動する部分の切り出しを含む） |
 | ビルドした日 | 2026-11-17 |
 | ビルド方法 | Windows 11 の上で `tools\build_dist.bat`（MinGW-w64 の gcc 16.2.0、x86_64、UCRT。`build.bat` の `CC=gcc` と同じ設定） |
 | 依存する DLL | Windows 標準のものだけ（KERNEL32、SHELL32、WS2_32、UCRT）。MinGW の DLL は要らない |
-| 確認 | ビルドした Windows の PC で実行した。ビルド元のソースは `tests\run_tests.bat` 763 件、`rl78\tests\run_tests.bat` 4,903,782 件が成功。このフォルダの `sim.exe` そのものでは、`exec = native` の試験用の CSV（16 行）が全行 OK になることを確かめた |
+| 確認 | ビルドした Windows の PC で実行した。ビルド元のソースは `tests\run_tests.bat` 765 件、`rl78\tests\run_tests.bat` 4,903,782 件が成功。このフォルダの `sim.exe` そのものでは、`exec = native` の試験用の CSV（16 行）が全行 OK になることを確かめた |
 
 普段の配布物は CI（GitHub Actions の `windows` ジョブの成果物 `sim-windows-x64`）が作ります。
 このフォルダは、CI を使えなかったときの代わりに置いたものです。ソースを変えても自動では作り直されないので、
