@@ -27,6 +27,7 @@ if not exist "%OUT%\sim_gui.html" (
     exit /b 1
 )
 copy /y "%ROOT%\example\sim.cfg" "%OUT%\sim.cfg.example" >nul
+copy /y "%ROOT%\example\native_ram_clear.c" "%OUT%\native_ram_clear.c" >nul
 copy /y "%ROOT%\README.md" "%OUT%\" >nul
 
 rem replace the whole folder so that nothing from the previous build is left (only after the build succeeded)

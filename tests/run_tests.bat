@@ -1015,6 +1015,15 @@ if "%RC%"=="0" (call :ok "native COFF boundary cases") else (call :ng "native CO
 "%HAS%" /l /c:"cases, 0 failed" "%WORK%\native_coff.log" >nul
 if errorlevel 1 (call :ng "native COFF ran its cases") else (call :ok "native COFF ran its cases")
 
+"%CC%" %GCC_FLAGS% -std=c11 -O2 -Wall -Wextra -I"%ROOT%\runtime\src" -I"%ROOT%\runtime\backends\native" "%T%\tools\check_native_layout.c" "%ROOT%\runtime\backends\native\native_layout.c" "%ROOT%\runtime\src\sim_util.c" -o "%WORK%\check_native_layout.exe" > "%WORK%\native_layout_build.log" 2>&1
+set RC=%ERRORLEVEL%
+if "%RC%"=="0" (call :ok "build check_native_layout") else (call :ng "build check_native_layout" & type "%WORK%\native_layout_build.log")
+"%WORK%\check_native_layout.exe" > "%WORK%\native_layout.log" 2>&1
+set RC=%ERRORLEVEL%
+if "%RC%"=="0" (call :ok "native layout matching cases") else (call :ng "native layout matching cases" & type "%WORK%\native_layout.log")
+"%HAS%" /l /c:"cases, 0 failed" "%WORK%\native_layout.log" >nul
+if errorlevel 1 (call :ng "native layout ran its cases") else (call :ok "native layout ran its cases")
+
 call :cond_cfg
 call :cond_list
 call :cond_has "0x0F964 COND_REG" "cond: no switch takes the else branch"

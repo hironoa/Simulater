@@ -34,7 +34,7 @@ echo "build_windows_cross.sh: $CC で sim.exe をビルドします"
     "$S/sim_main.c" "$S/sim_util.c" "$S/sim_json.c" "$S/sim_platform.c" "$S/sim_expr.c" "$S/sim_csv.c" "$S/sim_gui.c" \
     "$S/sim_cfg.c" "$S/sim_defines.c" "$S/sim_ppexpr.c" "$S/sim_mtpj.c" "$S/sim_cc.c" \
     "$B/rl78_backend.c" "$B/rl78_xl.c" "$B/rl78_abi.c" "$B/rl78_lmf.c" "$B/rl78_sym.c" "$B/rl78_elf.c" "$B/rl78_dwarf.c" "$B/rl78_map.c" \
-    "$C/rl78_exec.c" "$C/rl78_sys.c" "$C/rl78_disasm.c" "$C/rl78_xlate.c" "$ROOT/runtime/backends/native/native_backend.c" "$ROOT/runtime/backends/native/native_rewrite.c" "$ROOT/runtime/backends/native/native_near.c" "$ROOT/runtime/backends/native/native_coff.c" \
+    "$C/rl78_exec.c" "$C/rl78_sys.c" "$C/rl78_disasm.c" "$C/rl78_xlate.c" "$ROOT/runtime/backends/native/native_backend.c" "$ROOT/runtime/backends/native/native_rewrite.c" "$ROOT/runtime/backends/native/native_near.c" "$ROOT/runtime/backends/native/native_coff.c" "$ROOT/runtime/backends/native/native_layout.c" \
     -o "$OUT/sim.exe" -lws2_32 -lshell32
 
 # CI の「配布物をまとめる」と同じ中身
@@ -42,6 +42,7 @@ cp "$ROOT/gui/dist/sim_gui.html" "$OUT/"
 cp "$ROOT/rl78/include/rl78.h" "$C/rl78_internal.h" "$C/rl78_exec_defs.h" "$C/rl78_exec_ops.inc" "$C/rl78_xlate_rt.h" "$OUT/xlate/"
 cp "$ROOT/runtime/backends/native/rt/sim_native_pre.h" "$ROOT/runtime/backends/native/rt/sim_native_rt.c" "$OUT/native/"
 cp "$ROOT/example/sim.cfg" "$OUT/sim.cfg.example"
+cp "$ROOT/example/native_ram_clear.c" "$OUT/native_ram_clear.c"
 cp "$ROOT/README.md" "$OUT/"
 
 # 前の中身を残さないよう、フォルダごと置き換える（ビルドが成功してから消す）
