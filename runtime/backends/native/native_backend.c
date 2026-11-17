@@ -18,6 +18,7 @@
  *   current.txt             いま使う DLL の名前
  *   link.sig                DLL に入れたオブジェクトと、その中身から作った値
  *   cc.log / cc_times.txt   コンパイラの出力 / コンパイルの所要秒数
+ *   <名前>-<プロセスの ID>-<通し番号>.tmp / .ll   書いてすぐ読んで消す一時ファイル（同時に動くほかの sim と重ならない名前）
  *
  * 関数の例外と時間切れは呼び出し元へ復帰する。コンパイラがない、コンパイルに
  * 失敗した、番地を確保できない、のどれもエラーにする。
@@ -45,6 +46,8 @@
 
 #ifdef _WIN32
 #include <windows.h>
+#else
+#include <unistd.h>
 #endif
 
 #define WIN_LO 0xF0000u          /* 番地を再現する範囲 */
@@ -541,12 +544,33 @@ static void common_flags(nat *z, char ***flags, int *n)
     }
 }
 
+/* 書いてすぐ読む一時ファイルの名前（<stem>-<プロセスの ID>-<このプロセスの中での通し番号><ext>。呼び出し側で free）。
+ * 同じキャッシュのフォルダを使う sim が同時に動いても、相手のファイルを読んだり消したりしない */
+static char *private_tmp(const char *stem, const char *ext)
+{
+    static unsigned seq;
+    unsigned long pid;
+    sim_buf b;
+    char *p;
+#ifdef _WIN32
+    pid = (unsigned long)GetCurrentProcessId();
+#else
+    pid = (unsigned long)getpid();
+#endif
+    sim_buf_init(&b);
+    sim_buf_printf(&b, "%s-%lu-%u%s", stem, pid, ++seq, ext);
+    p = sim_xstrdup(sim_buf_cstr(&b));
+    sim_buf_free(&b);
+    return p;
+}
+
 /* コンパイラの版の表示（鍵に入れる）。取れなければ空文字列 */
 static char *cc_version(nat *z, const char *base)
 {
     const char *argv[3];
-    char *tmp = sim_path_join(base, "ccver.tmp"), *text;
+    char *stem = sim_path_join(base, "ccver"), *tmp = private_tmp(stem, ".tmp"), *text;
     size_t n = 0;
+    free(stem);
     argv[0] = z->cc;
     argv[1] = "--version";
     argv[2] = NULL;
@@ -1053,7 +1077,11 @@ static int build(nat *z, char *err, size_t errlen)
             u->pp = unit_path(z, src, ".pp.c");
             u->rw = unit_path(z, src, ".rw");
             u->decl = unit_path(z, src, ".decl");
-            u->ll = unit_path(z, src, ".ll");
+            {   /* .ll は作って読んだら消すので、ほかの sim と重ならない名前にする */
+                char *stem = unit_path(z, src, "");
+                u->ll = private_tmp(stem, ".ll");
+                free(stem);
+            }
         }
         u->compile = !unit_fresh(z, &cache, u) || (u->pre && !read_rewrite_stats(u));
         if (!u->compile) { z->nreused++; continue; }
@@ -1553,7 +1581,11 @@ static void symbolize(nat *z, uint64_t addr)
     snprintf(a, sizeof a, "0x%llX", (unsigned long long)addr);
     sim_buf_init(&obj);
     sim_buf_printf(&obj, "--obj=%s", z->dll);
-    tmp = sim_path_join(z->dir, "symbolize.tmp");
+    {   /* 同じ設定の sim が同時に動いても、相手の出力に追記したり、読む前に消したりしない */
+        char *stem = sim_path_join(z->dir, "symbolize");
+        tmp = private_tmp(stem, ".tmp");
+        free(stem);
+    }
     argv[k++] = z->symbolizer;
     argv[k++] = sim_buf_cstr(&obj);
     argv[k++] = "--output-style=LLVM";   /* 1 段ごとに「関数名」「パス:行:桁」の 2 行。番地の区切りは空行 */
