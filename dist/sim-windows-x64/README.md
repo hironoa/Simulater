@@ -212,15 +212,15 @@ sim run --exec xlate --abs X.lmf テスト.csv        （または sim.cfg に e
 ## 製品の C ソースを PC 用にコンパイルして実行する方式（exec = native、作成中）
 
 ロードモジュールを使わず、製品の C のソースを clang で PC 用にコンパイルした DLL を呼ぶ方式です。RL78 の命令を再現しない
-ので速い代わりに、実機と同じ結果にはなりません（下の「変わること」）。**いまは土台だけ（段階 1）で、Windows でだけ動きます。**
-変数を名前で読み書きする、スタブの切り替え、GUI は、これから足します。
+ので速い代わりに、実機と同じ結果にはなりません（下の「変わること」）。**いまは段階 2（変数と関数をデバッグ情報から取る）までで、Windows でだけ動きます。**
+スタブの切り替えと GUI は、これから足します。
 
 ```ini
 # sim.cfg（ドライバやスタブの側に置く）
 exec = native
 mtpj = ../product/project.mtpj          # 製品のプロジェクト。入れ替えるときはここだけ変える
 native_src = .                          # 製品とは別に管理する .c（ドライバ、スタブ）。ファイルかフォルダ。複数行可
-native_func = s16 calc_add(s16 a, s16 b)   # 呼ぶ関数。型は void / s8 / u8 / s16 / u16 / s32 / u32 / ptr
+native_opt = 0                          # 最適化。0（既定）または 2
 native_cc = C:\tools\clang+llvm-18.1.8-x86_64-pc-windows-msvc\bin\clang.exe
 ```
 
@@ -238,6 +238,11 @@ sim run  --cfg sim.cfg テスト.csv -o result
 - **初回と 2 回目以降**: 初回に全部コンパイルして DLL を作ります。結果は `sim.cfg` の隣の `.simnative` フォルダに置き、
   次からは、変わったソース（インクルードしているヘッダーが変わったものを含む）だけコンパイルし直します。
   フォルダごと消しても構いません。場所は `native_dir`、並列数は `native_jobs` で変えられます。
+- **変数と関数**: 型は DLL のデバッグ情報から取ります。static の関数も呼べます。
+  変数はグローバル名、`file.c/name`（ファイル内 static）、`file.c/func@name`（関数内 static）で読み書きできます。
+  構造体の `a.b`、配列の `a[2]` / `a[1][2]`、ビットフィールドのメンバも指定できます。ポインタは 64 ビットで読みます。
+  `native_opt` は既定 0。2 にすると速くなりますが、書き換えない static 変数などが定数に畳まれ、CSV から
+  読み書きできなくなることがあります。どこからも使われない static 変数は、0 でも DLL に入りません。
 - **CA78K0R 独自の書き方**: `__far`、`sreg`、`callt`、`norec`、`boolean`、`bit`、`DI()` などは、sim が各ソースの先頭に
   差し込むヘッダーで吸収します。製品のソースは書き換えません。
 - **番地**: 0xF0000〜0xFFFFF は同じ番地にメモリを確保するので、`#define REG (*(volatile unsigned char *)0xFFF01)` の形の
