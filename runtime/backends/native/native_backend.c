@@ -29,6 +29,7 @@
  */
 #include "native_backend.h"
 #include "native_rewrite.h"
+#include "native_coff.h"
 
 #include <stdarg.h>
 #include <stdio.h>
@@ -62,12 +63,27 @@ typedef struct {
     char *src;                   /* ソースのパス */
     char *base;                  /* キャッシュの中の名前（拡張子なし） */
     char *obj, *dep, *sig, *input, *pp, *rw;
+    char *decl, *ll;             /* 定義のない名前の宣言（.decl はキャッシュ、.ll は作って読んだら消す） */
     native_rewrite_stats stats;
     int pre;                     /* sim_native_pre.h を差し込む */
     int compile;                 /* 今回コンパイルする */
     uint64_t pre_ns;             /* プリプロセスにかかった時間（cc_times.txt にはコンパイルとの合計を出す） */
     const char **argv;
 } unit_t;
+
+typedef struct {
+    char *name;
+    int function;
+    int ret;                     /* 関数の戻り値の種類（NATIVE_RET_…） */
+    unsigned long size;          /* 変数の大きさ。0 は不明（UNDEF_DATA_SIZE を取る） */
+    unsigned long align;         /* 変数の宣言の整列。0 は不明 */
+    /* 以下は集めている間だけ使う */
+    int defined, referenced;
+    int decl_f, decl_d, size_unknown, ret_set;
+} undef_t;
+
+#define UNDEF_DATA_SIZE 4096 /* 大きさが分からない変数の代わり。表として読まれても範囲外になりにくいよう大きめに取る */
+#define UNDEF_ALIGN_MIN 16   /* 変数の代わりの整列の最小。SSE の命令（movaps など）が前提にする境界 */
 
 typedef struct {
     sim_backend b;
@@ -86,6 +102,8 @@ typedef struct {
     int ncompiled, nreused, linked;
     native_rewrite_stats rewrite;
     int asm_files;
+    undef_t *undefs;
+    int nundefs, undef_skipped;
     double build_sec;
     void *lib;
     range_t ranges[MAX_RANGES]; int nranges;
@@ -199,6 +217,8 @@ static void nat_free(nat *z)
     rl78_symtab_free(&z->st);
     rl78_warns_free(&z->w);
     free(z->dll_data);
+    for (i = 0; i < z->nundefs; i++) free(z->undefs[i].name);
+    free(z->undefs);
     for (i = 0; i < z->nranges; i++) free(z->ranges[i].init);
     free(z);
 }
@@ -535,6 +555,391 @@ static int read_rewrite_stats(unit_t *u)
            u->stats.short_added >= 0 && u->stats.asm_removed >= 0;
 }
 
+/* ---- どの .c にも定義がない名前の代わり ----
+ * 名前の集合は、全オブジェクトのシンボル表から求める（参照され、どこにも定義がないもの）。
+ * 関数か変数かは、シンボル表では分からない（clang は未定義のシンボルに関数の印を付けない）ので、
+ * その名前を参照しているソースの .pp.c を clang で LLVM IR にし、宣言（declare / external の global）から決める。 */
+typedef struct {
+    undef_t *items; int n, cap;
+    int *slots; size_t nslots;       /* items の添字 + 1。0 は空き */
+    int **refs; int *nrefs;          /* ユニットごとに、未定義として参照した items の添字 */
+    int unit;
+} undef_set;
+
+static int undef_find(undef_set *s, const char *name, int add)
+{
+    size_t mask, h;
+    if (!s->nslots || (add && (size_t)s->n * 2 >= s->nslots)) {
+        size_t ns = s->nslots ? s->nslots * 2 : 256, k, j;
+        int *sl = sim_xcalloc(ns, sizeof *sl);
+        for (k = 0; k < (size_t)s->n; k++) {
+            for (j = (size_t)hash_str(SIM_CC_FNV_INIT, s->items[k].name) & (ns - 1); sl[j]; j = (j + 1) & (ns - 1)) {}
+            sl[j] = (int)k + 1;
+        }
+        free(s->slots);
+        s->slots = sl;
+        s->nslots = ns;
+    }
+    mask = s->nslots - 1;
+    for (h = (size_t)hash_str(SIM_CC_FNV_INIT, name) & mask; s->slots[h]; h = (h + 1) & mask)
+        if (!strcmp(s->items[s->slots[h] - 1].name, name)) return s->slots[h] - 1;
+    if (!add) return -1;
+    if (s->n == s->cap) {
+        s->cap = s->cap ? s->cap * 2 : 64;
+        s->items = sim_xrealloc(s->items, (size_t)s->cap * sizeof *s->items);
+    }
+    memset(&s->items[s->n], 0, sizeof *s->items);
+    s->items[s->n].name = sim_xstrdup(name);
+    s->slots[h] = s->n + 1;
+    return s->n++;
+}
+
+static void undef_visit(void *ctx, const char *name, int defined, int function)
+{
+    undef_set *set = ctx;
+    int i, u = set->unit;
+    (void)function;                  /* 未定義のシンボルでは当てにならない（native_coff.h） */
+    if (!strcmp(name, "__ImageBase")) return;
+    i = undef_find(set, name, 1);
+    if (defined) { set->items[i].defined = 1; return; }
+    set->items[i].referenced = 1;
+    set->refs[u] = sim_xrealloc(set->refs[u], ((size_t)set->nrefs[u] + 1) * sizeof **set->refs);
+    set->refs[u][set->nrefs[u]++] = i;
+}
+
+static int undef_target(const undef_t *u) { return u->referenced && !u->defined; }
+
+/* .decl / undef.txt の 1 行: 「F 戻り値の種類 名前」または「D 大きさ 整列 名前」（大きさ・整列の 0 は不明） */
+static const char *const ret_names[] = {"int", "f32", "f64", "other", "sret"};
+#define NRET ((int)(sizeof ret_names / sizeof ret_names[0]))
+
+/* line（改行なし）を読む。name は line の中を指す。読めなければ 0（古い形式の「F 名前」「D 大きさ 名前」も読めない扱い） */
+static int decl_parse(char *line, char **name, int *function, unsigned long *size, int *ret, unsigned long *align)
+{
+    *size = 0;
+    *align = 0;
+    *ret = NATIVE_RET_INT;
+    if (line[0] == 'F' && line[1] == ' ') {
+        char *kind = line + 2, *sp = strchr(kind, ' ');
+        int k;
+        if (!sp || !sp[1]) return 0;
+        for (k = 0; k < NRET; k++)
+            if ((size_t)(sp - kind) == strlen(ret_names[k]) && !memcmp(kind, ret_names[k], (size_t)(sp - kind))) break;
+        if (k == NRET) return 0;
+        *function = 1;
+        *ret = k;
+        *name = sp + 1;
+        return 1;
+    }
+    if (line[0] == 'D' && line[1] == ' ') {
+        char *sp;
+        if (line[2] < '0' || line[2] > '9') return 0;
+        *size = strtoul(line + 2, &sp, 10);
+        if (*sp != ' ' || sp[1] < '0' || sp[1] > '9') return 0;
+        *align = strtoul(sp + 1, &sp, 10);
+        if (*sp != ' ' || !sp[1]) return 0;
+        *function = 0;
+        *name = sp + 1;
+        return 1;
+    }
+    return 0;
+}
+
+/* .ll の宣言を .decl の行にする */
+static void decl_visit(void *ctx, const char *name, int is_function, unsigned long size, int ret, unsigned long align)
+{
+    sim_buf *b = ctx;
+    if (is_function) sim_buf_printf(b, "F %s %s\n", ret_names[ret >= 0 && ret < NRET ? ret : NATIVE_RET_OTHER], name);
+    else sim_buf_printf(b, "D %lu %lu %s\n", size, align, name);
+}
+
+/* .decl が全部の行を読めれば 1。読めない行（古い形式など）があれば 0 で、作り直す */
+static int decl_ok(const char *path)
+{
+    char *text = sim_read_file(path, NULL), *line, *end;
+    int ok = text != NULL;
+    for (line = text; ok && *line; line = end + 1) {
+        char *name;
+        int function, ret;
+        unsigned long size, align;
+        if (!(end = strchr(line, '\n'))) { ok = 0; break; }
+        *end = 0;
+        ok = decl_parse(line, &name, &function, &size, &ret, &align);
+    }
+    free(text);
+    return ok;
+}
+
+/* .decl を読み、対象の名前の宣言を items に集める */
+static void decl_merge(undef_set *set, const char *path)
+{
+    char *text = sim_read_file(path, NULL), *line, *end;
+    if (!text) return;
+    for (line = text; *line; line = end + 1) {
+        unsigned long size, align;
+        char *name;
+        int i, function, ret;
+        undef_t *u;
+        if (!(end = strchr(line, '\n'))) break;
+        *end = 0;
+        if (!decl_parse(line, &name, &function, &size, &ret, &align)) continue;
+        if ((i = undef_find(set, name, 0)) < 0 || !undef_target(&set->items[i])) continue;
+        u = &set->items[i];
+        if (function) {
+            u->decl_f = 1;
+            /* 戻り値の種類が食い違えば、最初に見つかったものを使って知らせる（製品のソースの宣言の問題） */
+            if (!u->ret_set) { u->ret = ret; u->ret_set = 1; }
+            else if (u->ret != ret && u->ret_set == 1) {
+                fprintf(stderr, "native: 警告: 関数 %s の戻り値の型がソースによって違います。"
+                                "最初に見つかったもの（%s）で代わりを作ります\n", u->name, ret_names[u->ret]);
+                u->ret_set = 2;
+            }
+        } else {
+            u->decl_d = 1;
+            if (!size) u->size_unknown = 1;
+            else if (size > u->size) u->size = size;
+            if (align > u->align) u->align = align;     /* 食い違えば大きいほう */
+        }
+    }
+    free(text);
+}
+
+static int undef_cmp(const void *a, const void *b)
+{
+    return strcmp((*(const undef_t *const *)a)->name, (*(const undef_t *const *)b)->name);
+}
+
+static int c_identifier(const char *s)
+{
+    size_t i;
+    if (!*s) return 0;
+    for (i = 0; s[i]; i++) {
+        unsigned char c = (unsigned char)s[i];
+        if (c == '_' || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')) continue;
+        if (i && c >= '0' && c <= '9') continue;
+        return 0;
+    }
+    return 1;
+}
+
+/* 宣言を調べる .ll を作る。flags は 3 段目のコンパイルと同じ共通の引数（マクロとインクルード・パスを除いたもの）。
+ * 失敗したら -1（警告は呼び出し側） */
+static int make_decls(nat *z, unit_t *units, int nunits, const unsigned char *need,
+                      char **flags, int nflags, const char *log)
+{
+    sim_cc_job *jobs = sim_xcalloc((size_t)nunits, sizeof *jobs);
+    const char ***argvs = sim_xcalloc((size_t)nunits, sizeof *argvs);
+    int *which = sim_xcalloc((size_t)nunits, sizeof *which);
+    int i, j, k, njobs = 0, par = 0, rc = 0;
+    uint64_t v;
+    const char *s = sim_cfg_get(&z->cfg, "native_jobs");
+    for (i = 0; i < nunits; i++) {
+        unit_t *u = &units[i];
+        const char **argv;
+        if (!need[i] || !u->pre || (sim_path_kind(u->decl) == 1 && decl_ok(u->decl))) continue;
+        argv = sim_xcalloc((size_t)nflags + 12, sizeof *argv);
+        k = 0;
+        argv[k++] = z->cc;
+        for (j = 0; j < nflags; j++) {
+            /* デバッグ情報は付けない。最適化の水準は下で 3 段目と同じものを足す */
+            if (!strncmp(flags[j], "-g", 2) || !strncmp(flags[j], "-O", 2)) continue;
+            argv[k++] = flags[j];
+        }
+        argv[k++] = z->opt == 2 ? "-O2" : "-O0";  /* 3 段目と同じ水準（宣言の整列などが変わりうる） */
+        argv[k++] = "-x";
+        argv[k++] = "cpp-output";
+        argv[k++] = "-S";
+        argv[k++] = "-emit-llvm";
+        argv[k++] = u->pp;
+        argv[k++] = "-o";
+        argv[k++] = u->ll;
+        argv[k] = NULL;
+        sim_remove_file(u->ll);
+        argvs[njobs] = argv;
+        which[njobs] = i;
+        jobs[njobs].argv = argv;
+        jobs[njobs].name = sim_basename(u->src);
+        njobs++;
+    }
+    if (njobs) {
+        if (s && !sim_parse_uint(s, 64, &v) && v) par = (int)v;
+        if (!par) par = sim_cpu_count();
+        if (par > 64) par = 64;
+        say(z, "native: 定義のない名前の宣言を調べます（ソース %d 個）\n", njobs);
+        if (sim_cc_run_jobs(jobs, (size_t)njobs, par, log, "native", say_line, z)) rc = -1;
+        for (j = 0; j < njobs; j++) {
+            unit_t *u = &units[which[j]];
+            size_t len = 0;
+            char *text = rc ? NULL : sim_read_file(u->ll, &len);
+            if (text) {
+                sim_buf b;
+                sim_buf_init(&b);
+                native_ll_decls(text, len, decl_visit, &b);
+                if (sim_write_file(u->decl, sim_buf_cstr(&b), b.len)) rc = -1;
+                sim_buf_free(&b);
+                free(text);
+            } else rc = -1;
+            sim_remove_file(u->ll);
+        }
+    }
+    for (j = 0; j < njobs; j++) free(argvs[j]);
+    free(argvs);
+    free(which);
+    free(jobs);
+    return rc;
+}
+
+/* 代わりのオブジェクトは集合を求める対象に含めない。製品と部品の件数にも加えない。 */
+static int build_undef(nat *z, unit_t *units, int nunits, char **flags, int nflags, const char *log,
+                       char **object, sim_buf *signature, char *err, size_t errlen)
+{
+    undef_set set;
+    sim_buf source, list;
+    char *src = sim_path_join(z->dir, "sim_native_undef.c");
+    char *obj = sim_path_join(z->dir, "sim_native_undef.obj");
+    char *txt = sim_path_join(z->dir, "undef.txt"), *old = NULL;
+    unsigned char *need = sim_xcalloc((size_t)nunits, 1);
+    undef_t **targets = NULL;
+    int i, j, rc = -1, usable = 1, generated = 0, ntargets = 0;
+    memset(&set, 0, sizeof set);
+    set.refs = sim_xcalloc((size_t)nunits, sizeof *set.refs);
+    set.nrefs = sim_xcalloc((size_t)nunits, sizeof *set.nrefs);
+    sim_buf_init(&source);
+    sim_buf_init(&list);
+    sim_buf_adds(&source, "/* sim が自動生成。内容は sim info の一覧と同じです。 */\n");
+    for (i = 0; i < nunits; i++) {
+        size_t len = 0;
+        char detail[200], *data = sim_read_file(units[i].obj, &len);
+        int bad;
+        set.unit = i;
+        bad = !data || native_coff_symbols((const unsigned char *)data, len, undef_visit, &set, detail, sizeof detail);
+        free(data);
+        if (bad) {
+            fprintf(stderr, "native: 警告: %s のシンボル表を読めないため、未定義の自動補完を行わずリンクします\n", units[i].obj);
+            usable = 0;
+            break;
+        }
+    }
+    if (usable) {
+        for (i = 0; i < set.n; i++) if (undef_target(&set.items[i])) ntargets++;
+        if (ntargets) {
+            /* 宣言を調べるのは、対象の名前を参照している製品と native_src のソースだけ */
+            for (i = 0; i < nunits; i++)
+                for (j = 0; j < set.nrefs[i] && !need[i]; j++)
+                    if (undef_target(&set.items[set.refs[i][j]])) need[i] = 1;
+            if (make_decls(z, units, nunits, need, flags, nflags, log)) {
+                fprintf(stderr, "native: 警告: 定義のない名前の宣言を調べられないため（コンパイラの出力は %s）、"
+                                "未定義の自動補完を行わずリンクします\n", log);
+                usable = 0;
+            } else {
+                for (i = 0; i < nunits; i++)
+                    if (need[i] && units[i].pre) decl_merge(&set, units[i].decl);
+            }
+        }
+    }
+    if (usable && ntargets) {
+        targets = sim_xcalloc((size_t)ntargets, sizeof *targets);
+        for (i = 0, j = 0; i < set.n; i++) if (undef_target(&set.items[i])) targets[j++] = &set.items[i];
+        qsort(targets, (size_t)ntargets, sizeof *targets, undef_cmp);
+    }
+    for (i = 0; i < ntargets && targets; i++) {
+        undef_t *u = targets[i];
+        unsigned long size;
+        if (u->decl_f) {
+            u->function = 1;
+            if (u->decl_d)
+                fprintf(stderr, "native: 警告: %s は、関数として宣言したソースと変数として宣言したソースがあります。"
+                                "関数として代わりを作ります\n", u->name);
+        } else if (u->decl_d) {
+            /* 大きさが食い違えば大きいほう。大きさ不明（4096 バイト）より大きいものがなければ不明とする */
+            if (u->size_unknown && u->size <= UNDEF_DATA_SIZE) u->size = 0;
+        } else {
+            u->function = 1;
+            fprintf(stderr, "native: 警告: %s の宣言がどのソースにも見つかりません。関数として代わりを作ります\n", u->name);
+        }
+        size = u->size ? u->size : UNDEF_DATA_SIZE;
+        if (!u->function || u->ret < 0 || u->ret >= NRET) u->ret = NATIVE_RET_INT;
+        if (u->function) sim_buf_printf(signature, "F %s %s\n", ret_names[u->ret], u->name);
+        else sim_buf_printf(signature, "D %lu %lu %s\n", u->size, u->align, u->name);
+        if (!c_identifier(u->name)) { z->undef_skipped++; continue; }
+        if (u->function) {
+            /* Windows x64 では float / double は XMM0、それ以外の整数とポインタは RAX で返る */
+            static const char *const ctype[] = {"long long", "float", "double", "long long", "long long"};
+            sim_buf_printf(&list, "F %s %s\n", ret_names[u->ret], u->name);
+            sim_buf_printf(&source, "%s %s(void) { return 0; }\n", ctype[u->ret], u->name);
+            if (u->ret == NATIVE_RET_OTHER)
+                fprintf(stderr, "native: 警告: 関数 %s の戻り値の型は代わりを正しく作れません（0 が返らないことがあります）\n", u->name);
+            else if (u->ret == NATIVE_RET_SRET)
+                fprintf(stderr, "native: 警告: 構造体を返す関数 %s の代わりは、戻り値を書きません\n", u->name);
+        } else {
+            /* 整列は宣言のもの（clang は 16 バイト以上の配列を 16 にそろえ、それを前提に movaps などを出す）。
+             * 最小は 16。不明・使えない値（native_coff が 0 にする）も 16 */
+            unsigned long align = u->align > UNDEF_ALIGN_MIN ? u->align : UNDEF_ALIGN_MIN;
+            sim_buf_printf(&list, "D %lu %lu %s\n", u->size, u->align, u->name);
+            sim_buf_printf(&source, "__attribute__((aligned(%lu))) char %s[%lu];\n", align, u->name, size);
+        }
+        generated++;
+    }
+    if (!usable) sim_buf_adds(signature, "未定義の自動補完なし\n");
+    if (generated) {
+        size_t len = 0;
+        old = sim_read_file(src, &len);
+        if (!old || len != source.len || memcmp(old, sim_buf_cstr(&source), len) || sim_path_kind(obj) != 1) {
+            const char *argv[] = {z->cc, "-O2", "-w", "-ffreestanding", "-fno-builtin",
+                                  "-mno-stack-arg-probe", "-c", src, "-o", obj, NULL};
+            sim_remove_file(obj);
+            if (sim_write_file(src, sim_buf_cstr(&source), source.len)) goto write_error;
+            if (sim_cc_run_wait(argv, log)) {
+                snprintf(err, errlen, "native: 未定義の代わりをコンパイルできません。出力は %s にあります", log);
+                goto out;
+            }
+        }
+        *object = sim_xstrdup(obj);
+    } else {
+        sim_remove_file(src);
+        sim_remove_file(obj);
+    }
+    /* 一覧を保存して読み戻す（sim info に出す） */
+    {
+        size_t len = 0;
+        char *saved = sim_read_file(txt, &len), *line, *end;
+        int same = saved && len == list.len && !memcmp(saved, sim_buf_cstr(&list), len);
+        free(saved);
+        if (!same && sim_write_file(txt, sim_buf_cstr(&list), list.len)) goto write_error;
+        if (!(saved = sim_read_file(txt, NULL))) goto write_error;
+        for (line = saved; *line; line = end + 1) {
+            undef_t *u;
+            unsigned long size, align;
+            char *name;
+            int function, ret;
+            if (!(end = strchr(line, '\n'))) break;
+            *end = 0;
+            if (!decl_parse(line, &name, &function, &size, &ret, &align)) continue;
+            z->undefs = sim_xrealloc(z->undefs, ((size_t)z->nundefs + 1) * sizeof *z->undefs);
+            u = &z->undefs[z->nundefs++];
+            memset(u, 0, sizeof *u);
+            u->name = sim_xstrdup(name);
+            u->function = function;
+            u->ret = ret;
+            u->size = size;
+            u->align = align;
+        }
+        free(saved);
+    }
+    rc = 0;
+    goto out;
+write_error:
+    snprintf(err, errlen, "native: 未定義の一覧または代わりを %s に保存できません", z->dir);
+out:
+    for (i = 0; i < set.n; i++) free(set.items[i].name);
+    for (i = 0; i < nunits; i++) free(set.refs[i]);
+    free(set.items); free(set.slots); free(set.refs); free(set.nrefs);
+    free(targets); free(need);
+    free(src); free(obj); free(txt); free(old);
+    sim_buf_free(&source); sim_buf_free(&list);
+    return rc;
+}
+
 static int build(nat *z, char *err, size_t errlen)
 {
     char **flags = NULL, *base, *pre, *rt, *ver, *log, *p, *cur, *linksig_path, *want;
@@ -546,6 +951,7 @@ static int build(nat *z, char *err, size_t errlen)
     const char *s, *stem;
     char keytext[32];
     path_cache cache = {{0}};
+    char *undef_obj = NULL;
 
     /* フォルダ: 指定がなければ設定ファイルの隣の .simnative */
     if ((s = sim_cfg_get(&z->cfg, "native_dir")) && *s) base = sim_cfg_path(&z->cfg, s);
@@ -562,7 +968,7 @@ static int build(nat *z, char *err, size_t errlen)
     /* 鍵: コンパイラの版、共通の引数、差し込むヘッダー、DLL に入れる部品 */
     ver = cc_version(z, base);
     key = hash_str(key, ver);
-    key = hash_str(key, "rewrite-1");
+    key = hash_str(key, "rewrite-3");  /* 2: .decl に関数の戻り値の種類、3: 変数の整列を入れた（古い .decl を使い回さない） */
     free(ver);
     for (i = 0; i < nflags; i++) key = hash_str(key, flags[i]);
     {
@@ -619,13 +1025,16 @@ static int build(nat *z, char *err, size_t errlen)
             u->input = unit_path(z, src, ".i");
             u->pp = unit_path(z, src, ".pp.c");
             u->rw = unit_path(z, src, ".rw");
+            u->decl = unit_path(z, src, ".decl");
+            u->ll = unit_path(z, src, ".ll");
         }
         u->compile = !unit_fresh(z, &cache, u) || (u->pre && !read_rewrite_stats(u));
         if (!u->compile) { z->nreused++; continue; }
         sim_remove_file(u->obj);
         sim_remove_file(u->sig);
         sim_remove_file(u->dep);
-        u->argv = sim_xcalloc((size_t)nflags + 16, sizeof *u->argv);
+        if (u->decl) sim_remove_file(u->decl);  /* コンパイルし直すソースの宣言は、必要になったら作り直す */
+        u->argv =sim_xcalloc((size_t)nflags + 16, sizeof *u->argv);
         k = 0;
         u->argv[k++] = z->cc;
         if (u->pre) {
@@ -764,6 +1173,10 @@ static int build(nat *z, char *err, size_t errlen)
 
     /* リンク: オブジェクトの組、その中身の値が前回と同じで、DLL も残っていれば作り直さない */
     sim_buf_init(&ls);
+    if (build_undef(z, units, nunits, flags, nflags - z->nmacros - 2 * z->nincs, log, &undef_obj, &ls, err, errlen)) {
+        sim_buf_free(&ls);
+        goto out;
+    }
     for (i = 0; i < nunits; i++) {
         size_t n = 0;
         char *sg = sim_read_file(units[i].sig, &n);
@@ -802,6 +1215,7 @@ static int build(nat *z, char *err, size_t errlen)
         argv[k++] = "-Wl,/debug:dwarf";
         argv[k++] = "-Wl,/opt:noref";
         for (i = 0; i < nunits; i++) argv[k++] = units[i].obj;
+        if (undef_obj) argv[k++] = undef_obj;
         argv[k++] = "-o";
         argv[k++] = z->dll;
         argv[k] = NULL;
@@ -833,9 +1247,10 @@ out_link:
     free(linksig_path);
     free(cur);
 out:
+    free(undef_obj);
     for (i = 0; i < nunits; i++) {
         free(units[i].src); free(units[i].base); free(units[i].obj); free(units[i].dep); free(units[i].sig);
-        free(units[i].input); free(units[i].pp); free(units[i].rw);
+        free(units[i].input); free(units[i].pp); free(units[i].rw); free(units[i].decl); free(units[i].ll);
         free(units[i].argv);
     }
     free(units);
@@ -1035,8 +1450,31 @@ static void b_print_info(sim_backend *b, FILE *out)
         fprintf(out, "\n  登録ファイル: %d 個（ビルド対象外 %d 個）\n", z->files_total, z->files_off);
     }
     fprintf(out, "  コンパイルする .c: %d 個（mtpj から %d 個、native_src から %d 個）\n", z->nsrcs, z->from_mtpj, z->from_extra);
-    fprintf(out, "  アセンブラのソース: %d 個（コンパイルしません。中の関数は DLL に入りません）\n", z->nasms);
+    fprintf(out, "  アセンブラのソース: %d 個（コンパイルしません。参照された未定義の名前には代わりを作ります）\n", z->nasms);
     for (i = 0; i < z->nasms; i++) fprintf(out, "    %s\n", z->asms[i]);
+    {
+        int funcs = 0, data = 0;
+        for (i = 0; i < z->nundefs; i++) {
+            if (z->undefs[i].function) funcs++; else data++;
+        }
+        if (!z->nundefs) fprintf(out, "  どの .c にも定義がないもの: なし\n");
+        else {
+            fprintf(out, "  どの .c にも定義がないもの: 関数 %d 個（呼ばれると何もせず 0 を返します）、変数 %d 個（0 で埋めた領域）\n", funcs, data);
+            for (i = 0; i < z->nundefs && i < 50; i++) {
+                const undef_t *u = &z->undefs[i];
+                if (u->function)
+                    fprintf(out, "    関数 %s%s\n", u->name,
+                            u->ret == NATIVE_RET_F32 ? "（float を返す）" :
+                            u->ret == NATIVE_RET_F64 ? "（double を返す）" :
+                            u->ret == NATIVE_RET_OTHER || u->ret == NATIVE_RET_SRET ? "（戻り値は 0 になりません）" : "");
+                else if (u->size) fprintf(out, "    変数 %s（%lu バイト）\n", u->name, u->size);
+                else fprintf(out, "    変数 %s（大きさ不明のため %d バイト）\n", u->name, UNDEF_DATA_SIZE);
+            }
+            if (z->nundefs > 50) fprintf(out, "    ほか %d 個（一覧は %s\\undef.txt）\n", z->nundefs - 50, z->dir);
+            fprintf(out, "  動きが必要なものは、同じ名前の関数を C で書いたファイルを native_src に置くと、そちらが使われます\n");
+        }
+        fprintf(out, "  native undef funcs=%d data=%d skipped=%d\n", funcs, data, z->undef_skipped);
+    }
     fprintf(out, "  インクルード・パス: %d 個、定義マクロ: %d 個、定義解除マクロ: %d 個\n", z->nincs, ndefs, nundefs);
     fprintf(out, "  コンパイラ: %s\n", z->cc);
     fprintf(out, "  今回コンパイルしたもの: %d 個、使い回したもの: %d 個、DLL: %s\n",
