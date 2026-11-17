@@ -73,9 +73,9 @@ static void check(const char *name, const unsigned char *data, size_t len,
     }
 }
 /* ---- LLVM IR の宣言 ---- */
-typedef struct { const char *name; int function; unsigned long size; } ll_expected;
+typedef struct { const char *name; int function; unsigned long size; int ret; } ll_expected;
 typedef struct { const ll_expected *items; int n, seen, failed; } ll_visits;
-static void ll_visit(void *ctx, const char *name, int is_function, unsigned long size)
+static void ll_visit(void *ctx, const char *name, int is_function, unsigned long size, int ret)
 {
     ll_visits *v = ctx;
     if (v->seen >= v->n) {
@@ -83,8 +83,9 @@ static void ll_visit(void *ctx, const char *name, int is_function, unsigned long
         v->failed = 1;
     } else {
         const ll_expected *e = &v->items[v->seen];
-        if (strcmp(name, e->name) || is_function != e->function || size != e->size) {
-            fprintf(stderr, "  違う: %s %d %lu（期待 %s %d %lu）\n", name, is_function, size, e->name, e->function, e->size);
+        if (strcmp(name, e->name) || is_function != e->function || size != e->size || ret != e->ret) {
+            fprintf(stderr, "  違う: %s %d %lu %d（期待 %s %d %lu %d）\n", name, is_function, size, ret,
+                    e->name, e->function, e->size, e->ret);
             v->failed = 1;
         }
     }
@@ -132,19 +133,48 @@ static void check_ll(void)
         "declare void @\"quoted fn\"(ptr)\n"
         "declare dso_local void @asm_t2()";      /* 最後の行に改行がない */
     static const ll_expected items[] = {
-        {"t", 0, 8}, {"w", 0, 2}, {"p", 0, 8}, {"s", 0, 0}, {"u", 0, 0}, {"m", 0, 60},
-        {"asm_t", 0, 1}, {"asm_table", 0, 16}, {"q name", 0, 4}, {"escApe", 0, 4}, {"k", 0, 8},
-        {"odd", 0, 3}, {"big", 0, 0}, {"tls", 0, 8},
-        {"f", 1, 0}, {"start_asm", 1, 0}, {"asm_implicit", 1, 0}, {"quoted fn", 1, 0}, {"asm_t2", 1, 0}
+        {"t", 0, 8, NATIVE_RET_INT}, {"w", 0, 2, NATIVE_RET_INT}, {"p", 0, 8, NATIVE_RET_INT}, {"s", 0, 0, NATIVE_RET_INT}, {"u", 0, 0, NATIVE_RET_INT}, {"m", 0, 60, NATIVE_RET_INT},
+        {"asm_t", 0, 1, NATIVE_RET_INT}, {"asm_table", 0, 16, NATIVE_RET_INT}, {"q name", 0, 4, NATIVE_RET_INT}, {"escApe", 0, 4, NATIVE_RET_INT}, {"k", 0, 8, NATIVE_RET_INT},
+        {"odd", 0, 3, NATIVE_RET_INT}, {"big", 0, 0, NATIVE_RET_INT}, {"tls", 0, 8, NATIVE_RET_INT},
+        {"f", 1, 0, NATIVE_RET_INT}, {"start_asm", 1, 0, NATIVE_RET_INT}, {"asm_implicit", 1, 0, NATIVE_RET_INT}, {"quoted fn", 1, 0, NATIVE_RET_INT}, {"asm_t2", 1, 0, NATIVE_RET_INT}
     };
-    static const ll_expected none[] = {{"", 0, 0}};
+    static const ll_expected none[] = {{"", 0, 0, NATIVE_RET_INT}};
     check_ll_text("LLVM IR の宣言", text, items, (int)(sizeof items / sizeof items[0]));
     check_ll_text("定義だけ", "@g = dso_local global i16 4660\ndefine void @h() {\n}\n", none, 0);
     check_ll_text("壊れた行", "@\"unterminated = external global i8\n@ = external global i8\n"
                              "@x external global i8\n@\"nul\\00\" = external global i8\ndeclare void @\n"
                              "@y = external global [3 x\n@z = external global [3 i8]\n",
-                  (const ll_expected[]){{"y", 0, 0}, {"z", 0, 0}}, 2);
+                  (const ll_expected[]){{"y", 0, 0, NATIVE_RET_INT}, {"z", 0, 0, NATIVE_RET_INT}}, 2);
     check_ll_text("空", "", none, 0);
+    {
+        static const char rets[] =
+            "declare dso_local double @d(double noundef)\n"
+            "declare dso_local float @f(float noundef)\n"
+            "declare dso_local signext i16 @s(i8 noundef zeroext) #1\n"
+            "declare dso_local void @v()\n"
+            "declare dso_local ptr @p(ptr noundef)\n"
+            "declare dso_local i32 @implicit(...)\n"
+            "declare dso_local x86_fp80 @ld()\n"
+            "declare dso_local void @sr(ptr dead_on_unwind writable sret(%struct.pt) align 4)\n"
+            "declare dso_local noundef i32 @n()\n"
+            "declare dso_local double @\"q fp\"(i32)\n"
+            "declare dllimport x86_64_win64cc noundef range(i8 0, 2) zeroext i8 @r()\n"
+            "declare dso_local noundef nonnull align 8 dereferenceable(16) ptr @a()\n"
+            "declare dso_local <4 x float> @vec()\n"
+            "declare dso_local { i64, i64 } @pair()\n"
+            "declare dso_local %struct.pt @byval_ret()\n"
+            "declare dso_local half @h()\n"
+            "declare dso_local void @nosret(ptr noundef) #2 ; mysret(\n";
+        static const ll_expected items[] = {
+            {"d", 1, 0, NATIVE_RET_F64}, {"f", 1, 0, NATIVE_RET_F32}, {"s", 1, 0, NATIVE_RET_INT},
+            {"v", 1, 0, NATIVE_RET_INT}, {"p", 1, 0, NATIVE_RET_INT}, {"implicit", 1, 0, NATIVE_RET_INT},
+            {"ld", 1, 0, NATIVE_RET_OTHER}, {"sr", 1, 0, NATIVE_RET_SRET}, {"n", 1, 0, NATIVE_RET_INT},
+            {"q fp", 1, 0, NATIVE_RET_F64}, {"r", 1, 0, NATIVE_RET_INT}, {"a", 1, 0, NATIVE_RET_INT},
+            {"vec", 1, 0, NATIVE_RET_OTHER}, {"pair", 1, 0, NATIVE_RET_OTHER},
+            {"byval_ret", 1, 0, NATIVE_RET_OTHER}, {"h", 1, 0, NATIVE_RET_OTHER}, {"nosret", 1, 0, NATIVE_RET_INT}
+        };
+        check_ll_text("戻り値の種類", rets, items, (int)(sizeof items / sizeof items[0]));
+    }
 }
 
 int main(void)

@@ -6,6 +6,8 @@ extern u2 asm_get_value(u1 n);
 extern u1 asm_table[8];
 extern void asm_handler(void);      /* アドレスを表に入れるだけ（呼ぶのは表から） */
 extern u2 asm_word;                 /* 大きさの分かる変数（2 バイト） */
+extern double asm_dbl(double x);    /* 浮動小数を返す（Windows x64 では XMM0 で返る） */
+extern float asm_flt(float x);
 
 static void (*const asmcall_tbl[1])(void) = { asm_handler };
 
@@ -24,6 +26,12 @@ u2 asmcall_tbl_run(void)
 u2 asmcall_word(void)
 {
     return asm_word;
+}
+
+u2 asmcall_fp(void)
+{
+    /* 代わりが 0.0 を返せば 1。引数がそのまま戻り値に見えると 0 */
+    return (u2)(asm_dbl(3.5) == 0.0 && asm_flt(2.5f) == 0.0f);
 }
 
 u2 asmcall_implicit(void)

@@ -153,15 +153,61 @@ static unsigned long ll_type_size(const char **pp, const char *end, int depth)
     return 0;
 }
 
+/* p..end の字句（かっこの中は 1 つにまとめる）を 1 つ飛ばし、後ろを返す */
+static const char *ll_token_end(const char *p, const char *end)
+{
+    int depth = 0;
+    for (; p < end; p++) {
+        if (*p == '(' || *p == '<' || *p == '{' || *p == '[') depth++;
+        else if ((*p == ')' || *p == '>' || *p == '}' || *p == ']') && depth > 0) depth--;
+        else if ((*p == ' ' || *p == '\t') && depth == 0) break;
+    }
+    return p;
+}
+
+/* declare と @名前 の間から戻り値の型を探す。属性（dso_local、noundef、signext、呼び出し規約、align N、
+ * range(…) など）は型の形をしていないので飛ばし、最初の型の形の字句で種類を決める */
+static int ll_ret_kind(const char *p, const char *end)
+{
+    while ((p = ll_ws(p, end)) < end) {
+        const char *t = ll_token_end(p, end);
+        if (p + 1 < t && *p == 'i' && p[1] >= '0' && p[1] <= '9') {
+            const char *q = p + 1;
+            while (q < t && *q >= '0' && *q <= '9') q++;
+            if (q == t) return NATIVE_RET_INT;
+        }
+        if (ll_word(p, t, "void") == t || ll_word(p, t, "ptr") == t) return NATIVE_RET_INT;
+        if (ll_word(p, t, "float") == t) return NATIVE_RET_F32;
+        if (ll_word(p, t, "double") == t) return NATIVE_RET_F64;
+        if (ll_word(p, t, "half") == t || ll_word(p, t, "bfloat") == t || ll_word(p, t, "fp128") == t ||
+            ll_word(p, t, "x86_fp80") == t || ll_word(p, t, "ppc_fp128") == t || ll_word(p, t, "x86_mmx") == t ||
+            *p == '<' || *p == '{' || *p == '%' || *p == '[')
+            return NATIVE_RET_OTHER;
+        p = t;
+    }
+    return NATIVE_RET_OTHER;
+}
+
+/* 引数の並びに sret( があるか（名前の後ろ、行末まで） */
+static int ll_has_sret(const char *p, const char *end)
+{
+    for (; p + 5 <= end; p++)
+        if (!memcmp(p, "sret(", 5) && !ll_ident((unsigned char)p[-1])) return 1;  /* p[-1] は名前の後ろなので読める */
+    return 0;
+}
+
 static void ll_line(const char *p, const char *end, native_ll_visit visit, void *ctx)
 {
     char *name = NULL;
     const char *q;
     if ((q = ll_word(p, end, "declare"))) {
         /* declare [属性や戻り値の型] @名前(引数) … 。型や属性に '@' は出ない */
-        q = memchr(q, '@', (size_t)(end - q));
-        if (!q || !(q = ll_name(q + 1, end, &name))) return;
-        if (q < end && *q == '(') visit(ctx, name, 1, 0);
+        const char *at = memchr(q, '@', (size_t)(end - q)), *after;
+        int ret;
+        if (!at || !(after = ll_name(at + 1, end, &name))) return;
+        ret = ll_ret_kind(q, at);
+        if (ll_has_sret(after, end)) ret = NATIVE_RET_SRET;
+        if (after < end && *after == '(') visit(ctx, name, 1, 0, ret);
     } else if (p < end && *p == '@') {
         /* @名前 = [linkage など] external [dso_local など] global|constant 型, … */
         int ext = 0;
@@ -175,7 +221,7 @@ static void ll_line(const char *p, const char *end, native_ll_visit visit, void 
             for (t = q; t < end && *t != ' ' && *t != '\t'; t++) {}
             if ((w = ll_word(q, t, "external")) == t || (w = ll_word(q, t, "extern_weak")) == t) ext = 1;
             else if ((w = ll_word(q, t, "global")) == t || (w = ll_word(q, t, "constant")) == t) {
-                if (ext) visit(ctx, name, 0, ll_type_size(&t, end, 0));
+                if (ext) visit(ctx, name, 0, ll_type_size(&t, end, 0), NATIVE_RET_INT);
                 break;
             }
             q = t;
