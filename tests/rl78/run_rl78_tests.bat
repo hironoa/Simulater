@@ -319,7 +319,7 @@ if errorlevel 1 (call :ng "native: a header name uses the same #if branch as the
 if errorlevel 1 (call :ng "native: RAM written by address is read by the function") else (call :ok "native: RAM written by address is read by the function")
 "%RS%" info --cfg "%NC%" > "%NW%\info.log" 2>&1
 call :has "%NW%\info.log" "native sources=6 asm=1 files=7 off=1 compiled=0 reused=7 linked=0" "native: second open compiles nothing"
-call :has "%NW%\info.log" "funcs=32 vars=22 opt=0" "native: variables and functions come from the debug information"
+call :has "%NW%\info.log" "funcs=34 vars=22 opt=0" "native: variables and functions come from the debug information"
 call :has "%NW%\info.log" "native rewrite int=24 int_dropped=7 short_added=6 asm=4 asm_files=1" "native: legacy assembly is counted on cache reuse"
 "%RS%" run --cfg "%NC%" "%NW%\csv\native_legacy.csv" -o "%NW%\out_legacy" > "%NW%\legacy.log" 2>&1
 set RC=%ERRORLEVEL%
@@ -384,11 +384,35 @@ copy /y "%NC%" "%NW%\driver\oldfn.cfg" >nul
 call :has "%NW%\oldfn.log" "OK 17, NG 0, NO Check 0" "native: obsolete function setting is ignored"
 call :has "%NW%\oldfn.log" "native_func" "native: obsolete function setting warns"
 
-rem an address that is not mapped (below 0x10000): the run stops with exit code 2 and names the address
+rem An unmapped address fails only its row; the next row still runs.
 "%RS%" run --cfg "%NC%" "%NW%\csv\native_low.csv" -o "%NW%\out3" > "%NW%\low.log" 2>&1
 set RC=%ERRORLEVEL%
 "%HAS%" /l /c:"0x100 " "%NW%\low.log" >nul
-if errorlevel 1 (call :ng "native: reading an unmapped address names it" & type "%NW%\low.log") else if "%RC%"=="2" (call :ok "native: reading an unmapped address names it") else (call :ng "native: reading an unmapped address: exit code 2, got %RC%")
+if errorlevel 1 (call :ng "native: reading an unmapped address names it" & type "%NW%\low.log") else if "%RC%"=="1" (call :ok "native: reading an unmapped address names it") else (call :ng "native: reading an unmapped address: exit code 1, got %RC%")
+call :has "%NW%\low.log" "OK 1, NG 1, NO Check 0" "native: access fault fails only its row"
+"%HAS%" /b /l /c:",1,2,3,OK" "%NW%\out3\native_low.csv" >nul
+if errorlevel 1 (call :ng "native: normal row after access fault is OK") else (call :ok "native: normal row after access fault is OK")
+copy /y "%NC%" "%NW%\driver\timeout.cfg" >nul
+>> "%NW%\driver\timeout.cfg" echo native_timeout_ms = 300
+"%RS%" run --cfg "%NW%\driver\timeout.cfg" "%NW%\csv\native_fault.csv" -o "%NW%\out_fault" > "%NW%\fault.log" 2>&1
+set RC=%ERRORLEVEL%
+if "%RC%"=="1" (call :ok "native: fault rows exit 1") else (call :ng "native: fault rows exit 1" & type "%NW%\fault.log")
+"%HAS%" /l /c:"OK 5, NG 3, NO Check 0" "%NW%\fault.log" >nul
+if errorlevel 1 (call :ng "native: five OK rows and three NG rows") else (call :ok "native: five OK rows and three NG rows")
+"%HAS%" /b /l /c:",1,2,3,OK" "%NW%\out_fault\native_fault.csv" >nul
+if errorlevel 1 (call :ng "native: continues after access fault") else (call :ok "native: continues after access fault")
+"%HAS%" /b /l /c:",10,5,2,OK" "%NW%\out_fault\native_fault.csv" >nul
+if errorlevel 1 (call :ng "native: continues after divide by zero") else (call :ok "native: continues after divide by zero")
+"%HAS%" /b /l /c:",0x80,1,OK" "%NW%\out_fault\native_fault.csv" > "%NW%\wait_ok.log"
+set "WAIT_OK=0"
+for /f "usebackq delims=" %%L in ("%NW%\wait_ok.log") do set /a WAIT_OK+=1 >nul
+if "%WAIT_OK%"=="2" (call :ok "native: both ready rows including after timeout are OK") else (call :ng "native: both ready rows including after timeout are OK")
+call :has "%NW%\fault.log" "native_timeout_ms" "native: timeout names its setting"
+"%RS%" info --cfg "%NW%\driver\timeout.cfg" > "%NW%\timeout_info.log" 2>&1
+call :has "%NW%\timeout_info.log" "native timeout_ms=300" "native: info shows timeout"
+copy /y "%NC%" "%NW%\driver\badtimeout.cfg" >nul
+>> "%NW%\driver\badtimeout.cfg" echo native_timeout_ms = abc
+call :native_err "native: invalid timeout is an error" "native_timeout_ms" badtimeout.cfg
 rem no fallback: a missing compiler and a compile error are errors (exit code 2)
 copy /y "%NC%" "%NW%\driver\nocc.cfg" >nul
 >> "%NW%\driver\nocc.cfg" echo native_cc = no_such_clang_for_test
