@@ -318,47 +318,57 @@ if errorlevel 1 (call :ng "native: a header name uses the same #if branch as the
 "%HAS%" /b /l /c:",65535,65535,OK" "%NW%\out\native_basic.csv" >nul
 if errorlevel 1 (call :ng "native: RAM written by address is read by the function") else (call :ok "native: RAM written by address is read by the function")
 "%RS%" info --cfg "%NC%" > "%NW%\info.log" 2>&1
-call :has "%NW%\info.log" "native sources=3 asm=1 files=4 off=1 compiled=0 reused=4 linked=0 funcs=11" "native: second open compiles nothing"
+call :has "%NW%\info.log" "native sources=4 asm=1 files=5 off=1 compiled=0 reused=5 linked=0" "native: second open compiles nothing"
+call :has "%NW%\info.log" "funcs=23 vars=16 opt=0" "native: variables and functions come from the debug information"
 call :has "%NW%\info.log" "startup.asm" "native: assembler sources are listed"
-call :has "%NW%\info.log" "files=4 off=1" "native: a file that is not a build target is left out"
+call :has "%NW%\info.log" "files=5 off=1" "native: a file that is not a build target is left out"
 rem a header changes: only the sources that include it are compiled again (reg.h is included by io.c only)
 >> "%NW%\product\inc\reg.h" echo /* changed */
 "%RS%" info --cfg "%NC%" > "%NW%\info2.log" 2>&1
-call :has "%NW%\info2.log" "compiled=1 reused=3 linked=1" "native: a changed header recompiles only its users"
+call :has "%NW%\info2.log" "compiled=1 reused=4 linked=1" "native: a changed header recompiles only its users"
 >> "%NW%\product\inc\types.h" echo /* changed */
 "%RS%" info --cfg "%NC%" > "%NW%\info3.log" 2>&1
-call :has "%NW%\info3.log" "compiled=3 reused=1 linked=1" "native: a header used by every source recompiles them all"
+call :has "%NW%\info3.log" "compiled=4 reused=1 linked=1" "native: a header used by every source recompiles them all"
 "%RS%" run --cfg "%NC%" "%NW%\csv\native_basic.csv" -o "%NW%\out2" > "%NW%\again.log" 2>&1
 call :has "%NW%\again.log" "OK 17, NG 0, NO Check 0" "native: all rows are OK after the rebuild"
 
 rem a header of the same name appears earlier in the search order (next to the source that includes it)
 copy /y "%NW%\product\inc\reg.h" "%NW%\product\src\reg.h" >nul
 "%RS%" info --cfg "%NC%" > "%NW%\info4.log" 2>&1
-call :has "%NW%\info4.log" "compiled=1 reused=3 linked=1" "native: a header that shadows another recompiles its users"
+call :has "%NW%\info4.log" "compiled=1 reused=4 linked=1" "native: a header that shadows another recompiles its users"
 del "%NW%\product\src\reg.h"
 "%RS%" info --cfg "%NC%" > "%NW%\info5.log" 2>&1
-call :has "%NW%\info5.log" "compiled=1 reused=3 linked=1" "native: removing the shadowing header recompiles again"
+call :has "%NW%\info5.log" "compiled=1 reused=4 linked=1" "native: removing the shadowing header recompiles again"
 rem a macro that the mtpj undefines and cdef defines again: the DLL sees the cdef value (same order as the defines loader)
 copy /y "%NC%" "%NW%\driver\feature.cfg" >nul
 >> "%NW%\driver\feature.cfg" echo cdef = FEATURE_X=7
->> "%NW%\driver\feature.cfg" echo native_func = u16 calc_feature(void)
 "%RS%" run --cfg "%NW%\driver\feature.cfg" "%NW%\csv\native_feature.csv" -o "%NW%\out_feature" > "%NW%\feature.log" 2>&1
 call :has "%NW%\feature.log" "OK 1, NG 0, NO Check 0" "native: cdef overrides a macro that the mtpj undefines"
+rem variables and functions come from the debug information of the DLL
+"%RS%" run --cfg "%NC%" "%NW%\csv\native_vars.csv" -o "%NW%\out_vars" > "%NW%\vars.log" 2>&1
+call :has "%NW%\vars.log" "OK 11, NG 0, NO Check 0" "native: all variable rows are OK"
+copy /y "%NC%" "%NW%\driver\opt2.cfg" >nul
+>> "%NW%\driver\opt2.cfg" echo native_opt = 2
+"%RS%" run --cfg "%NW%\driver\opt2.cfg" "%NW%\csv\native_basic.csv" -o "%NW%\out_opt2" > "%NW%\opt2.log" 2>&1
+call :has "%NW%\opt2.log" "OK 17, NG 0, NO Check 0" "native: optimization 2 keeps basic results"
+copy /y "%NC%" "%NW%\driver\opt3.cfg" >nul
+>> "%NW%\driver\opt3.cfg" echo native_opt = 3
+call :native_err "native: invalid optimization is an error" "native_opt" opt3.cfg
+copy /y "%NC%" "%NW%\driver\oldfn.cfg" >nul
+>> "%NW%\driver\oldfn.cfg" echo native_func = u8 f(void)
+"%RS%" run --cfg "%NW%\driver\oldfn.cfg" "%NW%\csv\native_basic.csv" -o "%NW%\out_oldfn" > "%NW%\oldfn.log" 2>&1
+call :has "%NW%\oldfn.log" "OK 17, NG 0, NO Check 0" "native: obsolete function setting is ignored"
+call :has "%NW%\oldfn.log" "native_func" "native: obsolete function setting warns"
+
 rem an address that is not mapped (below 0x10000): the run stops with exit code 2 and names the address
 "%RS%" run --cfg "%NC%" "%NW%\csv\native_low.csv" -o "%NW%\out3" > "%NW%\low.log" 2>&1
 set RC=%ERRORLEVEL%
 "%HAS%" /l /c:"0x100 " "%NW%\low.log" >nul
 if errorlevel 1 (call :ng "native: reading an unmapped address names it" & type "%NW%\low.log") else if "%RC%"=="2" (call :ok "native: reading an unmapped address names it") else (call :ng "native: reading an unmapped address: exit code 2, got %RC%")
-rem no fallback: a missing compiler, a compile error and a missing function are errors (exit code 2)
+rem no fallback: a missing compiler and a compile error are errors (exit code 2)
 copy /y "%NC%" "%NW%\driver\nocc.cfg" >nul
 >> "%NW%\driver\nocc.cfg" echo native_cc = no_such_clang_for_test
 call :native_err "native: a missing compiler is an error" "no_such_clang_for_test" nocc.cfg
-copy /y "%NC%" "%NW%\driver\nofn.cfg" >nul
->> "%NW%\driver\nofn.cfg" echo native_func = u8 no_such_function(void)
-call :native_err "native: a function that is not in the sources is an error" "cc.log" nofn.cfg
-copy /y "%NC%" "%NW%\driver\badfn.cfg" >nul
->> "%NW%\driver\badfn.cfg" echo native_func = float f(void)
-call :native_err "native: an unreadable native_func is an error" "native_func" badfn.cfg
 > "%NW%\driver\zz_bad.c" echo #error "compile error for the test"
 call :native_err "native: a compile error is an error and names the file" "zz_bad.c" sim.cfg
 del "%NW%\driver\zz_bad.c"

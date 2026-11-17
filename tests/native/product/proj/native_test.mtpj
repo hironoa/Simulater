@@ -1,7 +1,7 @@
 <CubeSuiteProject>
   <!-- テスト用の合成データ（PC 用 DLL の方式 exec = native の試験）。tests/defines_scope/proj/scope_test.mtpj と同じく、
        tests/ca78k0r_probe/ca78k0r_probe.mtpj（CS+ 5.02、CA78K0R V1.60）の構造を写したもので、CS+ が保存した実物ではない。
-       登録ファイル: calc.c と io.c（ビルド対象）、broken.c（ビルド対象外）、startup.asm（アセンブラ）。
+       登録ファイル: calc.c、io.c と vars.c（ビルド対象）、broken.c（ビルド対象外）、startup.asm（アセンブラ）。
        定義マクロ: GAIN=3。定義解除マクロ: FEATURE_X。インクルード・パス: ..\inc。 -->
   <ProductVersion>5.02.00.00</ProductVersion>
   <Class Guid="68f4a651-b9cd-473b-a595-b00447132ffa">
@@ -29,6 +29,12 @@
       <RelativePath>..\src\startup.asm</RelativePath>
       <ParentItem>f072d5ef-98af-4a13-9020-57d2f1b830e1</ParentItem>
     </Instance>
+    <Instance Guid="b0000000-0000-0000-0000-000000000005">
+      <Name>vars.c</Name>
+      <Type>File</Type>
+      <RelativePath>..\src\vars.c</RelativePath>
+      <ParentItem>f072d5ef-98af-4a13-9020-57d2f1b830e1</ParentItem>
+    </Instance>
   </Class>
   <Class Guid="11ff4962-ca73-4419-bb4a-67e9b8de9571">
     <Instance Guid="11ff4962-ca73-4419-bb4a-67e9b8de9571">
@@ -44,7 +50,9 @@
       <SourceItemType2>CSource</SourceItemType2>
       <SourceItemGuid3>b0000000-0000-0000-0000-000000000004</SourceItemGuid3>
       <SourceItemType3>AsmSource</SourceItemType3>
-      <SourceItemCount>4</SourceItemCount>
+      <SourceItemGuid4>b0000000-0000-0000-0000-000000000005</SourceItemGuid4>
+      <SourceItemType4>CSource</SourceItemType4>
+      <SourceItemCount>5</SourceItemCount>
     </Instance>
     <Instance Guid="86700a2f-4f2c-4aec-8af7-7d69ad94a4a1">
       <MacroDefinitions-0>GAIN=3
@@ -61,6 +69,7 @@
       <SourceItem0-BuildingTarget-0>True</SourceItem0-BuildingTarget-0>
       <SourceItem1-BuildingTarget-0>True</SourceItem1-BuildingTarget-0>
       <SourceItem2-BuildingTarget-0>False</SourceItem2-BuildingTarget-0>
+      <SourceItem4-BuildingTarget-0>True</SourceItem4-BuildingTarget-0>
       <SourceItem3-BuildingTarget-0>True</SourceItem3-BuildingTarget-0>
     </Instance>
   </Class>

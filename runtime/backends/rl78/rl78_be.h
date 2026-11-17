@@ -120,6 +120,7 @@ typedef struct {
 
 /* DWARF 読み取りの指定 */
 typedef struct {
+    int default_ptr_size;   /* 0 なら従来の near（2 バイト） */
     int bitfield_lsb;        /* DWARF2/3 の DW_AT_bit_offset を LSB 側から数える（非標準）なら 1 */
     int addr_class_size[16]; /* DW_AT_address_class の値ごとのポインタのバイト数（0 = 既定） */
 } rl78_dwarf_opts;
@@ -128,6 +129,13 @@ void rl78_symtab_init(rl78_symtab *t);
 void rl78_symtab_free(rl78_symtab *t);
 sim_var *rl78_symtab_add_var(rl78_symtab *t);
 rl78_funcinfo *rl78_symtab_add_func(rl78_symtab *t);
+
+/* セクションのバイト列を直接渡す。名前はシンボル表の領域に写す。 */
+typedef struct {
+    const uint8_t *info, *abbrev, *str;
+    size_t info_len, abbrev_len, str_len;
+} rl78_dwarf_secs;
+int rl78_dwarf_read_secs(rl78_symtab *t, const rl78_dwarf_secs *s, const rl78_dwarf_opts *o, rl78_warns *w);
 
 /* DWARF から変数・関数を足す。DWARF がなければ 0、読めた CU の数を返す */
 int rl78_dwarf_read(rl78_symtab *t, const rl78_elf *e, const rl78_dwarf_opts *o, rl78_warns *w);
