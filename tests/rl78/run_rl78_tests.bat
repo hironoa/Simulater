@@ -308,7 +308,8 @@ set "NC=%NW%\driver\sim.cfg"
 "%RS%" run --cfg "%NC%" "%NW%\csv\native_basic.csv" -o "%NW%\out" > "%NW%\first.log" 2>&1
 set RC=%ERRORLEVEL%
 if "%RC%"=="0" (call :ok "native: first run exits 0") else (call :ng "native: first run exits 0" & type "%NW%\first.log" & for /r "%NW%\driver\.simnative" %%F in (cc.log) do type "%%F")
-call :has "%NW%\first.log" "OK 17, NG 0, NO Check 0" "native: all 17 rows are OK"
+call :has "%NW%\first.log" "OK 18, NG 0, NO Check 0" "native: all 18 rows are OK"
+call :has "%NW%\out\native_basic.csv" ",0xA5,0xA5,OK" "native: native_src header register is read back"
 "%HAS%" /b /l /c:",30000,30000,-5536,OK" "%NW%\out\native_basic.csv" >nul
 if errorlevel 1 (call :ng "native: int is 16 bits (30000 + 30000 = -5536)") else (call :ok "native: int is 16 bits (30000 + 30000 = -5536)")
 "%HAS%" /b /l /c:",0x55,0x55,0x82,OK" "%NW%\out\native_basic.csv" >nul
@@ -319,7 +320,14 @@ if errorlevel 1 (call :ng "native: a header name uses the same #if branch as the
 if errorlevel 1 (call :ng "native: RAM written by address is read by the function") else (call :ok "native: RAM written by address is read by the function")
 "%RS%" info --cfg "%NC%" > "%NW%\info.log" 2>&1
 call :has "%NW%\info.log" "native sources=6 asm=1 files=7 off=1 compiled=0 reused=7 linked=0" "native: second open compiles nothing"
-call :has "%NW%\info.log" "funcs=34 vars=22 opt=0" "native: variables and functions come from the debug information"
+call :has "%NW%\info.log" "funcs=35 vars=22 opt=0" "native: variables and functions come from the debug information"
+call :has "%NW%\info.log" "defines auto=1" "native: header definitions are automatic"
+copy /y "%NC%" "%NW%\driver\autoff.cfg" >nul
+>> "%NW%\driver\autoff.cfg" echo defines_auto = off
+call :native_err "native: disabling auto leaves P3 undefined" "P3" autoff.cfg
+copy /y "%NC%" "%NW%\driver\autobad.cfg" >nul
+>> "%NW%\driver\autobad.cfg" echo defines_auto = maybe
+call :native_err "native: invalid defines_auto is an error" "defines_auto" autobad.cfg
 call :has "%NW%\info.log" "native rewrite int=24 int_dropped=7 short_added=6 asm=4 asm_files=1" "native: legacy assembly is counted on cache reuse"
 "%RS%" run --cfg "%NC%" "%NW%\csv\native_legacy.csv" -o "%NW%\out_legacy" > "%NW%\legacy.log" 2>&1
 set RC=%ERRORLEVEL%
@@ -338,7 +346,7 @@ call :has "%NW%\info2.log" "compiled=1 reused=6 linked=1" "native: a changed hea
 "%RS%" info --cfg "%NC%" > "%NW%\info3.log" 2>&1
 call :has "%NW%\info3.log" "compiled=6 reused=1 linked=1" "native: a header used by every source recompiles them all"
 "%RS%" run --cfg "%NC%" "%NW%\csv\native_basic.csv" -o "%NW%\out2" > "%NW%\again.log" 2>&1
-call :has "%NW%\again.log" "OK 17, NG 0, NO Check 0" "native: all rows are OK after the rebuild"
+call :has "%NW%\again.log" "OK 18, NG 0, NO Check 0" "native: all rows are OK after the rebuild"
 
 rem a header of the same name appears earlier in the search order (next to the source that includes it)
 copy /y "%NW%\product\inc\reg.h" "%NW%\product\src\reg.h" >nul
@@ -371,7 +379,7 @@ call :has "%NW%\vars_rel.log" "OK 11, NG 0, NO Check 0" "native: file names reso
 copy /y "%NC%" "%NW%\driver\opt2.cfg" >nul
 >> "%NW%\driver\opt2.cfg" echo native_opt = 2
 "%RS%" run --cfg "%NW%\driver\opt2.cfg" "%NW%\csv\native_basic.csv" -o "%NW%\out_opt2" > "%NW%\opt2.log" 2>&1
-call :has "%NW%\opt2.log" "OK 17, NG 0, NO Check 0" "native: optimization 2 keeps basic results"
+call :has "%NW%\opt2.log" "OK 18, NG 0, NO Check 0" "native: optimization 2 keeps basic results"
 rem with optimization 2 clang copies the 16-byte arrays with movaps, so the substitutes must be 16-byte aligned
 "%RS%" run --cfg "%NW%\driver\opt2.cfg" "%NW%\csv\native_asmcall.csv" -o "%NW%\out_opt2_asmcall" > "%NW%\opt2_asmcall.log" 2>&1
 call :has "%NW%\opt2_asmcall.log" "OK 6, NG 0, NO Check 0" "native: optimization 2 keeps substitute variables aligned"
@@ -381,7 +389,7 @@ call :native_err "native: invalid optimization is an error" "native_opt" opt3.cf
 copy /y "%NC%" "%NW%\driver\oldfn.cfg" >nul
 >> "%NW%\driver\oldfn.cfg" echo native_func = u8 f(void)
 "%RS%" run --cfg "%NW%\driver\oldfn.cfg" "%NW%\csv\native_basic.csv" -o "%NW%\out_oldfn" > "%NW%\oldfn.log" 2>&1
-call :has "%NW%\oldfn.log" "OK 17, NG 0, NO Check 0" "native: obsolete function setting is ignored"
+call :has "%NW%\oldfn.log" "OK 18, NG 0, NO Check 0" "native: obsolete function setting is ignored"
 call :has "%NW%\oldfn.log" "native_func" "native: obsolete function setting warns"
 
 rem An unmapped address fails only its row; the next row still runs.

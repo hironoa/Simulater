@@ -35,3 +35,6 @@ mod,io_read_adc,RAM by address,1,1
 mod,DRV_add3,driver from native_src,3,1
 #COMMENT,@a,@b,@c,DRV_add3@@
 ,1,2,3,6
+mod,DRV_set_port,register from native_src header,1,1
+#COMMENT,@v,DRV_PORT
+,0xA5,0xA5

@@ -259,6 +259,20 @@ static void collect_path(defs *d, const char *s)
     free(p);
 }
 static int path_cmp(const void *a,const void *b) { return strcmp(*(char *const *)a,*(char *const *)b); }
+/* native_src のフォルダは直下だけを起点にする。defines_recursive には従わない */
+static void collect_native_path(defs *d,const char *s)
+{
+    char *p=sim_cfg_path(&d->cfg,s);
+    int kind=sim_path_kind(p),recursive=d->recursive;
+    d->recursive=0;
+    if (kind==2) {
+        walk w={d,p,NULL,0}; if (sim_dir_each(p,visit_file,&w)) d->error=1;
+    } else if (kind==1) add_file(d,p);
+    else d->error=1;
+    d->recursive=recursive;
+    if (d->error) snprintf(d->err,d->cap,"native_src: パス %s を読めません",p);
+    free(p);
+}
 
 /* Detect each complete file independently. Reject overlong UTF-8, surrogates,
    truncated sequences and code points beyond U+10FFFF. */
@@ -1832,6 +1846,8 @@ int sim_defines_load(sim_ctx *c,const sim_open_opts *o,char *err,size_t cap)
     defs d; char *path; int rc,i,kind; size_t k; uint64_t t0=sim_now_ns(),t1; sim_buf info;
     sim_mtpj mtpj; char *mtpj_path=NULL; int have_mtpj=0;
     unsigned n_implicit=0,n_mtpj=0,n_cfg=0,n_cli=0,n_cundef=0;
+    int auto_scope=0,native;
+    unsigned roots_mtpj=0,roots_native_src=0,scope_native_incs=0;
     sim_buf scope_missing; unsigned scope_nmissing=0,scope_other=0,scope_skipped=0,scope_cfg_incs=0;
     memset(&d,0,sizeof d); d.ctx=c; d.err=err; d.cap=cap; d.verbose=o->verbose;
     d.env.lookup=lookup_cb; d.env.ctx=&d;
@@ -1844,6 +1860,10 @@ int sim_defines_load(sim_ctx *c,const sim_open_opts *o,char *err,size_t cap)
     d.recursive=onoff(&d,"defines_recursive",1); d.guess=onoff(&d,"defines_guess_bits",1);
     d.char_unsigned=onoff(&d,"char_unsigned",0); d.near_base=0xF0000;
     d.cond=onoff(&d,"defines_cond",1);
+    native=exec_native(&d,o);
+    /* exec = native だけ: defines_scope がなく defines_auto が on なら、コンパイルするソースから読む（自動の範囲） */
+    if (native) auto_scope=onoff(&d,"defines_auto",1) && !sim_cfg_get(&d.cfg,"defines_scope");
+    if (auto_scope) d.scope=1;
     { const char *s=sim_cfg_get(&d.cfg,"defines_scope");
       if (s && !strcmp(s,"mtpj")) d.scope=1;
       else if (s && strcmp(s,"folder")) { snprintf(err,cap,"defines_scope = %s は読めません（folder: defines のフォルダの下すべて、mtpj: プロジェクトに登録されたファイルと #include でたどれるファイル）",s); d.error=1; } }
@@ -1865,7 +1885,7 @@ int sim_defines_load(sim_ctx *c,const sim_open_opts *o,char *err,size_t cap)
                 for (i=0;i<mtpj.nundefs && !d.error;i++) add_cundef(&d,mtpj.undefs[i],"mtpj の定義解除マクロ");
             }
         } else if (mode) { snprintf(err,cap,"mtpj_mode は mtpj = パス と一緒に指定してください"); d.error=1; }
-        if (!d.error && d.scope && !have_mtpj) { snprintf(err,cap,"defines_scope = mtpj は mtpj = パス と一緒に指定してください"); d.error=1; }
+        if (!d.error && d.scope && !auto_scope && !have_mtpj) { snprintf(err,cap,"defines_scope = mtpj は mtpj = パス と一緒に指定してください"); d.error=1; }
     }
     for (i=0;i<d.cfg.n && !d.error;i++) if (!strcmp(d.cfg.e[i].key,"cdef")) add_cdef(&d,d.cfg.e[i].value,ORIGIN_CFG,"cdef");
     for (i=0;i<o->ncdefs && !d.error;i++) add_cdef(&d,o->cdefs[i],ORIGIN_CLI,"--cdef");
@@ -1878,8 +1898,8 @@ int sim_defines_load(sim_ctx *c,const sim_open_opts *o,char *err,size_t cap)
     for (i=0;i<o->ndefines && !d.error;i++) collect_path(&d,o->defines[i]);
     if (!d.error && d.scope) {
         /* 登録ファイルとインクルード・パスは mtpj のフォルダから見る */
-        const char *mb=sim_basename(mtpj_path);
-        char *mdir=mb>mtpj_path ? sim_xstrndup(mtpj_path,(size_t)(mb-mtpj_path)) : sim_xstrdup(".");
+        const char *mb=mtpj_path?sim_basename(mtpj_path):NULL;
+        char *mdir=mb && mb>mtpj_path ? sim_xstrndup(mtpj_path,(size_t)(mb-mtpj_path)) : sim_xstrdup(".");
         for (i=0;i<mtpj.nfiles;i++) {
             char *joined, *full;
             size_t before=d.nfiles;
@@ -1890,10 +1910,17 @@ int sim_defines_load(sim_ctx *c,const sim_open_opts *o,char *err,size_t cap)
             else { if (scope_nmissing<20 || d.verbose) sim_buf_printf(&scope_missing,"  見つからない登録ファイル: %s\n",full); scope_nmissing++; }
             free(full);
         }
+        roots_mtpj=d.scope_registered;
+        for (i=0;i<d.cfg.n && !d.error;i++) if (auto_scope && !strcmp(d.cfg.e[i].key,"native_src")) {
+            size_t before=d.nfiles;
+            collect_native_path(&d,d.cfg.e[i].value);
+            roots_native_src+=(unsigned)(d.nfiles-before);
+        }
         for (i=0;i<mtpj.nincs+d.cfg.n;i++) {
             char *joined, *full;
             if (i<mtpj.nincs) joined=absolute_path(mtpj.incs[i]) ? sim_xstrdup(mtpj.incs[i]) : sim_path_join(mdir,mtpj.incs[i]);
             else if (!strcmp(d.cfg.e[i-mtpj.nincs].key,"defines_include")) { joined=sim_cfg_path(&d.cfg,d.cfg.e[i-mtpj.nincs].value); scope_cfg_incs++; }
+            else if (auto_scope && !strcmp(d.cfg.e[i-mtpj.nincs].key,"native_include")) { joined=sim_cfg_path(&d.cfg,d.cfg.e[i-mtpj.nincs].value); scope_native_incs++; }
             else continue;
             full=normal_path(joined); free(joined);
             d.incdirs=sim_xrealloc(d.incdirs,(d.nincdirs+1)*sizeof *d.incdirs);
@@ -1912,7 +1939,7 @@ int sim_defines_load(sim_ctx *c,const sim_open_opts *o,char *err,size_t cap)
     }
     sim_ctx_refresh_symbols(c);
     sim_buf_init(&info);
-    if (!d.error && (d.nfiles || d.explicit_vars || have_mtpj || n_cfg || n_cli)) {
+    if (!d.error && (d.nfiles || d.explicit_vars || have_mtpj || n_cfg || n_cli || auto_scope)) {
         size_t limit=d.verbose?(size_t)-1:20;
         sim_buf_adds(&info,"== ヘッダの定義\n");
         info_item(&info,"読んだファイル","%zu 個（%.2f 秒）",d.nfiles,(double)(sim_now_ns()-t0)/1e9);
@@ -1938,15 +1965,22 @@ int sim_defines_load(sim_ctx *c,const sim_open_opts *o,char *err,size_t cap)
         }
         if (d.scope) {
             size_t j;
-            sim_buf_adds(&info,"\n== 読む範囲（defines_scope = mtpj）\n");
-            info_item(&info,"プロジェクト","%s（ビルド・モード %s）",mtpj_path,mtpj.modes[mtpj.mode]);
-            info_item(&info,"登録ファイル","%d 個（読んだ %u、.h / .c / .inc 以外 %u、ビルド対象外 %d、除外 %u、見つからない %u）",
-                mtpj.files_total,d.scope_registered,scope_other,mtpj.files_off,scope_skipped,scope_nmissing);
-            sim_buf_adds(&info,sim_buf_cstr(&scope_missing));
-            if (scope_nmissing>20 && !d.verbose) sim_buf_printf(&info,"  …ほか %u 個（--verbose で全部を表示）\n",scope_nmissing-20);
+            sim_buf_adds(&info,auto_scope?"\n== 読む範囲（自動）\n":"\n== 読む範囲（defines_scope = mtpj）\n");
+            if (auto_scope) {
+                info_item(&info,"読む範囲","exec = native のため、コンパイルするソースとそのヘッダーを自動で読みます（defines_auto = off で止められます）");
+                info_item(&info,"起点のファイル","mtpj から %u 個、native_src から %u 個",roots_mtpj,roots_native_src);
+            }
+            if (have_mtpj) {
+                info_item(&info,"プロジェクト","%s（ビルド・モード %s）",mtpj_path,mtpj.modes[mtpj.mode]);
+                info_item(&info,"登録ファイル","%d 個（読んだ %u、.h / .c / .inc 以外 %u、ビルド対象外 %d、除外 %u、見つからない %u）",
+                    mtpj.files_total,d.scope_registered,scope_other,mtpj.files_off,scope_skipped,scope_nmissing);
+                sim_buf_adds(&info,sim_buf_cstr(&scope_missing));
+                if (scope_nmissing>20 && !d.verbose) sim_buf_printf(&info,"  …ほか %u 個（--verbose で全部を表示）\n",scope_nmissing-20);
+            }
             info_item(&info,"#include から足した","%u 個",d.scope_added);
             info_item(&info,"インクルード・パス","%zu 個（mtpj %d、defines_include %u）",d.nincdirs,mtpj.nincs,scope_cfg_incs);
-            if (d.verbose || !mtpj.inc_element) sim_buf_printf(&info,"  mtpj の要素: <%s>\n",mtpj.inc_element?mtpj.inc_element:"AdditionalIncludePaths（要素なし）");
+            if (auto_scope) info_item(&info,"native_include","%u 個",scope_native_incs);
+            if (have_mtpj && (d.verbose || !mtpj.inc_element)) sim_buf_printf(&info,"  mtpj の要素: <%s>\n",mtpj.inc_element?mtpj.inc_element:"AdditionalIncludePaths（要素なし）");
             for (j=0;j<d.nincdirs;j++) {
                 int exists=sim_path_kind(d.incdirs[j])==2;
                 if (!exists || d.verbose) sim_buf_printf(&info,"  %s%s\n",d.incdirs[j],exists?"":"（フォルダがありません）");
@@ -1955,7 +1989,7 @@ int sim_defines_load(sim_ctx *c,const sim_open_opts *o,char *err,size_t cap)
                 info_item(&info,"名前で探した #include","%u 箇所",d.scope_fallback);
                 sim_buf_adds(&info,"  ※ 名前で探した #include は、インクルード・パスの順では見つからなかったものです。パスが足りなければ defines_include で足せます\n");
             }
-            sim_buf_adds(&info,"  ※ ビルド対象の判定とインクルード・パスの書式は実例からの推定です。CS+ の画面と見比べてください\n");
+            if (have_mtpj) sim_buf_adds(&info,"  ※ ビルド対象の判定とインクルード・パスの書式は実例からの推定です。CS+ の画面と見比べてください\n");
         }
         sim_buf_adds(&info,"\n== コンパイルスイッチ\n");
         if (have_mtpj && !d.scope) info_item(&info,"プロジェクト","%s（ビルド・モード %s）",mtpj_path,mtpj.modes[mtpj.mode]);
@@ -2027,6 +2061,7 @@ int sim_defines_load(sim_ctx *c,const sim_open_opts *o,char *err,size_t cap)
             }
         }
         sim_buf_adds(&info,"\n== 詳細（数値）\n");
+        if (native) sim_buf_printf(&info,"defines auto=%d roots_mtpj=%u roots_native_src=%u\n",auto_scope,roots_mtpj,roots_native_src);
         sim_buf_printf(&info,"defines files=%zu variables=%u bits=%u arrays=%u guessed=%u unresolved=%u duplicates=%u pointer-skipped=%u value-excluded=%u (%.3f s)\n",d.nfiles,d.variables,d.bits,d.arrays,d.guessed,d.unresolved,d.duplicates,d.pointers,d.values,(double)(sim_now_ns()-t0)/1e9);
         if (d.nfiles) {
             sim_buf_printf(&info,"defines time: scan=%.3f s read=%.3f s cond=%.3f s resolve=%.3f s (%.1f MB, %zu directives)\n",
