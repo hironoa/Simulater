@@ -108,7 +108,7 @@ typedef struct {
     int ncdefs;
     const char *mtpj_path;   /* --mtpj: CS+ のプロジェクトファイル。NULL なら設定ファイルの mtpj= */
     const char *csv_init;    /* CLI override: auto / once / every */
-    const char *exec;        /* --exec: interp / xlate / verify。NULL なら設定ファイルの exec=（既定 interp） */
+    const char *exec;        /* --exec: interp / xlate / verify / native。NULL なら設定ファイルの exec=（既定 interp） */
     int quiet_xlate;         /* 1 なら変換方式の経過（実行方式、変換の進み具合）を表示しない */
     int lmf_names;
     int trace_startup;       /* スタートアップを単命令で診断 */

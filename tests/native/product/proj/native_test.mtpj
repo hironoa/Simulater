@@ -1,0 +1,67 @@
+<CubeSuiteProject>
+  <!-- テスト用の合成データ（PC 用 DLL の方式 exec = native の試験）。tests/defines_scope/proj/scope_test.mtpj と同じく、
+       tests/ca78k0r_probe/ca78k0r_probe.mtpj（CS+ 5.02、CA78K0R V1.60）の構造を写したもので、CS+ が保存した実物ではない。
+       登録ファイル: calc.c と io.c（ビルド対象）、broken.c（ビルド対象外）、startup.asm（アセンブラ）。
+       定義マクロ: GAIN=3。定義解除マクロ: FEATURE_X。インクルード・パス: ..\inc。 -->
+  <ProductVersion>5.02.00.00</ProductVersion>
+  <Class Guid="68f4a651-b9cd-473b-a595-b00447132ffa">
+    <Instance Guid="b0000000-0000-0000-0000-000000000001">
+      <Name>calc.c</Name>
+      <Type>File</Type>
+      <RelativePath>..\src\calc.c</RelativePath>
+      <ParentItem>f072d5ef-98af-4a13-9020-57d2f1b830e1</ParentItem>
+    </Instance>
+    <Instance Guid="b0000000-0000-0000-0000-000000000002">
+      <Name>io.c</Name>
+      <Type>File</Type>
+      <RelativePath>..\src\io.c</RelativePath>
+      <ParentItem>f072d5ef-98af-4a13-9020-57d2f1b830e1</ParentItem>
+    </Instance>
+    <Instance Guid="b0000000-0000-0000-0000-000000000003">
+      <Name>broken.c</Name>
+      <Type>File</Type>
+      <RelativePath>..\src\broken.c</RelativePath>
+      <ParentItem>f072d5ef-98af-4a13-9020-57d2f1b830e1</ParentItem>
+    </Instance>
+    <Instance Guid="b0000000-0000-0000-0000-000000000004">
+      <Name>startup.asm</Name>
+      <Type>File</Type>
+      <RelativePath>..\src\startup.asm</RelativePath>
+      <ParentItem>f072d5ef-98af-4a13-9020-57d2f1b830e1</ParentItem>
+    </Instance>
+  </Class>
+  <Class Guid="11ff4962-ca73-4419-bb4a-67e9b8de9571">
+    <Instance Guid="11ff4962-ca73-4419-bb4a-67e9b8de9571">
+      <DataFormatVersion>1.1</DataFormatVersion>
+      <BuildModeCount>1</BuildModeCount>
+      <BuildMode0>RABlAGYAYQB1AGwAdABCAHUAaQBsAGQA</BuildMode0>
+      <CurrentBuildMode>DefaultBuild</CurrentBuildMode>
+      <SourceItemGuid0>b0000000-0000-0000-0000-000000000001</SourceItemGuid0>
+      <SourceItemType0>CSource</SourceItemType0>
+      <SourceItemGuid1>b0000000-0000-0000-0000-000000000002</SourceItemGuid1>
+      <SourceItemType1>CSource</SourceItemType1>
+      <SourceItemGuid2>b0000000-0000-0000-0000-000000000003</SourceItemGuid2>
+      <SourceItemType2>CSource</SourceItemType2>
+      <SourceItemGuid3>b0000000-0000-0000-0000-000000000004</SourceItemGuid3>
+      <SourceItemType3>AsmSource</SourceItemType3>
+      <SourceItemCount>4</SourceItemCount>
+    </Instance>
+    <Instance Guid="86700a2f-4f2c-4aec-8af7-7d69ad94a4a1">
+      <MacroDefinitions-0>GAIN=3
+</MacroDefinitions-0>
+      <MacroUndefinitions-0>FEATURE_X
+</MacroUndefinitions-0>
+      <AdditionalIncludePaths-DefaultValue />
+      <AdditionalIncludePaths-0>..\inc
+</AdditionalIncludePaths-0>
+    </Instance>
+  </Class>
+  <Class Guid="78a5c5cd-76cb-4bcc-a031-3020011fbc9a">
+    <Instance Guid="fc999d8f-43d6-4cb3-af4b-cf6891d759fb">
+      <SourceItem0-BuildingTarget-0>True</SourceItem0-BuildingTarget-0>
+      <SourceItem1-BuildingTarget-0>True</SourceItem1-BuildingTarget-0>
+      <SourceItem2-BuildingTarget-0>False</SourceItem2-BuildingTarget-0>
+      <SourceItem3-BuildingTarget-0>True</SourceItem3-BuildingTarget-0>
+    </Instance>
+  </Class>
+</CubeSuiteProject>

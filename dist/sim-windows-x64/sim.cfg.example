@@ -109,3 +109,19 @@ max_insns = 100000000
 # xlate_dir = D:\work\simxl
 # xlate のコンパイルの並列数（既定は CPU の数）
 # xlate_jobs = 4
+
+# PC 用 DLL の方式（作成中。Windows だけ）。製品の C のソースを clang で PC 用にコンパイルした DLL を呼ぶ。
+# ロードモジュール（abs）は使わない。README の「製品の C ソースを PC 用にコンパイルして実行する方式」を参照
+# exec = native
+# 製品のプロジェクト（ビルド対象の .c、インクルード・パス、定義マクロを読む）は、上の mtpj = で指定する
+# 製品とは別に管理する .c（ドライバ、スタブ）。ファイルかフォルダ（直下の .c）。複数行可
+# native_src = .
+# インクルード・パスを足す（複数行可）
+# native_include = ../stub/inc
+# 呼ぶ関数（複数行可）。型は void / s8 / u8 / s16 / u16 / s32 / u32 / ptr、引数は 8 個まで
+# native_func = s16 calc_add(s16 a, s16 b)
+# native の clang（既定は xlate_cc、環境変数 SIM_XLATE_CC、PATH の clang の順）
+# native_cc = C:\tools\clang+llvm-18.1.8-x86_64-pc-windows-msvc\bin\clang.exe
+# native のコンパイル結果を置くフォルダ（既定はこのファイルの隣の .simnative）と、コンパイルの並列数
+# native_dir = D:\work\simnative
+# native_jobs = 4

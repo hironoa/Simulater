@@ -209,6 +209,49 @@ sim run --exec xlate --abs X.lmf テスト.csv        （または sim.cfg に e
 - clang を起動できない、コンパイルに失敗した、といった場合は理由を表示して解釈実行のまま続けます（結果には影響しません）。
 - `rom_size` を指定していなければ、0xF0000 より下（コードフラッシュ）を書き込み禁止として扱います（プログラムからの書き込みを無視）。
 
+## 製品の C ソースを PC 用にコンパイルして実行する方式（exec = native、作成中）
+
+ロードモジュールを使わず、製品の C のソースを clang で PC 用にコンパイルした DLL を呼ぶ方式です。RL78 の命令を再現しない
+ので速い代わりに、実機と同じ結果にはなりません（下の「変わること」）。**いまは土台だけ（段階 1）で、Windows でだけ動きます。**
+変数を名前で読み書きする、スタブの切り替え、GUI は、これから足します。
+
+```ini
+# sim.cfg（ドライバやスタブの側に置く）
+exec = native
+mtpj = ../product/project.mtpj          # 製品のプロジェクト。入れ替えるときはここだけ変える
+native_src = .                          # 製品とは別に管理する .c（ドライバ、スタブ）。ファイルかフォルダ。複数行可
+native_func = s16 calc_add(s16 a, s16 b)   # 呼ぶ関数。型は void / s8 / u8 / s16 / u16 / s32 / u32 / ptr
+native_cc = C:\tools\clang+llvm-18.1.8-x86_64-pc-windows-msvc\bin\clang.exe
+```
+
+```
+sim info --cfg sim.cfg                  ソースの数、アセンブラの一覧、DLL の場所、呼べる関数
+sim run  --cfg sim.cfg テスト.csv -o result
+```
+
+- **必要なもの**: clang（変換方式と同じく、LLVM の配布物を展開したもので可。Windows SDK は要りません）と、
+  `sim` の実行ファイルの隣の `native` フォルダ（配布物に入っています）。`native_cc` を書かなければ `xlate_cc`、
+  環境変数 `SIM_XLATE_CC`、PATH の `clang` の順に探します。
+- **コンパイルするもの**: mtpj の登録ファイルのうちビルド対象の `.c` と、`native_src` の `.c`。インクルード・パスと
+  定義マクロは mtpj から取ります（`native_include`、`cdef`、`cundef` で足せます）。`.asm` はコンパイルせず、
+  `sim info` に一覧を出します。
+- **初回と 2 回目以降**: 初回に全部コンパイルして DLL を作ります。結果は `sim.cfg` の隣の `.simnative` フォルダに置き、
+  次からは、変わったソース（インクルードしているヘッダーが変わったものを含む）だけコンパイルし直します。
+  フォルダごと消しても構いません。場所は `native_dir`、並列数は `native_jobs` で変えられます。
+- **CA78K0R 独自の書き方**: `__far`、`sreg`、`callt`、`norec`、`boolean`、`bit`、`DI()` などは、sim が各ソースの先頭に
+  差し込むヘッダーで吸収します。製品のソースは書き換えません。
+- **番地**: 0xF0000〜0xFFFFF は同じ番地にメモリを確保するので、`#define REG (*(volatile unsigned char *)0xFFF01)` の形の
+  レジスタや、番地を直接書いた RAM がそのまま動きます。CSV では `0xFFF01:1` の形で読み書きできます。
+  **0x10000 より下の番地は再現できません**（読み書きすると、その番地を表示して止まります）。
+- **変わること**: `int` は 16 ビットに読み替えますが、計算の途中の桁は PC の規則（32 ビット）になります。
+  `unsigned short` の 40000 + 40000 を比較に使うと、マイコンでは 14464、PC では 80000 です。ポインタは 64 ビット、
+  構造体のすき間とビットフィールドの並びは clang のものです。実行クロック数は出ません。
+- **まだできないこと**: `#asm`〜`#endasm` のあるソース、`short int` / `long int` という書き方、標準ヘッダー
+  （`string.h` など）は、コンパイルエラーになります。エラーのときはコンパイラの出力の場所（`cc.log`）を表示して、
+  終了コード 2 で止まります（解釈実行には切り替えません）。
+
+仕組みは [docs/DESIGN.md](docs/DESIGN.md#43-pc-用-dll-の方式exec--native) を参照。
+
 ## 設定ファイル sim.cfg
 
 `--cfg` で指定したファイルを優先する。指定がなければ、ロードモジュール（`.abs` / `.lmf`）と同じフォルダの `sim.cfg`、
@@ -227,6 +270,7 @@ sim run --exec xlate --abs X.lmf テスト.csv        （または sim.cfg に e
 | `stub_auto = on` | `AMSTB_<関数名>` がある関数をすべて置換する |
 | `core = auto \| S1 \| S2 \| S3` | CPU コア種別。品種が分からなければ `auto`（既定） |
 | `cpu_hz` | CPU クロック。結果 CSV の実行時間の換算に使う |
+| `exec` | 実行方式。`interp`（既定）/ `xlate` / `verify` / `native`（作成中） |
 | `init_end` | 初期設定終了アドレス（既定 `main`） |
 | `func` | GUI の既定の周期関数 |
 | `halt` / `stop` | HALT / STOP 命令を読み飛ばすか、エラーにするか |

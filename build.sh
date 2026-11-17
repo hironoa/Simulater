@@ -27,15 +27,15 @@ esac
 S="$ROOT/runtime/src"
 # -fno-unroll-loops: clang 20 の素の -O2 は x86-64 で命令実行ループを約 10 倍遅くする（Windows で 27 → 254 百万命令/秒）
 CFLAGS="-std=c11 -O2 -fno-unroll-loops -g -Wall -Wextra -D_DEFAULT_SOURCE -I$ROOT/runtime/include -I$S"
-COMMON="$S/sim_main.c $S/sim_util.c $S/sim_json.c $S/sim_platform.c $S/sim_expr.c $S/sim_csv.c $S/sim_gui.c $S/sim_cfg.c $S/sim_defines.c $S/sim_ppexpr.c $S/sim_mtpj.c"
+COMMON="$S/sim_main.c $S/sim_util.c $S/sim_json.c $S/sim_platform.c $S/sim_expr.c $S/sim_csv.c $S/sim_gui.c $S/sim_cfg.c $S/sim_defines.c $S/sim_ppexpr.c $S/sim_mtpj.c $S/sim_cc.c"
 
 if [ "$MODE" = "mock" ]; then
     SRCS="$COMMON $ROOT/runtime/backends/mock/mock_backend.c"
 else
     B="$ROOT/runtime/backends/rl78"
-    CFLAGS="$CFLAGS -I$ROOT/rl78/include -I$B"
+    CFLAGS="$CFLAGS -I$ROOT/rl78/include -I$B -I$ROOT/runtime/backends/native"
     SRCS="$COMMON $B/rl78_backend.c $B/rl78_xl.c $B/rl78_abi.c $B/rl78_lmf.c $B/rl78_sym.c $B/rl78_elf.c $B/rl78_dwarf.c $B/rl78_map.c \
-$ROOT/rl78/src/rl78_exec.c $ROOT/rl78/src/rl78_sys.c $ROOT/rl78/src/rl78_disasm.c $ROOT/rl78/src/rl78_xlate.c"
+$ROOT/rl78/src/rl78_exec.c $ROOT/rl78/src/rl78_sys.c $ROOT/rl78/src/rl78_disasm.c $ROOT/rl78/src/rl78_xlate.c $ROOT/runtime/backends/native/native_backend.c"
 fi
 
 echo "build.sh: $CC で $OUT/sim をビルドします（バックエンド: ${MODE}）"
@@ -54,5 +54,8 @@ if [ "$MODE" != "mock" ]; then
     mkdir -p "$OUT/xlate"
     cp "$ROOT/rl78/include/rl78.h" "$ROOT/rl78/src/rl78_internal.h" "$ROOT/rl78/src/rl78_exec_defs.h" \
        "$ROOT/rl78/src/rl78_exec_ops.inc" "$ROOT/rl78/src/rl78_xlate_rt.h" "$OUT/xlate/"
+    # PC 用 DLL の方式（exec = native）が clang に渡すファイル
+    mkdir -p "$OUT/native"
+    cp "$ROOT/runtime/backends/native/rt/sim_native_pre.h" "$ROOT/runtime/backends/native/rt/sim_native_rt.c" "$OUT/native/"
 fi
 echo "build.sh: 完了 -> $OUT/sim"

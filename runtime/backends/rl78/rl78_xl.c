@@ -24,6 +24,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "sim_cc.h"
 #include "sim_platform.h"
 #include "sim_util.h"
 
@@ -69,14 +70,6 @@ struct rl78_xl {
 
 /* ---- 小物 ---- */
 
-static uint64_t fnv(uint64_t h, const void *data, size_t n)
-{
-    const unsigned char *p = data;
-    size_t i;
-    for (i = 0; i < n; i++) { h ^= p[i]; h *= 1099511628211ULL; }
-    return h;
-}
-
 static int bit(const uint8_t *m, uint32_t a) { return (m[a >> 3] >> (a & 7u)) & 1; }
 static void setbit(uint8_t *m, uint32_t a) { m[a >> 3] |= (uint8_t)(1u << (a & 7u)); }
 
@@ -119,21 +112,6 @@ static void say(rl78_xl *x, const char *fmt, ...)
 
 /* ---- コンパイラ ---- */
 
-static int run_wait(const char *const *argv, const char *log)
-{
-    sim_proc *p = sim_proc_spawn(argv, log);
-    return p ? sim_proc_wait(p) : -1;
-}
-
-static int cc_works(const char *cc)
-{
-    const char *argv[3];
-    argv[0] = cc;
-    argv[1] = "--version";
-    argv[2] = NULL;
-    return run_wait(argv, NULL) == 0;
-}
-
 /* 1 つの .c をコンパイルする引数を作る（argv は 24 個以上の配列） */
 static void compile_args(rl78_xl *x, const char **argv, const char *src, const char *obj)
 {
@@ -160,57 +138,6 @@ static void compile_args(rl78_xl *x, const char **argv, const char *src, const c
 }
 
 /* ---- キャッシュ ---- */
-
-typedef struct { const char *dir; const char *keep; sim_buf names; } sweep_t;
-
-static void sweep_visit(void *ctx, const char *name, int kind)
-{
-    sweep_t *s = ctx;
-    (void)kind;
-    sim_buf_adds(&s->names, name);
-    sim_buf_addc(&s->names, '\n');
-}
-
-static void remove_tree_files(const char *dir)
-{
-    sweep_t s;
-    char *p, *q;
-    s.dir = dir;
-    s.keep = NULL;
-    sim_buf_init(&s.names);
-    sim_dir_each(dir, sweep_visit, &s);
-    for (p = (char *)sim_buf_cstr(&s.names); p && *p; p = q ? q + 1 : NULL) {
-        char *f;
-        q = strchr(p, '\n');
-        if (q) *q = 0;
-        f = join(dir, p);
-        sim_remove_file(f);
-        free(f);
-    }
-    sim_buf_free(&s.names);
-    sim_remove_dir(dir);
-}
-
-/* base の下の「prefix で始まり keep ではない」フォルダ（古い鍵のキャッシュ）を消す */
-static void sweep_old(const char *base, const char *prefix, const char *keep)
-{
-    sweep_t s;
-    char *p, *q;
-    s.dir = base;
-    s.keep = keep;
-    sim_buf_init(&s.names);
-    sim_dir_each(base, sweep_visit, &s);
-    for (p = (char *)sim_buf_cstr(&s.names); p && *p; p = q ? q + 1 : NULL) {
-        q = strchr(p, '\n');
-        if (q) *q = 0;
-        if (!strncmp(p, prefix, strlen(prefix)) && strcmp(p, keep)) {
-            char *d = join(base, p);
-            if (sim_path_kind(d) == 2) remove_tree_files(d);
-            free(d);
-        }
-    }
-    sim_buf_free(&s.names);
-}
 
 static void load_entries(rl78_xl *x)
 {
@@ -269,7 +196,7 @@ static int load_current(rl78_xl *x)
 rl78_xl *rl78_xl_open(rl78_cpu *cpu, const rl78_xl_opts *o)
 {
     rl78_xl *x = sim_xcalloc(1, sizeof *x);
-    uint64_t key = 1469598103934665603ULL;
+    uint64_t key = SIM_CC_FNV_INIT;
     char keytext[64], *base = NULL, *absdir, *sub;
     const char *absname;
     uint8_t *rom;
@@ -296,13 +223,13 @@ rl78_xl *rl78_xl_open(rl78_cpu *cpu, const rl78_xl_opts *o)
     rom = x->rom = sim_xmalloc(x->rom_size);
     x->dirty = sim_xcalloc(0x100000 / 8, 1);
     rl78_peek(cpu, 0, rom, x->rom_size);
-    key = fnv(key, rom, x->rom_size);
-    key = fnv(key, &x->rom_size, sizeof x->rom_size);
-    key = fnv(key, o->core_desc ? o->core_desc : "", o->core_desc ? strlen(o->core_desc) : 0);
+    key = sim_cc_fnv(key, rom, x->rom_size);
+    key = sim_cc_fnv(key, &x->rom_size, sizeof x->rom_size);
+    key = sim_cc_fnv(key, o->core_desc ? o->core_desc : "", o->core_desc ? strlen(o->core_desc) : 0);
     {   /* 変換したコードは、素の RAM の範囲をページの表を引かずに読み書きする。範囲が違えば別のコードになる */
         uint32_t plain[2];
         rl78_xl_plain_range(cpu, &plain[0], &plain[1]);
-        key = fnv(key, plain, sizeof plain);
+        key = sim_cc_fnv(key, plain, sizeof plain);
     }
     for (i = 0; RT_FILES[i]; i++) {
         char *p = join(x->rt_dir, RT_FILES[i]), *t;
@@ -313,11 +240,11 @@ rl78_xl *rl78_xl_open(rl78_cpu *cpu, const rl78_xl_opts *o)
             free(p);
             return x;
         }
-        key = fnv(key, t, n);
+        key = sim_cc_fnv(key, t, n);
         free(t);
         free(p);
     }
-    key = fnv(key, DLL_EXT, sizeof DLL_EXT);
+    key = sim_cc_fnv(key, DLL_EXT, sizeof DLL_EXT);
     snprintf(keytext, sizeof keytext, "%016llx", (unsigned long long)key);
 
     /* フォルダ: 指定がなければロードモジュールの隣の .simxl */
@@ -339,7 +266,7 @@ rl78_xl *rl78_xl_open(rl78_cpu *cpu, const rl78_xl_opts *o)
         sub = sim_xstrdup(sim_buf_cstr(&nm));
         sim_buf_adds(&nm, keytext);
         x->dir = join(base, sim_buf_cstr(&nm));
-        if (sim_path_kind(base) == 2) sweep_old(base, sub, sim_buf_cstr(&nm));
+        if (sim_path_kind(base) == 2) sim_cc_sweep_old(base, sub, sim_buf_cstr(&nm));
         sim_buf_free(&nm);
         free(sub);
     }
@@ -391,80 +318,13 @@ void rl78_xl_resume(rl78_xl *x)
 
 /* ---- 変換してコンパイルする ---- */
 
+/* 1 つのコンパイル: ソース、オブジェクト、コンパイラの引数 */
 typedef struct {
     char *src, *obj;
-    sim_proc *proc;
-    uint64_t started, elapsed;
-    int compiled;
+    const char *argv[24];
 } job_t;
 
-static void compile_progress(rl78_xl *x, job_t **slots, size_t nslots,
-                             size_t done, size_t total, uint64_t start, uint64_t now)
-{
-    job_t *top[3] = {NULL, NULL, NULL};
-    size_t i, j, running = 0;
-    sim_buf line;
-    /* 長く動いているものを先に見せ、止まって見える原因を探しやすくする */
-    for (i = 0; i < nslots; i++) {
-        job_t *job = slots[i];
-        if (!job) continue;
-        running++;
-        for (j = 0; j < 3; j++) {
-            if (!top[j] || job->started < top[j]->started) {
-                size_t k;
-                for (k = 2; k > j; k--) top[k] = top[k - 1];
-                top[j] = job;
-                break;
-            }
-        }
-    }
-    sim_buf_init(&line);
-    sim_buf_printf(&line, "変換: コンパイル中 %u/%u ファイル（経過 %.0f 秒。実行中: ",
-                   (unsigned)done, (unsigned)total, (double)((now - start) / 1000000000ULL));
-    for (i = 0; i < 3 && top[i]; i++)
-        sim_buf_printf(&line, "%s%s %.0f 秒", i ? ", " : "", sim_basename(top[i]->src),
-                       (double)((now - top[i]->started) / 1000000000ULL));
-    if (!running) sim_buf_adds(&line, "なし");
-    if (running > 3) sim_buf_printf(&line, " ほか %u 個", (unsigned)(running - 3));
-    sim_buf_adds(&line, "）\n");
-    say(x, "%s", sim_buf_cstr(&line));
-    sim_buf_free(&line);
-}
-
-static int compile_time_cmp(const void *a, const void *b)
-{
-    const job_t *ja = *(job_t *const *)a, *jb = *(job_t *const *)b;
-    return ja->elapsed > jb->elapsed ? -1 : ja->elapsed < jb->elapsed;
-}
-
-static void compile_times(rl78_xl *x, job_t *jobs, size_t njobs)
-{
-    job_t **order = sim_xcalloc(njobs, sizeof *order);
-    size_t i, count = 0;
-    sim_buf times, slow;
-    char *path;
-    for (i = 0; i < njobs; i++) if (jobs[i].compiled) order[count++] = &jobs[i];
-    /* 使い回しただけのときは、前回の診断情報を残す。main.c は毎回作り直すので、それだけのときも同じ
-     * （sim xlate は変換を 2 回かけるので、2 回目に 1 回目の記録を消してしまう） */
-    if (count < 2) { free(order); return; }
-    qsort(order, count, sizeof *order, compile_time_cmp);
-    sim_buf_init(&times);
-    sim_buf_init(&slow);
-    for (i = 0; i < count; i++) {
-        job_t *job = order[i];
-        sim_buf_printf(&times, "%s\t%.1f\n", sim_basename(job->src), (double)job->elapsed / 1e9);
-        if (i < 5 && job->elapsed >= 30000000000ULL)
-            sim_buf_printf(&slow, "%s%s %.0f 秒", i ? ", " : "", sim_basename(job->src),
-                           (double)(job->elapsed / 1000000000ULL));
-    }
-    path = join(x->dir, "cc_times.txt");
-    if (sim_write_file(path, times.p, times.len)) say(x, "変換: %s に書けません\n", path);
-    if (slow.len) say(x, "変換: 時間のかかったファイル: %s\n", sim_buf_cstr(&slow));
-    free(path);
-    sim_buf_free(&times);
-    sim_buf_free(&slow);
-    free(order);
-}
+static void say_line(void *ctx, const char *line) { say(ctx, "%s", line); }
 
 int rl78_xl_update(rl78_xl *x, const uint32_t *extra, size_t nextra)
 {
@@ -474,6 +334,7 @@ int rl78_xl_update(rl78_xl *x, const uint32_t *extra, size_t nextra)
     size_t n = 0, nnew = 0, i, ninsns = 0, ntotal = 0;
     rl78_xl_leaders ld;
     job_t *jobs;
+    sim_cc_job *cjobs;
     size_t njobs = 0;
     char *log, *path, *dllname = NULL, *dllpath = NULL;
     const char **link;
@@ -498,7 +359,7 @@ int rl78_xl_update(rl78_xl *x, const uint32_t *extra, size_t nextra)
     for (a = x->rom_size; a < 0x100000; a++) if (bit(entries, a)) entries[a >> 3] &= (uint8_t)~(1u << (a & 7u));
     if (n == 0 || (nnew == 0 && x->loaded)) { free(entries); free(list); return 0; }
 
-    if (!cc_works(x->cc)) {
+    if (!sim_cc_works(x->cc)) {
         say(x, "変換: clang を起動できません（%s）。sim.cfg の xlate_cc = に clang のパスを書いてください。結果には影響しません（解釈実行のまま）\n", x->cc);
         free(entries);
         free(list);
@@ -570,52 +431,17 @@ int rl78_xl_update(rl78_xl *x, const uint32_t *extra, size_t nextra)
     rl78_load(x->cpu, 0, cur_rom, x->rom_size);
     free(cur_rom);
 
-    /* 遅いファイルがあっても他の枠を止めないよう、全枠の終了を調べて補充する */
+    /* 並列にコンパイルする（遅いファイルがあっても他の枠を止めない） */
+    cjobs = sim_xcalloc(njobs ? njobs : 1, sizeof *cjobs);
     if (!failed) {
-        size_t next = 0, done = 0;
-        size_t nslots = (size_t)x->jobs < njobs ? (size_t)x->jobs : njobs;
-        job_t **slots = sim_xcalloc(nslots, sizeof *slots);
-        uint64_t start = sim_now_ns(), last = start;
         say(x, "変換: %u 命令のうち %u 命令（%u ファイル）をコンパイルします\n", (unsigned)ntotal, (unsigned)ninsns, (unsigned)njobs);
-        while (done < njobs) {
-            int finished = 0;
-            uint64_t now;
-            for (i = 0; i < nslots; i++) {
-                job_t *job = slots[i];
-                int code;
-                if (job && sim_proc_poll(job->proc, &code)) {
-                    job->elapsed = sim_now_ns() - job->started;
-                    job->proc = NULL;
-                    slots[i] = NULL;
-                    if (code != 0) failed = 1;
-                    done++;
-                    finished = 1;
-                }
-                while (!slots[i] && next < njobs) {
-                    const char *argv[24];
-                    job = &jobs[next++];
-                    compile_args(x, argv, job->src, job->obj);
-                    job->started = sim_now_ns();
-                    job->proc = sim_proc_spawn(argv, log);
-                    if (job->proc) {
-                        job->compiled = 1;
-                        slots[i] = job;
-                    } else {
-                        failed = 1;
-                        done++;
-                    }
-                }
-            }
-            now = sim_now_ns();
-            if (now - start > 5000000000ULL &&
-                ((finished && now - last >= 5000000000ULL) || now - last >= 10000000000ULL)) {
-                compile_progress(x, slots, nslots, done, njobs, start, now);
-                last = now;
-            }
-            if (done < njobs) sim_sleep_ms(15);
+        for (i = 0; i < njobs; i++) {
+            compile_args(x, jobs[i].argv, jobs[i].src, jobs[i].obj);
+            cjobs[i].argv = jobs[i].argv;
+            cjobs[i].name = sim_basename(jobs[i].src);
         }
-        free(slots);
-        compile_times(x, jobs, njobs);
+        if (sim_cc_run_jobs(cjobs, njobs, x->jobs, log, "変換", say_line, x)) failed = 1;
+        sim_cc_write_times(cjobs, njobs, x->dir, "変換", say_line, x);
         if (failed) say(x, "変換: コンパイルに失敗しました。コンパイラの出力は %s にあります。結果には影響しません（解釈実行のまま）\n", log);
     }
 
@@ -643,7 +469,7 @@ int rl78_xl_update(rl78_xl *x, const uint32_t *extra, size_t nextra)
         argv[k++] = "-o";
         argv[k++] = dllpath;
         argv[k] = NULL;
-        if (run_wait(argv, log) != 0) {
+        if (sim_cc_run_wait(argv, log) != 0) {
             say(x, "変換: DLL を作れませんでした。コンパイラの出力は %s にあります。結果には影響しません（解釈実行のまま）\n", log);
             failed = 1;
         }
@@ -684,6 +510,7 @@ int rl78_xl_update(rl78_xl *x, const uint32_t *extra, size_t nextra)
     for (i = 0; i < njobs; i++) { free(jobs[i].src); free(jobs[i].obj); }
     for (i = 0; i < nlink; i++) free((char *)link[i]);
     free(jobs);
+    free(cjobs);
     free(link);
     free(log);
     free(dllname);

@@ -37,7 +37,8 @@ static void usage(void)
             "  sim xlate --abs <X.abs> [--cfg sim.cfg]    すべての関数を C に変換してコンパイルしておく（exec = xlate の準備）\n"
             "  sim --version\n"
             "  共通: --verbose（-v）で読み込みの警告と詳細を出す。--abs を省くと設定ファイルの abs= を使う\n"
-            "        --exec interp|xlate|verify で実行方式を選ぶ（解釈実行 / C に変換して実行 / 両方で実行して照合。既定は interp）\n"
+            "        --exec interp|xlate|verify|native で実行方式を選ぶ（解釈実行 / C に変換して実行 / 両方で実行して照合 /\n"
+            "        製品の C のソースを PC 用にコンパイルした DLL で実行。既定は interp）\n"
             "        --defines <パス> でヘッダの直アドレス定義を読む。--cdef <名前[=値]>（複数可）と --mtpj <X.mtpj> は\n"
             "        その #if / #ifdef の評価に使う定義マクロ。sim list --where は定義元のファイル名と行番号を表示する\n");
 }
