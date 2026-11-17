@@ -1,0 +1,10 @@
+mod,periph_task,native stub,1,1
+%,STUB_wait_alt,periph_wait
+#COMMENT,@mode,periph_task@@
+,0,13
+mod,periph_task,native stub,1,1
+#COMMENT,@mode,periph_task@@
+,0,17
+mod,periph_wait,native stub,0,1
+#COMMENT,periph_wait@@
+,7
