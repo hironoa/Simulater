@@ -1,6 +1,7 @@
 @echo off
 rem tests\rl78\run_rl78_tests.bat - checks of the real RL78 backend on Windows
-rem Called from tests\run_tests.bat (shares ROOT, T, WORK, PASS, FAIL). ASCII only.
+rem Called from tests\run_tests.bat (shares ROOT, T, WORK, PASS, FAIL, HAS). ASCII only.
+rem Text in the output of sim is searched with "%HAS%" (tests\tools\has_text.c), not findstr: see run_tests.bat.
 rem Japanese messages are checked through their ASCII parts (counts, addresses, names).
 
 set "R=%T%\rl78"
@@ -74,7 +75,7 @@ call :has "%WORK%\r.log" "61 19" "undefined instruction message has bytes"
 call :run "halt = stop" 1 "OK 0, NG 1" --abs "%TP%" --cfg "%R%\cfg\halt_stop.cfg" "%R%\csv\synth_halt.csv"
 rem a 1-byte heap with an odd exclusive end must not hand out 0xFE162 on the second allocation
 call :run "1-byte heap (odd end): second $ allocation is an error (exit code 2)" 2 "0xFE160" --abs "%TP%" --cfg "%R%\cfg\heap_odd.cfg" "%R%\csv\synth_heap_odd.csv"
-findstr /b /l /c:",1,0,0,0xE162,OK" "%WORK%\r_out\synth_heap_odd.csv" >nul 2>nul
+"%HAS%" /b /l /c:",1,0,0,0xE162,OK" "%WORK%\r_out\synth_heap_odd.csv" >nul 2>nul
 if errorlevel 1 (call :ok "allocation outside the heap is not reported as OK") else (call :ng "allocation outside the heap is not reported as OK")
 rem unreadable config values (out of range, with a unit, negative) are errors (exit code 2), not defaults
 call :cfg_err "heap beyond the address space is an error" heap_over.cfg "heap = 0xFFFF0:0x100"
@@ -221,7 +222,7 @@ for /l %%I in (1,1,50) do (
 > "%WORK%\nofunc_run.json" echo {"cmd":"run","speed":2,"periodMs":10}
 call :nofunc_reject step
 call :nofunc_reject run
-powershell -NoProfile -Command "$s=(Get-Content -Raw -LiteralPath '%WORK%\nofunc_after.json' | ConvertFrom-Json).state; if ($null -eq $s -or $s.step -ne 0) {exit 1}"
+powershell -NoProfile -Command "$s=(Get-Content -Encoding UTF8 -Raw -LiteralPath '%WORK%\nofunc_after.json' | ConvertFrom-Json).state; if ($null -eq $s -or $s.step -ne 0) {exit 1}"
 if errorlevel 1 (call :ng "GUI unset function stays at step zero") else (call :ok "GUI unset function stays at step zero")
 call :has "%WORK%\nofunc.log" "func" "GUI unset function startup explains func"
 for /f "usebackq delims=" %%C in (`curl -s -o "%WORK%\nofunc_error.json" -w "%%{http_code}" "%U%/api/export.csv"`) do set "CODE=%%C"
@@ -231,7 +232,7 @@ call :has "%WORK%\nofunc_error.json" "func" "GUI unset function export explains 
 for /f "usebackq delims=" %%C in (`curl -s -o "%WORK%\nofunc_result.json" -w "%%{http_code}" -X POST --data-binary "@%WORK%\nofunc_set.json" "%U%/api/control"`) do set "CODE=%%C"
 if "%CODE%"=="200" (call :ok "GUI func and step together HTTP 200") else (call :ng "GUI func and step together HTTP 200")
 curl -s "%U%/api/export.csv" > "%WORK%\nofunc.csv"
-findstr /l /c:"step 1" "%WORK%\nofunc.csv" >nul
+"%HAS%" /l /c:"step 1" "%WORK%\nofunc.csv" >nul
 if errorlevel 1 (call :ng "GUI func and step records one call") else (call :ok "GUI func and step records one call")
 taskkill /f /im sim_rgui_test.exe >nul 2>nul
 start "" /b "%WORK%\sim_rgui_test.exe" gui --abs "%TP%" --cfg "%R%\cfg\limit.cfg" --func TEST_cycle --no-browser --port %PORT% --html-dir "%WORK%\nohtml" > "%WORK%\rgui.log" 2>&1
@@ -388,7 +389,7 @@ set RC=%ERRORLEVEL%
 if "%RC%"=="0" (call :ok "LMF diagnostics load") else (call :ng "LMF diagnostics load")
 call :has "%WORK%\diag.log" "0x55 0xDEAD 0x0000 normal 2" "LMF grouped repeated combinations"
 call :has "%WORK%\diag.log" "0x55 0xDEAD 0x0000 absolute 1" "LMF absolute combination"
-findstr /l /c:"unknown" "%WORK%\diag.log" >nul
+"%HAS%" /l /c:"unknown" "%WORK%\diag.log" >nul
 if errorlevel 1 (call :ok "LMF default hides names") else (call :ng "LMF default hides names")
 "%RS%" info --abs "%WORK%\diag.lmf" -v -v > "%WORK%\diag_names.log" 2>&1
 call :has "%WORK%\diag_names.log" "unknown" "LMF named examples explicit"
@@ -439,7 +440,7 @@ exit /b 0
 
 rem :has file text name
 :has
-findstr /l /c:"%~2" "%~1" >nul
+"%HAS%" /l /c:"%~2" "%~1" >nul
 if errorlevel 1 (call :ng "%~3") else (call :ok "%~3")
 exit /b 0
 
@@ -447,7 +448,7 @@ rem :cfg_err name cfg-file expected_text  (sim info exits 2 with the text)
 :cfg_err
 "%RS%" info --abs "%TP%" --cfg "%R%\cfg\%~2" > "%WORK%\r.log" 2>&1
 set RC=%ERRORLEVEL%
-findstr /l /c:"%~3" "%WORK%\r.log" >nul
+"%HAS%" /l /c:"%~3" "%WORK%\r.log" >nul
 if errorlevel 1 (call :ng "%~1: message contains %~3") else if "%RC%"=="2" (call :ok "%~1") else (call :ng "%~1: exit code 2, got %RC%")
 exit /b 0
 
@@ -461,7 +462,7 @@ shift
 shift
 "%RS%" run %1 %2 %3 %4 %5 %6 %7 %8 %9 -o "%WORK%\r_out" --quiet > "%WORK%\r.log" 2>&1
 set RC=%ERRORLEVEL%
-findstr /l /c:"%RTXT%" "%WORK%\r.log" >nul
+"%HAS%" /l /c:"%RTXT%" "%WORK%\r.log" >nul
 if errorlevel 1 (call :ng "%RN%" & type "%WORK%\r.log") else if "%RC%"=="%RC_EXP%" (call :ok "%RN%") else (call :ng "%RN%: exit code %RC_EXP%, got %RC%")
 exit /b 0
 
@@ -475,28 +476,28 @@ curl -s -X POST --data-binary "@%WORK%\fault_reset.json" "%U%/api/control" >nul
 set "CODE="
 for /f "usebackq delims=" %%C in (`curl -s -o "%WORK%\fault.json" -w "%%{http_code}" -X POST --data-binary "@%WORK%\fault_step.json" "%U%/api/control"`) do set "CODE=%%C"
 if "%CODE%"=="200" (call :ok "GUI %~1 step HTTP 200") else (call :ng "GUI %~1 step HTTP 200")
-powershell -NoProfile -Command "$s=Get-Content -Raw -LiteralPath '%WORK%\fault.json' | ConvertFrom-Json; if ($null -eq $s -or $s.stepsDone -ne 0 -or $s.step -ne 0 -or $s.running -ne $false -or $s.stepsLeft -ne 0 -or $s.needReset -ne $true -or !$s.error) {exit 1}"
+powershell -NoProfile -Command "$s=Get-Content -Encoding UTF8 -Raw -LiteralPath '%WORK%\fault.json' | ConvertFrom-Json; if ($null -eq $s -or $s.stepsDone -ne 0 -or $s.step -ne 0 -or $s.running -ne $false -or $s.stepsLeft -ne 0 -or $s.needReset -ne $true -or !$s.error) {exit 1}"
 if errorlevel 1 (call :ng "GUI %~1 failed step stops without advancing") else (call :ok "GUI %~1 failed step stops without advancing")
 call :has "%WORK%\fault.json" "PC" "GUI %~1 error has PC"
 call :has "%WORK%\fault.json" "%~2" "GUI %~1 error has instruction details"
 curl -s "%U%/api/export.csv" > "%WORK%\fault.csv"
-powershell -NoProfile -Command "if (@(Get-Content -LiteralPath '%WORK%\fault.csv').Count -ne 2) {exit 1}"
+powershell -NoProfile -Command "if (@(Get-Content -Encoding UTF8 -LiteralPath '%WORK%\fault.csv').Count -ne 2) {exit 1}"
 if errorlevel 1 (call :ng "GUI %~1 export has no data rows") else (call :ok "GUI %~1 export has no data rows")
 > "%WORK%\fault_step.json" echo {"cmd":"step","steps":3}
 set "CODE="
 for /f "usebackq delims=" %%C in (`curl -s -o "%WORK%\fault_rejected.json" -w "%%{http_code}" -X POST --data-binary "@%WORK%\fault_step.json" "%U%/api/control"`) do set "CODE=%%C"
 if "%CODE%"=="400" (call :ok "GUI %~1 step rejected until reset") else (call :ng "GUI %~1 step rejected until reset")
 curl -s "%U%/api/info" > "%WORK%\fault_info.json"
-powershell -NoProfile -Command "$s=(Get-Content -Raw '%WORK%\fault_info.json' | ConvertFrom-Json).state; if ($null -eq $s -or $s.step -ne 0 -or $s.needReset -ne $true) {exit 1}"
+powershell -NoProfile -Command "$s=(Get-Content -Encoding UTF8 -Raw '%WORK%\fault_info.json' | ConvertFrom-Json).state; if ($null -eq $s -or $s.step -ne 0 -or $s.needReset -ne $true) {exit 1}"
 if errorlevel 1 (call :ng "GUI %~1 rejected step leaves state unchanged") else (call :ok "GUI %~1 rejected step leaves state unchanged")
 > "%WORK%\fault_reset.json" echo {"cmd":"reset","func":"TEST_cycle"}
 curl -s -X POST --data-binary "@%WORK%\fault_reset.json" "%U%/api/control" > "%WORK%\recovered.json"
-powershell -NoProfile -Command "$s=Get-Content -Raw -LiteralPath '%WORK%\recovered.json' | ConvertFrom-Json; if ($null -eq $s -or $s.error -ne '' -or $s.needReset -ne $false) {exit 1}"
+powershell -NoProfile -Command "$s=Get-Content -Encoding UTF8 -Raw -LiteralPath '%WORK%\recovered.json' | ConvertFrom-Json; if ($null -eq $s -or $s.error -ne '' -or $s.needReset -ne $false) {exit 1}"
 if errorlevel 1 (call :ng "GUI %~1 reset clears error") else (call :ok "GUI %~1 reset clears error")
 > "%WORK%\fault_watch.json" echo {"names":["TEST_cycle_cnt"]}
 curl -s -X POST --data-binary "@%WORK%\fault_watch.json" "%U%/api/watch" >nul
 curl -s -X POST --data-binary "@%WORK%\fault_step.json" "%U%/api/control" > "%WORK%\recovered.json"
-powershell -NoProfile -Command "$s=Get-Content -Raw -LiteralPath '%WORK%\recovered.json' | ConvertFrom-Json; if ($null -eq $s -or $s.stepsDone -ne 3 -or $s.error -ne '' -or $s.needReset -ne $false) {exit 1}"
+powershell -NoProfile -Command "$s=Get-Content -Encoding UTF8 -Raw -LiteralPath '%WORK%\recovered.json' | ConvertFrom-Json; if ($null -eq $s -or $s.stepsDone -ne 3 -or $s.error -ne '' -or $s.needReset -ne $false) {exit 1}"
 if errorlevel 1 (call :ng "GUI %~1 reset allows three steps") else (call :ok "GUI %~1 reset allows three steps")
 curl -s "%U%/api/export.csv" > "%WORK%\recovered.csv"
 call :run "GUI %~1 recovered CSV replays three rows OK" 0 "OK 3, NG 0" --abs "%TP%" --cfg "%R%\cfg\limit.cfg" "%WORK%\recovered.csv"
@@ -507,7 +508,7 @@ call :run "GUI %~1 recovered CSV replays three rows OK" 0 "OK 3, NG 0" --abs "%T
 curl -s -X POST --data-binary "@%WORK%\fault_play.csv" "%U%/api/load-csv" >nul
 ping -n 2 127.0.0.1 >nul
 curl -s "%U%/api/info" > "%WORK%\fault_info.json"
-powershell -NoProfile -Command "$s=(Get-Content -Raw -LiteralPath '%WORK%\fault_info.json' | ConvertFrom-Json).state; if ($null -eq $s -or $s.playback -ne $false -or $s.running -ne $false -or $s.step -ne 0 -or !$s.error) {exit 1}"
+powershell -NoProfile -Command "$s=(Get-Content -Encoding UTF8 -Raw -LiteralPath '%WORK%\fault_info.json' | ConvertFrom-Json).state; if ($null -eq $s -or $s.playback -ne $false -or $s.running -ne $false -or $s.step -ne 0 -or !$s.error) {exit 1}"
 if errorlevel 1 (call :ng "GUI %~1 failed playback stops without advancing") else (call :ok "GUI %~1 failed playback stops without advancing")
 exit /b 0
 
@@ -557,7 +558,7 @@ exit /b 0
 set RC=%ERRORLEVEL%
 if "%RC%"=="0" (call :ok "ROM checksum %~1 %~4 reaches main") else (call :ng "ROM checksum %~1 %~4 reaches main")
 call :has "%WORK%\rom_%~1.%~4.log" "main" "ROM checksum init end"
-findstr /l /c:"Hz" "%WORK%\rom_%~1.%~4.log" > "%WORK%\count_%~1.%~4"
+"%HAS%" /l /c:"Hz" "%WORK%\rom_%~1.%~4.log" > "%WORK%\count_%~1.%~4"
 copy /y "%R%\cfg\rom_check_%~1.cfg" "%WORK%\corrupt.cfg" >nul
 >> "%WORK%\corrupt.cfg" echo poke = %~3:0
 "%RS%" info --abs "%WORK%\%~2" --cfg "%WORK%\corrupt.cfg" %~5 > "%WORK%\reset_%~1.%~4.log" 2>&1
