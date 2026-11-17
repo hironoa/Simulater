@@ -6,7 +6,8 @@
 /* LINE: 行頭の # の行（行の情報、#pragma）。型の語の並びの途中にも入りうる（clang -E は空行が続くと
  * 宣言の途中でも行の情報を出す）ので、空白と同じく並びを切らない。消す範囲の中にあっても残す。 */
 enum { OTHER, IDENT, SPACE, KEEP, LINE };
-typedef struct { size_t a, b; int kind, action; } token;
+/* seen: 型の語の並びとして判定済みの型の語（読み飛ばしたかっこの中を後で見直すとき二重に数えない）。 */
+typedef struct { size_t a, b; int kind, action, seen; } token;
 
 static int alpha(char c)
 {
@@ -19,7 +20,9 @@ static int eq(const char *s, token t, const char *w)
     return t.b - t.a == strlen(w) && !memcmp(s + t.a, w, t.b - t.a);
 }
 /* 型の語の種類。W_OTHER は別の型の語で、並びを切らずに int / short の書き換えを止める。
- * W_QUAL は修飾子・指定子（GNU の別名を含む）で、並びを切らず判定にも影響しない。 */
+ * W_QUAL は修飾子・指定子（GNU の別名を含む）で、並びを切らず判定にも影響しない。
+ * 表にない __ または _ + 英大文字で始まる語（__attribute__、__declspec、_Alignas など。__asm は除く）と、
+ * それに続くかっこの組は、並びを切らないものとして読み飛ばす（出力からは消さず、かっこの中は後で処理する）。 */
 enum { W_NONE, W_QUAL, W_SIGN, W_INT, W_LONGSHORT, W_OTHER };
 static int type_word(const char *s, token t)
 {
@@ -28,7 +31,7 @@ static int type_word(const char *s, token t)
         {"int", W_INT}, {"long", W_LONGSHORT}, {"short", W_LONGSHORT},
         {"char", W_OTHER}, {"_Bool", W_OTHER}, {"float", W_OTHER}, {"double", W_OTHER},
         {"void", W_OTHER}, {"_Complex", W_OTHER}, {"__int8", W_OTHER}, {"__int16", W_OTHER},
-        {"__int32", W_OTHER}, {"__int64", W_OTHER},
+        {"__int32", W_OTHER}, {"__int64", W_OTHER}, {"__int128", W_OTHER},
         {"const", W_QUAL}, {"__const", W_QUAL}, {"__const__", W_QUAL},
         {"volatile", W_QUAL}, {"__volatile", W_QUAL}, {"__volatile__", W_QUAL},
         {"restrict", W_QUAL}, {"__restrict", W_QUAL}, {"__restrict__", W_QUAL},
@@ -40,6 +43,32 @@ static int type_word(const char *s, token t)
     if (t.kind != IDENT) return W_NONE;
     for (i = 0; i < sizeof words / sizeof *words; i++) if (eq(s, t, words[i].w)) return words[i].k;
     return W_NONE;
+}
+/* 処理系の拡張の語（表にない __ または _ + 英大文字で始まる識別子。__asm は別の処理の対象なので除く）。 */
+static int ext_word(const char *s, token t)
+{
+    const char *w = s + t.a;
+    size_t len = t.b - t.a;
+    if (t.kind != IDENT || len < 2 || w[0] != '_') return 0;
+    if (w[1] != '_' && !(w[1] >= 'A' && w[1] <= 'Z')) return 0;
+    return !eq(s, t, "__asm") && type_word(s, t) == W_NONE;
+}
+/* q の後ろの空白と行の情報を飛ばした位置。 */
+static size_t skip_blank(const token *ts, size_t q, size_t n)
+{
+    while (q < n && (ts[q].kind == SPACE || ts[q].kind == LINE)) q++;
+    return q;
+}
+/* ts[q] の ( に対応する ) の位置。なければ n。文字列・文字定数は一つの字句なので中のかっこは数えない。 */
+static size_t close_paren(const char *s, const token *ts, size_t q, size_t n)
+{
+    int depth = 0;
+    for (; q < n; q++) {
+        if (ts[q].kind != OTHER) continue;
+        if (eq(s, ts[q], "(")) depth++;
+        if (eq(s, ts[q], ")") && --depth == 0) return q;
+    }
+    return n;
 }
 /* 行の情報のフラグだけを読む。pragma では現在の状態を変えない。 */
 static void line_info(const char *s, size_t p, size_t end, int *system)
@@ -118,21 +147,15 @@ int native_rewrite(const char *s, size_t len, sim_buf *out, native_rewrite_stats
             if (system) kind = KEEP;
         }
         if (n == cap) { cap = cap ? cap * 2 : 256; ts = sim_xrealloc(ts, cap * sizeof *ts); }
-        ts[n].a = a; ts[n].b = p; ts[n].kind = kind; ts[n].action = 0; n++;
+        ts[n].a = a; ts[n].b = p; ts[n].kind = kind; ts[n].action = 0; ts[n].seen = 0; n++;
     }
     for (i = 0; i < n;) {
         size_t j, k;
         if (ts[i].kind == IDENT && eq(s, ts[i], "__asm")) {
-            int depth = 0;
-            j = i + 1;
             /* clang -E は __asm と ( の間にも行の情報を出すことがある。LINE は残す（下の消す範囲で除く）。 */
-            while (j < n && (ts[j].kind == SPACE || ts[j].kind == LINE)) j++;
+            j = skip_blank(ts, i + 1, n);
             if (j < n && ts[j].kind == OTHER && eq(s, ts[j], "(")) {
-                for (k = j; k < n; k++) {
-                    if (ts[k].kind != OTHER) continue;
-                    if (eq(s, ts[k], "(")) depth++;
-                    if (eq(s, ts[k], ")") && --depth == 0) break;
-                }
+                k = close_paren(s, ts, j, n);
                 /* 閉じかっこがない入力も失敗にはせず、そのまま残す。 */
                 if (k < n) {
                     for (j = i; j <= k; j++) if (ts[j].kind != LINE) ts[j].action = 1;
@@ -140,21 +163,36 @@ int native_rewrite(const char *s, size_t len, sim_buf *out, native_rewrite_stats
                 }
             }
         }
-        if (type_word(s, ts[i])) {
-            int has_int = 0, has_longshort = 0, has_other = 0, w = W_NONE;
-            size_t sign = n;
+        if (type_word(s, ts[i]) != W_NONE && ts[i].seen) { i++; continue; }
+        if (type_word(s, ts[i]) != W_NONE) {
+            int has_int = 0, has_longshort = 0, has_other = 0, w;
+            size_t sign = n, resume = n;
             j = i;
-            while (j < n && (ts[j].kind == SPACE || ts[j].kind == LINE || (w = type_word(s, ts[j])) != W_NONE)) {
-                if (ts[j].kind == IDENT) {
+            while (j < n) {
+                if (ts[j].kind == SPACE || ts[j].kind == LINE) { j++; continue; }
+                w = type_word(s, ts[j]);
+                if (w != W_NONE) {
                     if (w == W_INT) has_int = 1;
                     if (w == W_LONGSHORT) has_longshort = 1;
                     if (w == W_OTHER) has_other = 1;
                     if (sign == n && w == W_SIGN) sign = j;
+                    ts[j].seen = 1; j++; continue;
                 }
-                j++;
+                if (ext_word(s, ts[j])) {
+                    /* 拡張の語に続くかっこの組は先読みで飛ばすだけ。中は resume から通常どおり処理する。 */
+                    size_t q = skip_blank(ts, j + 1, n), e;
+                    if (q < n && ts[q].kind == OTHER && eq(s, ts[q], "(")) {
+                        e = close_paren(s, ts, q, n);
+                        if (e == n) break;
+                        if (resume == n) resume = q;
+                        j = e + 1; continue;
+                    }
+                    j++; continue;
+                }
+                break;
             }
             for (k = i; k < j && !has_other; k++) {
-                if (ts[k].kind == IDENT && eq(s, ts[k], "int")) {
+                if (ts[k].seen && eq(s, ts[k], "int")) {
                     ts[k].action = has_longshort ? 1 : 2;
                     if (has_longshort) counts.int_dropped++; else counts.int_replaced++;
                 }
@@ -162,7 +200,7 @@ int native_rewrite(const char *s, size_t len, sim_buf *out, native_rewrite_stats
             if (!has_int && !has_longshort && !has_other && sign != n) {
                 ts[sign].action = 3; counts.short_added++;
             }
-            i = j; continue;
+            i = resume < j ? resume : j; continue;
         }
         i++;
     }
