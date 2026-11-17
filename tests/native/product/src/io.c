@@ -8,6 +8,11 @@ void io_write_port(u1 v)
     if (v & 1) P2_bit.b7 = 1;
 }
 
+void io_write_p3(u1 v)
+{
+    P3 = v;
+}
+
 u2 io_read_adc(void)
 {
     return ADC_RAW;

@@ -25,6 +25,9 @@ mod,io_write_port,registers by address,1,2
 #COMMENT,@v,0xFFF01:1,0xFFF02:1
 ,0x55,0x55,0x82
 ,0x54,0x54,0x82
+mod,io_write_p3,register by name from the header,1,1
+#COMMENT,@v,P3
+,0x5A,0x5A
 mod,io_read_adc,RAM by address,1,1
 #COMMENT,0xFFE10:2,io_read_adc@@
 ,1234,1234

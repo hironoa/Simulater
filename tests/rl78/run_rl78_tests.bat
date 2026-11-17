@@ -308,15 +308,17 @@ set "NC=%NW%\driver\sim.cfg"
 "%RS%" run --cfg "%NC%" "%NW%\csv\native_basic.csv" -o "%NW%\out" > "%NW%\first.log" 2>&1
 set RC=%ERRORLEVEL%
 if "%RC%"=="0" (call :ok "native: first run exits 0") else (call :ng "native: first run exits 0" & type "%NW%\first.log" & for /r "%NW%\driver\.simnative" %%F in (cc.log) do type "%%F")
-call :has "%NW%\first.log" "OK 16, NG 0, NO Check 0" "native: all 16 rows are OK"
+call :has "%NW%\first.log" "OK 17, NG 0, NO Check 0" "native: all 17 rows are OK"
 "%HAS%" /b /l /c:",30000,30000,-5536,OK" "%NW%\out\native_basic.csv" >nul
 if errorlevel 1 (call :ng "native: int is 16 bits (30000 + 30000 = -5536)") else (call :ok "native: int is 16 bits (30000 + 30000 = -5536)")
 "%HAS%" /b /l /c:",0x55,0x55,0x82,OK" "%NW%\out\native_basic.csv" >nul
 if errorlevel 1 (call :ng "native: registers written by address are read back") else (call :ok "native: registers written by address are read back")
+"%HAS%" /b /l /c:",0x5A,0x5A,OK" "%NW%\out\native_basic.csv" >nul
+if errorlevel 1 (call :ng "native: a header name uses the same #if branch as the DLL") else (call :ok "native: a header name uses the same #if branch as the DLL")
 "%HAS%" /b /l /c:",65535,65535,OK" "%NW%\out\native_basic.csv" >nul
 if errorlevel 1 (call :ng "native: RAM written by address is read by the function") else (call :ok "native: RAM written by address is read by the function")
 "%RS%" info --cfg "%NC%" > "%NW%\info.log" 2>&1
-call :has "%NW%\info.log" "native sources=3 asm=1 files=4 off=1 compiled=0 reused=4 linked=0 funcs=10" "native: second open compiles nothing"
+call :has "%NW%\info.log" "native sources=3 asm=1 files=4 off=1 compiled=0 reused=4 linked=0 funcs=11" "native: second open compiles nothing"
 call :has "%NW%\info.log" "startup.asm" "native: assembler sources are listed"
 call :has "%NW%\info.log" "files=4 off=1" "native: a file that is not a build target is left out"
 rem a header changes: only the sources that include it are compiled again (reg.h is included by io.c only)
@@ -327,7 +329,7 @@ call :has "%NW%\info2.log" "compiled=1 reused=3 linked=1" "native: a changed hea
 "%RS%" info --cfg "%NC%" > "%NW%\info3.log" 2>&1
 call :has "%NW%\info3.log" "compiled=3 reused=1 linked=1" "native: a header used by every source recompiles them all"
 "%RS%" run --cfg "%NC%" "%NW%\csv\native_basic.csv" -o "%NW%\out2" > "%NW%\again.log" 2>&1
-call :has "%NW%\again.log" "OK 16, NG 0, NO Check 0" "native: all rows are OK after the rebuild"
+call :has "%NW%\again.log" "OK 17, NG 0, NO Check 0" "native: all rows are OK after the rebuild"
 
 rem a header of the same name appears earlier in the search order (next to the source that includes it)
 copy /y "%NW%\product\inc\reg.h" "%NW%\product\src\reg.h" >nul

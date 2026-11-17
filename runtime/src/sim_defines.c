@@ -1196,7 +1196,14 @@ static int add_cundef(defs *d, const char *text, const char *what)
     return 0;
 }
 
-/* ロードモジュールの種類: 0 不明（モックなど）、1 CA78K0R（lmf）、2 CC-RL（abs = ELF） */
+/* 実行方式が PC 用 DLL の方式（--exec native、なければ設定ファイルの exec = native）なら 1 */
+static int exec_native(defs *d, const sim_open_opts *o)
+{
+    const char *e = o->exec && *o->exec ? o->exec : sim_cfg_get(&d->cfg, "exec");
+    return e && !strcmp(e, "native");
+}
+
+/* ロードモジュールの種類: 0 不明（モックなど）、1 CA78K0R（lmf、PC 用 DLL の方式）、2 CC-RL（abs = ELF） */
 static int compiler_kind(defs *d, const sim_open_opts *o)
 {
     const char *abi = sim_cfg_get(&d->cfg, "abi"), *abs = sim_cfg_get(&d->cfg, "abs");
@@ -1211,6 +1218,9 @@ static int compiler_kind(defs *d, const sim_open_opts *o)
     }
     if (n >= 2 && m[0] == 0x48 && m[1] == 0x11) kind = 1;
     else if (n == 4 && !memcmp(m, "\x7f" "ELF", 4)) kind = 2;
+    /* PC 用 DLL の方式はロードモジュールを使わない。DLL は CA78K0R のソースとしてコンパイルする
+       （sim_native_pre.h が __K0R__ と __CA78K0R__ を定義する）ので、ヘッダーも同じ条件で読む */
+    else if (exec_native(d, o)) kind = 1;
     if (abi && !strcmp(abi, "ca78k0r")) kind = 1;
     else if (abi && !strcmp(abi, "ccrl")) kind = 2;
     return kind;
@@ -1841,6 +1851,8 @@ int sim_defines_load(sim_ctx *c,const sim_open_opts *o,char *err,size_t cap)
     /* 定義マクロ: 暗黙 -> mtpj の定義・定義解除 -> sim.cfg の cdef -> --cdef -> cundef の順に適用する */
     kind=d.error?0:compiler_kind(&d,o); d.compiler=kind;
     if (!d.error) add_implicit(&d,kind);
+    /* sim_native_pre.h が定義する目印。DLL のコンパイルとヘッダーの読み取りで、#if の枝をそろえる */
+    if (!d.error && exec_native(&d,o)) add_cdef(&d,"__SIM_NATIVE__",ORIGIN_IMPLICIT,"暗黙の定義");
     if (!d.error) {
         const char *s=sim_cfg_get(&d.cfg,"mtpj"), *mode=sim_cfg_get(&d.cfg,"mtpj_mode");
         if (o->mtpj_path) mtpj_path=sim_xstrdup(o->mtpj_path);
