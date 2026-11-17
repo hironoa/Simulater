@@ -394,6 +394,11 @@ RL78 の命令は再現しない。目的は速さで、解釈実行・変換方
   製品を入れ替えるときは `mtpj` だけを書き換える。
 - **アセンブラ**: `.asm` / `.s` はコンパイルせず、`sim info` に一覧を出す。中の関数や変数は DLL に入らないので、
   C から使われている名前には代わりを作る（次の項）。
+- **直アドレス定義の自動読み込み**: `defines_scope` が未指定で `defines_auto` が on（既定）なら、
+  `sim_defines.c` が mtpj のビルド対象の .h / .c / .inc と `native_src` のファイルを起点に `#include` をたどる。
+  `native_src` のフォルダは直下の .c / .h / .inc だけを起点にし、インクルード・パスは mtpj、`defines_include`、
+  `native_include` から取る。mtpj がなくても使え、`defines` / `--defines` は追加で読む。
+  `defines_auto = off` または明示した `defines_scope` では従来の範囲に従う。
 - **定義のない名前の代わり**（runtime/backends/native/native_coff.c と native_backend.c の build_undef）:
   - 名前の集合: リンクの前に、製品、`native_src`、`sim_native_rt.c` の COFF オブジェクトのシンボル表を読み、
     どこかで未定義として参照され、どこにも定義がない外部名を集める。未定義は SectionNumber 0 かつ Value 0。

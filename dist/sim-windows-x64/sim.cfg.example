@@ -71,6 +71,8 @@ max_insns = 100000000
 #csv_init = auto
 # シンボルにならない直アドレスのマクロ。既定でサブフォルダも読む
 #defines = ../product
+# exec = native ではソースとヘッダーを自動で読む。off で止める（既定 on）
+#defines_auto = on
 #defines_exclude = generated
 #defines_recursive = on
 #defines_near_base = 0xF0000
