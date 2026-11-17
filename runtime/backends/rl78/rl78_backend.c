@@ -17,6 +17,7 @@
 #define _CRT_SECURE_NO_WARNINGS
 #include "rl78_be.h"
 #include "rl78_xl.h"
+#include "native_backend.h"
 #include "rl78.h"
 #include "rl78_abi.h"
 #include "sim_cfg.h"
@@ -1197,18 +1198,25 @@ static const char *const KNOWN_KEYS[] = {
     "defines_cond", "cdef", "cundef", "mtpj", "mtpj_mode", "defines_scope", "defines_include",
     "abs", "abi", "map", "core", "mdu", "mirror", "rom_size", "ram", "heap", "sentinel", "call_sp", "init_end", "func",
     "skip", "poke", "stub", "stub_auto", "cpu_hz", "max_insns", "startup_max_insns", "halt", "stop", "ram_fill", "bitfield_order",
-    "exec", "xlate_cc", "xlate_dir", "xlate_jobs", NULL
+    "exec", "xlate_cc", "xlate_dir", "xlate_jobs",
+    "native_cc", "native_dir", "native_jobs", "native_src", "native_include", "native_func", NULL
 };
 
 sim_backend *sim_backend_open(const sim_open_opts *o, char *err, size_t errlen)
 {
-    be_t *z = sim_xcalloc(1, sizeof *z);
+    be_t *z;
     sim_backend *b;
     const char *s;
     char cerr[1024];
     rl78_dwarf_opts dopt;
     double hz = 32000000.0;
     int i;
+    {   /* PC 用 DLL の方式（exec = native）は RL78 の命令を再現しないので、ロードモジュールを読む前に分かれる */
+        int native = 0;
+        b = native_backend_open(o, &native, err, errlen);
+        if (native) return b;
+    }
+    z = sim_xcalloc(1, sizeof *z);
     z->w.verbose = o->verbose;
     z->w.lmf_names = o->lmf_names || o->verbose >= 2;
     sim_cfg_init(&z->cfg);
@@ -1319,7 +1327,7 @@ sim_backend *sim_backend_open(const sim_open_opts *o, char *err, size_t errlen)
         else if (!strcmp(ex, "xlate")) z->xl_mode = RL78_XL_ON;
         else if (!strcmp(ex, "verify")) z->xl_mode = RL78_XL_VERIFY;
         else {
-            snprintf(err, errlen, "%s = %s は使えません（interp: 解釈実行、xlate: C に変換して実行、verify: 両方で実行して照合）",
+            snprintf(err, errlen, "%s = %s は使えません（interp: 解釈実行、xlate: C に変換して実行、verify: 両方で実行して照合、native: PC 用にコンパイルした DLL で実行）",
                      o->exec ? "--exec" : "sim.cfg: exec", ex);
             be_free(z);
             return NULL;

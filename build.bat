@@ -52,8 +52,8 @@ if "%MODE%"=="mock" (
     set "SRCS=%COMMON% "%ROOT%\runtime\backends\mock\mock_backend.c""
     set "INC=-I"%ROOT%\runtime\include" -I"%S%""
 ) else (
-    set "SRCS=%COMMON% "%B%\rl78_backend.c" "%B%\rl78_xl.c" "%B%\rl78_abi.c" "%B%\rl78_lmf.c" "%B%\rl78_sym.c" "%B%\rl78_elf.c" "%B%\rl78_dwarf.c" "%B%\rl78_map.c" "%C%\rl78_exec.c" "%C%\rl78_sys.c" "%C%\rl78_disasm.c" "%C%\rl78_xlate.c""
-    set "INC=-I"%ROOT%\runtime\include" -I"%S%" -I"%ROOT%\rl78\include" -I"%B%""
+    set "SRCS=%COMMON% "%B%\rl78_backend.c" "%B%\rl78_xl.c" "%B%\rl78_abi.c" "%B%\rl78_lmf.c" "%B%\rl78_sym.c" "%B%\rl78_elf.c" "%B%\rl78_dwarf.c" "%B%\rl78_map.c" "%C%\rl78_exec.c" "%C%\rl78_sys.c" "%C%\rl78_disasm.c" "%C%\rl78_xlate.c" "%ROOT%\runtime\backends\native\native_backend.c""
+    set "INC=-I"%ROOT%\runtime\include" -I"%S%" -I"%ROOT%\rl78\include" -I"%B%" -I"%ROOT%\runtime\backends\native""
 )
 
 echo build.bat: building %OUT%\sim.exe with %CC% (backend: %MODE%)
@@ -79,6 +79,10 @@ if not "%MODE%"=="mock" (
     copy /y "%ROOT%\rl78\src\rl78_exec_defs.h" "%OUT%\xlate\" >nul
     copy /y "%ROOT%\rl78\src\rl78_exec_ops.inc" "%OUT%\xlate\" >nul
     copy /y "%ROOT%\rl78\src\rl78_xlate_rt.h" "%OUT%\xlate\" >nul
+    rem files that exec = native hands to clang
+    if not exist "%OUT%\native" mkdir "%OUT%\native"
+    copy /y "%ROOT%\runtime\backends\native\rt\sim_native_pre.h" "%OUT%\native\" >nul
+    copy /y "%ROOT%\runtime\backends\native\rt\sim_native_rt.c" "%OUT%\native\" >nul
 )
 echo build.bat: done: %OUT%\sim.exe
 exit /b 0

@@ -300,6 +300,58 @@ if errorlevel 1 (call :ng "verify after sim xlate: result equals the interpreter
 set RC=%ERRORLEVEL%
 if "%RC%"=="2" (call :ok "bad --exec value exits 2") else (call :ng "bad --exec value exits 2")
 
+echo == native: product C sources compiled to a PC DLL (exec = native)
+rem The project is copied so that the cache folder (.simnative) and the edits below stay out of the repository.
+set "NW=%WORK%\native"
+xcopy /e /i /q /y "%T%\native" "%NW%" >nul
+set "NC=%NW%\driver\sim.cfg"
+"%RS%" run --cfg "%NC%" "%NW%\csv\native_basic.csv" -o "%NW%\out" > "%NW%\first.log" 2>&1
+set RC=%ERRORLEVEL%
+if "%RC%"=="0" (call :ok "native: first run exits 0") else (call :ng "native: first run exits 0" & type "%NW%\first.log" & for /r "%NW%\driver\.simnative" %%F in (cc.log) do type "%%F")
+call :has "%NW%\first.log" "OK 16, NG 0, NO Check 0" "native: all 16 rows are OK"
+"%HAS%" /b /l /c:",30000,30000,-5536,OK" "%NW%\out\native_basic.csv" >nul
+if errorlevel 1 (call :ng "native: int is 16 bits (30000 + 30000 = -5536)") else (call :ok "native: int is 16 bits (30000 + 30000 = -5536)")
+"%HAS%" /b /l /c:",0x55,0x55,0x82,OK" "%NW%\out\native_basic.csv" >nul
+if errorlevel 1 (call :ng "native: registers written by address are read back") else (call :ok "native: registers written by address are read back")
+"%HAS%" /b /l /c:",65535,65535,OK" "%NW%\out\native_basic.csv" >nul
+if errorlevel 1 (call :ng "native: RAM written by address is read by the function") else (call :ok "native: RAM written by address is read by the function")
+"%RS%" info --cfg "%NC%" > "%NW%\info.log" 2>&1
+call :has "%NW%\info.log" "native sources=3 asm=1 files=4 off=1 compiled=0 reused=4 linked=0 funcs=10" "native: second open compiles nothing"
+call :has "%NW%\info.log" "startup.asm" "native: assembler sources are listed"
+call :has "%NW%\info.log" "files=4 off=1" "native: a file that is not a build target is left out"
+rem a header changes: only the sources that include it are compiled again (reg.h is included by io.c only)
+>> "%NW%\product\inc\reg.h" echo /* changed */
+"%RS%" info --cfg "%NC%" > "%NW%\info2.log" 2>&1
+call :has "%NW%\info2.log" "compiled=1 reused=3 linked=1" "native: a changed header recompiles only its users"
+>> "%NW%\product\inc\types.h" echo /* changed */
+"%RS%" info --cfg "%NC%" > "%NW%\info3.log" 2>&1
+call :has "%NW%\info3.log" "compiled=3 reused=1 linked=1" "native: a header used by every source recompiles them all"
+"%RS%" run --cfg "%NC%" "%NW%\csv\native_basic.csv" -o "%NW%\out2" > "%NW%\again.log" 2>&1
+call :has "%NW%\again.log" "OK 16, NG 0, NO Check 0" "native: all rows are OK after the rebuild"
+rem an address that is not mapped (below 0x10000): the run stops with exit code 2 and names the address
+"%RS%" run --cfg "%NC%" "%NW%\csv\native_low.csv" -o "%NW%\out3" > "%NW%\low.log" 2>&1
+set RC=%ERRORLEVEL%
+"%HAS%" /l /c:"0x100 " "%NW%\low.log" >nul
+if errorlevel 1 (call :ng "native: reading an unmapped address names it" & type "%NW%\low.log") else if "%RC%"=="2" (call :ok "native: reading an unmapped address names it") else (call :ng "native: reading an unmapped address: exit code 2, got %RC%")
+rem no fallback: a missing compiler, a compile error and a missing function are errors (exit code 2)
+copy /y "%NC%" "%NW%\driver\nocc.cfg" >nul
+>> "%NW%\driver\nocc.cfg" echo native_cc = no_such_clang_for_test
+call :native_err "native: a missing compiler is an error" "no_such_clang_for_test" nocc.cfg
+copy /y "%NC%" "%NW%\driver\nofn.cfg" >nul
+>> "%NW%\driver\nofn.cfg" echo native_func = u8 no_such_function(void)
+call :native_err "native: a function that is not in the sources is an error" "cc.log" nofn.cfg
+copy /y "%NC%" "%NW%\driver\badfn.cfg" >nul
+>> "%NW%\driver\badfn.cfg" echo native_func = float f(void)
+call :native_err "native: an unreadable native_func is an error" "native_func" badfn.cfg
+> "%NW%\driver\zz_bad.c" echo #error "compile error for the test"
+call :native_err "native: a compile error is an error and names the file" "zz_bad.c" sim.cfg
+del "%NW%\driver\zz_bad.c"
+rem the same sim.cfg with --exec interp goes to the RL78 backend, which needs a load module
+"%RS%" info --cfg "%NC%" --exec interp > "%NW%\interp.log" 2>&1
+set RC=%ERRORLEVEL%
+"%HAS%" /l /c:"--abs" "%NW%\interp.log" >nul
+if errorlevel 1 (call :ng "native: --exec interp overrides exec = native") else if "%RC%"=="2" (call :ok "native: --exec interp overrides exec = native") else (call :ng "native: --exec interp: exit code 2, got %RC%")
+
 echo == startup diagnostics and skip poke
 "%WORK%\mkabs.exe" startup "%WORK%\startup.abs"
 set RC=%ERRORLEVEL%
@@ -450,6 +502,14 @@ rem :cfg_err name cfg-file expected_text  (sim info exits 2 with the text)
 set RC=%ERRORLEVEL%
 "%HAS%" /l /c:"%~3" "%WORK%\r.log" >nul
 if errorlevel 1 (call :ng "%~1: message contains %~3") else if "%RC%"=="2" (call :ok "%~1") else (call :ng "%~1: exit code 2, got %RC%")
+exit /b 0
+
+rem :native_err name expected_text cfg-file-in-driver-folder
+:native_err
+"%RS%" run --cfg "%NW%\driver\%~3" "%NW%\csv\native_basic.csv" -o "%NW%\out_err" > "%NW%\err.log" 2>&1
+set RC=%ERRORLEVEL%
+"%HAS%" /l /c:"%~2" "%NW%\err.log" >nul
+if errorlevel 1 (call :ng "%~1" & type "%NW%\err.log") else if "%RC%"=="2" (call :ok "%~1") else (call :ng "%~1: exit code 2, got %RC%")
 exit /b 0
 
 rem :run name expected_exit_code expected_text sim-run-args...
