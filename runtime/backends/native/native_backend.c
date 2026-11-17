@@ -19,7 +19,7 @@
  *   link.sig                DLL に入れたオブジェクトと、その中身から作った値
  *   cc.log / cc_times.txt   コンパイラの出力 / コンパイルの所要秒数
  *
- * 今の方式（exec = interp / xlate）と違い、失敗したときに戻る先がない。コンパイラがない、コンパイルに
+ * 関数の例外と時間切れは呼び出し元へ復帰する。コンパイラがない、コンパイルに
  * 失敗した、番地を確保できない、のどれもエラーにする。
  *
  * まだできないこと（docs/DESIGN.md の 4.3 節にも書く）:
@@ -99,6 +99,10 @@ typedef struct {
     rl78_warns w;
     char *dll_data;             /* DLL のファイルを閉じるまで保持する */
     int opt;
+    unsigned timeout_ms;
+#ifdef _WIN32
+    HANDLE watcher, exception_handler;
+#endif
     int ncompiled, nreused, linked;
     native_rewrite_stats rewrite;
     int asm_files;
@@ -204,10 +208,17 @@ static void free_list(char **list, int n)
     free(list);
 }
 
+#ifdef _WIN32
+static void stop_watcher(nat *z);
+#endif
+
 static void nat_free(nat *z)
 {
     int i;
     if (!z) return;
+#ifdef _WIN32
+    stop_watcher(z);
+#endif
     sim_cfg_free(&z->cfg);
     free(z->cc); free(z->rt_dir); free(z->dir); free(z->dll); free(z->mtpj_path); free(z->mode_name);
     free_list(z->srcs, z->nsrcs);
@@ -1347,29 +1358,96 @@ static int b_reset(sim_backend *b, char *err, size_t errlen)
 /* ---- 関数の呼び出し ---- */
 
 #ifdef _WIN32
-static volatile LONG g_in_call;
+static volatile LONG g_in_call, g_stop;
 static const char *volatile g_call_name;
+static void *g_jmp[5];
+static volatile uintptr_t g_stack;
+static volatile uint64_t g_deadline;
+static HANDLE g_thread;
+static DWORD g_thread_id;
+static SRWLOCK g_thread_lock = SRWLOCK_INIT;
+static volatile DWORD g_exception;
+static volatile ULONG_PTR g_access, g_address, g_instruction;
+static volatile int g_timeout;
+static volatile uintptr_t g_code_lo, g_code_hi;   /* 製品の DLL の範囲（時間切れで書き換えてよい位置） */
 
-/* 対象関数の実行中に起きた例外（確保していない番地の読み書きなど）。戻る先がないので、理由を出して終わる */
+static __attribute__((noreturn, noinline)) void native_recover(void)
+{
+    __builtin_longjmp(g_jmp, 1);
+}
+
+/* 例外の配送を終えてから、元のスレッドで戻り先へ復帰する。 */
+static void recovery_context(CONTEXT *c)
+{
+    c->Rip = (DWORD64)(uintptr_t)native_recover;
+    c->Rsp = (DWORD64)(((g_stack - 1024) & ~(uintptr_t)15) - 8);
+    c->EFlags &= ~0x400u;
+}
+
 static LONG CALLBACK on_exception(EXCEPTION_POINTERS *x)
 {
     const EXCEPTION_RECORD *r = x->ExceptionRecord;
-    if (!g_in_call || !(r->ExceptionCode & 0x80000000u)) return EXCEPTION_CONTINUE_SEARCH;
-    fflush(stdout);
-    if (r->ExceptionCode == EXCEPTION_ACCESS_VIOLATION && r->NumberParameters >= 2) {
-        fprintf(stderr, "エラー: native: 関数 %s の実行中に、番地 0x%llX を%sうとして止まりました。"
-                        "番地を再現しているのは 0x%X〜0x%X だけです（0x10000 より下は Windows が使わせません）\n",
-                g_call_name ? g_call_name : "?", (unsigned long long)r->ExceptionInformation[1],
-                r->ExceptionInformation[0] == 1 ? "書こ" : r->ExceptionInformation[0] == 8 ? "実行しよ" : "読も",
-                WIN_LO, WIN_HI - 1);
-    } else {
-        fprintf(stderr, "エラー: native: 関数 %s の実行中に例外 0x%08lX が起きました（0 での割り算、スタックの使い切りなど）\n",
-                g_call_name ? g_call_name : "?", (unsigned long)r->ExceptionCode);
+    if (!g_in_call || !(r->ExceptionCode & 0x80000000u) ||
+        GetCurrentThreadId() != g_thread_id) return EXCEPTION_CONTINUE_SEARCH;
+    if (r->ExceptionCode == EXCEPTION_STACK_OVERFLOW) {
+        fprintf(stderr, "エラー: native: 関数 %s の実行中に、スタックを使い切りました（再帰が止まらないなど）\n",
+                g_call_name ? g_call_name : "?");
+        fflush(stderr);
+        TerminateProcess(GetCurrentProcess(), 2);
+        return EXCEPTION_CONTINUE_SEARCH;
     }
-    fflush(stderr);
-    TerminateProcess(GetCurrentProcess(), 2);
-    return EXCEPTION_CONTINUE_SEARCH;
+    if (InterlockedCompareExchange(&g_in_call, 0, 1) != 1) return EXCEPTION_CONTINUE_SEARCH;
+    g_exception = r->ExceptionCode;
+    g_access = r->NumberParameters >= 2 ? r->ExceptionInformation[0] : 0;
+    g_address = r->NumberParameters >= 2 ? r->ExceptionInformation[1] : 0;
+    g_instruction = (ULONG_PTR)r->ExceptionAddress;
+    recovery_context(x->ContextRecord);
+    return EXCEPTION_CONTINUE_EXECUTION;
 }
+
+static DWORD WINAPI watch_calls(void *unused)
+{
+    (void)unused;
+    while (!g_stop) {
+        Sleep(20);
+        if (!g_in_call || !g_deadline || sim_now_ns() < g_deadline) continue;
+        AcquireSRWLockExclusive(&g_thread_lock);
+        if (g_thread && SuspendThread(g_thread) != (DWORD)-1) {
+            CONTEXT c;
+            memset(&c, 0, sizeof c);
+            c.ContextFlags = CONTEXT_CONTROL | CONTEXT_INTEGER;
+            /* SuspendThread は止まるのを待たないので、先に GetThreadContext で止まるのを待つ。
+             * 止まった位置が製品の DLL の中のときだけ書き換える（b_call の前後、例外の配送中、
+             * ハンドラの中では書き換えず、次の確認で判定し直す）。停止前に次の呼び出しへ進んだ場合は、その期限で判定する */
+            if (GetThreadContext(g_thread, &c) && c.Rip >= g_code_lo && c.Rip < g_code_hi &&
+                g_deadline && sim_now_ns() >= g_deadline &&
+                InterlockedCompareExchange(&g_in_call, 0, 1) == 1) {
+                g_timeout = 1;
+                recovery_context(&c);
+                if (!SetThreadContext(g_thread, &c)) { g_timeout = 0; g_in_call = 1; }
+            }
+            ResumeThread(g_thread);
+        }
+        ReleaseSRWLockExclusive(&g_thread_lock);
+    }
+    return 0;
+}
+
+static void stop_watcher(nat *z)
+{
+    if (!z->watcher && !z->exception_handler) return;
+    if (z->watcher) {
+        g_stop = 1;
+        /* 20 ミリ秒の待機が終わり、ハンドルを使い終えてから閉じる。 */
+        WaitForSingleObject(z->watcher, INFINITE);
+        CloseHandle(z->watcher);
+    }
+    if (z->exception_handler) RemoveVectoredExceptionHandler(z->exception_handler);
+    if (g_thread) CloseHandle(g_thread);
+    g_thread = NULL;
+    g_thread_id = 0;
+}
+
 #endif
 
 typedef int64_t (*entry_fn)(int64_t, int64_t, int64_t, int64_t, int64_t, int64_t, int64_t, int64_t);
@@ -1377,7 +1455,7 @@ typedef int64_t (*entry_fn)(int64_t, int64_t, int64_t, int64_t, int64_t, int64_t
 static int b_call(sim_backend *b, const sim_func *f, const int64_t *args, int nargs,
                   uint64_t *ret_raw, char *err, size_t errlen)
 {
-    nat *z = b->impl;
+    nat *volatile z = b->impl;
     int64_t a[MAX_ARGS] = {0};
     entry_fn fn = NULL;
     void *entry = NULL;
@@ -1392,8 +1470,41 @@ static int b_call(sim_backend *b, const sim_func *f, const int64_t *args, int na
     /* x64 の呼び出しの決まりでは、整数とポインタの引数は 64 ビットの枠で渡り、関数は自分の型の幅だけを読む。
      * 戻り値も 64 ビットのレジスタの下位に入るので、引数が 8 個までの関数は同じ形で呼べる */
 #ifdef _WIN32
+    if (g_thread_id != GetCurrentThreadId()) {
+        HANDLE thread;
+        if (!DuplicateHandle(GetCurrentProcess(), GetCurrentThread(), GetCurrentProcess(),
+                             &thread, 0, FALSE, DUPLICATE_SAME_ACCESS)) {
+            snprintf(err, errlen, "native: 呼び出すスレッドのハンドルを作れません");
+            return -1;
+        }
+        AcquireSRWLockExclusive(&g_thread_lock);
+        if (g_thread) CloseHandle(g_thread);
+        g_thread = thread;
+        g_thread_id = GetCurrentThreadId();
+        ReleaseSRWLockExclusive(&g_thread_lock);
+    }
     g_call_name = f->name;
-    InterlockedExchange(&g_in_call, 1);
+    g_stack = (uintptr_t)__builtin_frame_address(0);
+    g_timeout = 0;
+    g_exception = 0;
+    if (__builtin_setjmp(g_jmp)) {
+        g_in_call = 0;   /* 復帰させた側が 0 にしているが、念のため */
+        g_deadline = 0;
+        if (g_timeout)
+            snprintf(err, errlen, "native: 関数 %s が %u ミリ秒たっても戻りません（native_timeout_ms）。周辺機能は模擬しないので、レジスタのビットが変わるのを待つループは終わりません。待っているレジスタに CSV で値を入れるか、その関数をスタブにしてください",
+                     g_call_name, z->timeout_ms);
+        else if (g_exception == EXCEPTION_ACCESS_VIOLATION)
+            snprintf(err, errlen, "native: 関数 %s の実行中に、番地 0x%llX を%sうとして止まりました。番地を再現しているのは 0x%X〜0x%X だけです（0x10000 より下は Windows が使わせません）",
+                     g_call_name, (unsigned long long)g_address,
+                     g_access == 1 ? "書こ" : g_access == 8 ? "実行しよ" : "読も", WIN_LO, WIN_HI - 1);
+        else if (g_exception == EXCEPTION_INT_DIVIDE_BY_ZERO)
+            snprintf(err, errlen, "native: 関数 %s の実行中に、0 での割り算が起きました（マイコンでは止まらずに決まった値になりますが、PC では例外になります）", g_call_name);
+        else
+            snprintf(err, errlen, "native: 関数 %s の実行中に例外 0x%08lX が起きました", g_call_name, (unsigned long)g_exception);
+        return -1;
+    }
+    g_deadline = z->timeout_ms ? sim_now_ns() + (uint64_t)z->timeout_ms * 1000000u : 0;
+    g_in_call = 1;
 #endif
     *ret_raw = 0;
     if (f->ret && f->ret->kind == SIM_T_FLOAT && f->ret->size == 4) {
@@ -1414,7 +1525,8 @@ static int b_call(sim_backend *b, const sim_func *f, const int64_t *args, int na
         *ret_raw = (uint64_t)fn(a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7]);
     }
 #ifdef _WIN32
-    InterlockedExchange(&g_in_call, 0);
+    g_in_call = 0;
+    g_deadline = 0;
 #endif
     z->calls++;
     return 0;
@@ -1491,6 +1603,9 @@ static void b_print_info(sim_backend *b, FILE *out)
             z->nsrcs, z->nasms, z->files_total, z->files_off, z->ncompiled, z->nreused, z->linked,
             (int)z->st.nfuncs, (int)z->st.nvars, z->opt);
     fprintf(out, "  変数: %zu 個、関数: %zu 個（デバッグ情報から）\n", z->st.nvars, z->st.nfuncs);
+    fprintf(out, "  native timeout_ms=%u\n", z->timeout_ms);
+    if (z->timeout_ms) fprintf(out, "  1 回の呼び出しの上限: %u ミリ秒（native_timeout_ms）\n", z->timeout_ms);
+    else fprintf(out, "  1 回の呼び出しの上限: なし（native_timeout_ms）\n");
     fprintf(out, "  最適化: native_opt = %d\n", z->opt);
     if (z->w.n) fprintf(out, "警告: %d 件%s\n", z->w.n, z->w.verbose ? "" : "（--verbose で表示）");
 }
@@ -1709,6 +1824,15 @@ sim_backend *native_backend_open(const sim_open_opts *o, int *handled, char *err
     nat_free(z);
     return NULL;
 #else
+    z->timeout_ms = 10000;
+    if ((s = sim_cfg_get(&z->cfg, "native_timeout_ms"))) {
+        uint64_t ms;
+        if (sim_parse_uint(s, 86400000, &ms)) {
+            snprintf(err, errlen, "sim.cfg: native_timeout_ms = %s を読めません（0〜86400000）", s);
+            goto fail;
+        }
+        z->timeout_ms = (unsigned)ms;
+    }
     /* 番地の確保は、ほかのメモリの確保より先に行う（遅くなるほど、ほかのものに取られやすい） */
     if (map_memory(z, err, errlen)) goto fail;
 
@@ -1749,7 +1873,18 @@ sim_backend *native_backend_open(const sim_open_opts *o, int *handled, char *err
     if (read_dwarf(z, err, errlen)) goto fail;
     if (z->w.n && !z->w.verbose) fprintf(stderr, "sim: 読み込みの警告が %d 件あります（--verbose で表示）\n", z->w.n);
     if (add_dll_sections(z, z->lib)) { snprintf(err, errlen, "native: DLL のセクションが多すぎます"); goto fail; }
-    AddVectoredExceptionHandler(1, on_exception);
+    z->exception_handler = AddVectoredExceptionHandler(1, on_exception);
+    if (!z->exception_handler) { snprintf(err, errlen, "native: 例外ハンドラを登録できません"); goto fail; }
+    if (z->timeout_ms) {
+        const IMAGE_DOS_HEADER *dh = (const IMAGE_DOS_HEADER *)z->lib;
+        const IMAGE_NT_HEADERS64 *nh = (const IMAGE_NT_HEADERS64 *)((const char *)z->lib + dh->e_lfanew);
+        g_code_lo = (uintptr_t)z->lib;
+        g_code_hi = g_code_lo + nh->OptionalHeader.SizeOfImage;
+        g_stop = 0;
+        (void)sim_now_ns();
+        z->watcher = CreateThread(NULL, 0, watch_calls, NULL, 0, NULL);
+        if (!z->watcher) { snprintf(err, errlen, "native: 監視用のスレッドを作れません"); goto fail; }
+    }
 
     z->b.csv_init = sim_cfg_csv_init(&z->cfg, o->csv_init, err, errlen);
     if (z->b.csv_init < 0) goto fail;
