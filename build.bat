@@ -47,7 +47,7 @@ if not exist "%OUT%" (
 set "S=%ROOT%\runtime\src"
 set "B=%ROOT%\runtime\backends\rl78"
 set "C=%ROOT%\rl78\src"
-set "COMMON="%S%\sim_main.c" "%S%\sim_util.c" "%S%\sim_json.c" "%S%\sim_platform.c" "%S%\sim_expr.c" "%S%\sim_csv.c" "%S%\sim_gui.c" "%S%\sim_cfg.c" "%S%\sim_defines.c" "%S%\sim_ppexpr.c" "%S%\sim_mtpj.c""
+set "COMMON="%S%\sim_main.c" "%S%\sim_util.c" "%S%\sim_json.c" "%S%\sim_platform.c" "%S%\sim_expr.c" "%S%\sim_csv.c" "%S%\sim_gui.c" "%S%\sim_cfg.c" "%S%\sim_defines.c" "%S%\sim_ppexpr.c" "%S%\sim_mtpj.c" "%S%\sim_cc.c""
 if "%MODE%"=="mock" (
     set "SRCS=%COMMON% "%ROOT%\runtime\backends\mock\mock_backend.c""
     set "INC=-I"%ROOT%\runtime\include" -I"%S%""

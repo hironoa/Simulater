@@ -32,7 +32,7 @@ echo "build_windows_cross.sh: $CC で sim.exe をビルドします"
 "$CC" -static -D__USE_MINGW_ANSI_STDIO=1 -std=c11 -O2 -fno-unroll-loops -Wall -Wextra \
     -I"$ROOT/runtime/include" -I"$S" -I"$ROOT/rl78/include" -I"$B" \
     "$S/sim_main.c" "$S/sim_util.c" "$S/sim_json.c" "$S/sim_platform.c" "$S/sim_expr.c" "$S/sim_csv.c" "$S/sim_gui.c" \
-    "$S/sim_cfg.c" "$S/sim_defines.c" "$S/sim_ppexpr.c" "$S/sim_mtpj.c" \
+    "$S/sim_cfg.c" "$S/sim_defines.c" "$S/sim_ppexpr.c" "$S/sim_mtpj.c" "$S/sim_cc.c" \
     "$B/rl78_backend.c" "$B/rl78_xl.c" "$B/rl78_abi.c" "$B/rl78_lmf.c" "$B/rl78_sym.c" "$B/rl78_elf.c" "$B/rl78_dwarf.c" "$B/rl78_map.c" \
     "$C/rl78_exec.c" "$C/rl78_sys.c" "$C/rl78_disasm.c" "$C/rl78_xlate.c" \
     -o "$OUT/sim.exe" -lws2_32 -lshell32
