@@ -416,8 +416,28 @@ set "WAIT_OK=0"
 for /f "usebackq delims=" %%L in ("%NW%\wait_ok.log") do set /a WAIT_OK+=1 >nul
 if "%WAIT_OK%"=="2" (call :ok "native: both ready rows including after timeout are OK") else (call :ng "native: both ready rows including after timeout are OK")
 call :has "%NW%\fault.log" "native_timeout_ms" "native: timeout names its setting"
+rem The stopped source line is shown as path:line. The line numbers are those of io.c (marked there with a comment).
+call :has "%NW%\fault.log" "\src\io.c:24" "native: access fault shows io.c line 24"
+call :has "%NW%\fault.log" "\src\io.c:29" "native: divide by zero shows io.c line 29"
+call :has "%NW%\fault.log" "\src\io.c:34" "native: timeout shows io.c line 34"
+rem With optimization the line can move a little, so only the file name is checked (3 rows, each on stderr and stdout).
+copy /y "%NW%\driver\timeout.cfg" "%NW%\driver\faultopt2.cfg" >nul
+>> "%NW%\driver\faultopt2.cfg" echo native_opt = 2
+"%RS%" run --cfg "%NW%\driver\faultopt2.cfg" "%NW%\csv\native_fault.csv" -o "%NW%\out_faultopt2" > "%NW%\faultopt2.log" 2>&1
+"%HAS%" /l /c:"\src\io.c:" "%NW%\faultopt2.log" > "%NW%\faultopt2_loc.log"
+set "LOC_N=0"
+for /f "usebackq delims=" %%L in ("%NW%\faultopt2_loc.log") do set /a LOC_N+=1 >nul
+if "%LOC_N%"=="6" (call :ok "native: optimization 2 shows io.c for all three fault rows") else (call :ng "native: optimization 2 shows io.c for all three fault rows: got %LOC_N% lines" & type "%NW%\faultopt2.log")
+rem Without llvm-symbolizer the rows are still NG and the message names the tool and the setting.
+copy /y "%NW%\driver\timeout.cfg" "%NW%\driver\nosym.cfg" >nul
+>> "%NW%\driver\nosym.cfg" echo native_symbolizer = no_such_symbolizer_for_test
+"%RS%" run --cfg "%NW%\driver\nosym.cfg" "%NW%\csv\native_fault.csv" -o "%NW%\out_nosym" > "%NW%\nosym.log" 2>&1
+call :has "%NW%\nosym.log" "OK 5, NG 3, NO Check 0" "native: without llvm-symbolizer the fault rows are NG"
+call :has "%NW%\nosym.log" "llvm-symbolizer" "native: without llvm-symbolizer the message names it"
+call :has "%NW%\nosym.log" "native_symbolizer" "native: without llvm-symbolizer the message names the setting"
 "%RS%" info --cfg "%NW%\driver\timeout.cfg" > "%NW%\timeout_info.log" 2>&1
 call :has "%NW%\timeout_info.log" "native timeout_ms=300" "native: info shows timeout"
+call :has "%NW%\timeout_info.log" "llvm-symbolizer" "native: info shows the symbolizer"
 copy /y "%NC%" "%NW%\driver\badtimeout.cfg" >nul
 >> "%NW%\driver\badtimeout.cfg" echo native_timeout_ms = abc
 call :native_err "native: invalid timeout is an error" "native_timeout_ms" badtimeout.cfg
