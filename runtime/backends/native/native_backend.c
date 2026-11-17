@@ -82,6 +82,13 @@ typedef struct {
     int decl_f, decl_d, size_unknown, ret_set;
 } undef_t;
 
+/* 止まった場所の 1 段。いちばん内側が先で、そのあとがインライン展開した呼び出し元。分からない名前は NULL */
+#define MAX_FRAMES 4
+typedef struct {
+    char *func, *file;
+    unsigned long line;
+} frame_t;
+
 #define UNDEF_DATA_SIZE 4096 /* 大きさが分からない変数の代わり。表として読まれても範囲外になりにくいよう大きめに取る */
 #define UNDEF_ALIGN_MIN 16   /* 変数の代わりの整列の最小。SSE の命令（movaps など）が前提にする境界 */
 
@@ -113,6 +120,13 @@ typedef struct {
     range_t ranges[MAX_RANGES]; int nranges;
     uint8_t *heap; size_t heap_used;
     uint64_t calls;
+    /* 止まった場所の表示（llvm-symbolizer） */
+    char *symbolizer;            /* 起動する llvm-symbolizer */
+    uint64_t image_base;         /* DLL の優先ベース（デバッグ情報の番地はこれが基準） */
+    int sym_runs, sym_limit_said, sym_explained;
+    uint64_t sym_last_addr;      /* 直前に調べた番地（優先ベースでの値。0 はまだない） */
+    int sym_nframes;             /* 直前の結果。-1 は llvm-symbolizer を使えなかった */
+    frame_t sym_frames[MAX_FRAMES];
 } nat;
 
 /* ---- 小物 ---- */
@@ -221,6 +235,8 @@ static void nat_free(nat *z)
 #endif
     sim_cfg_free(&z->cfg);
     free(z->cc); free(z->rt_dir); free(z->dir); free(z->dll); free(z->mtpj_path); free(z->mode_name);
+    free(z->symbolizer);
+    for (i = 0; i < z->sym_nframes; i++) { free(z->sym_frames[i].func); free(z->sym_frames[i].file); }
     free_list(z->srcs, z->nsrcs);
     free_list(z->asms, z->nasms);
     free_list(z->incs, z->nincs);
@@ -1369,6 +1385,7 @@ static SRWLOCK g_thread_lock = SRWLOCK_INIT;
 static volatile DWORD g_exception;
 static volatile ULONG_PTR g_access, g_address, g_instruction;
 static volatile int g_timeout;
+static volatile ULONG_PTR g_stopped_at;           /* 時間切れで止めたときの Rip（書き換える前の値） */
 static volatile uintptr_t g_code_lo, g_code_hi;   /* 製品の DLL の範囲（時間切れで書き換えてよい位置） */
 
 static __attribute__((noreturn, noinline)) void native_recover(void)
@@ -1423,6 +1440,7 @@ static DWORD WINAPI watch_calls(void *unused)
                 g_deadline && sim_now_ns() >= g_deadline &&
                 InterlockedCompareExchange(&g_in_call, 0, 1) == 1) {
                 g_timeout = 1;
+                g_stopped_at = (ULONG_PTR)c.Rip;
                 recovery_context(&c);
                 if (!SetThreadContext(g_thread, &c)) { g_timeout = 0; g_in_call = 1; }
             }
@@ -1446,6 +1464,192 @@ static void stop_watcher(nat *z)
     if (g_thread) CloseHandle(g_thread);
     g_thread = NULL;
     g_thread_id = 0;
+}
+
+/* ---- 止まった場所（llvm-symbolizer） ----
+ * 例外ハンドラと監視のスレッドは番地を控えるだけにし、b_call に戻ってから llvm-symbolizer を起動して、
+ * 番地をソースのファイル名と行番号にする。デバッグ情報の行は、プリプロセスの行の情報（# 行 "ファイル"）を
+ * 通して、キャッシュの .pp.c ではなく元のソースとヘッダーを指す */
+
+#define SYM_MAX_RUNS 20   /* 1 回の実行で llvm-symbolizer を起動する数の上限（NG の行が多い CSV で遅くならないように） */
+
+/* パスの . と .. をたどって除き、区切りを \ にそろえる（呼び出し側で free） */
+static char *tidy_path(const char *p)
+{
+    size_t n = strlen(p), o = 0, depth = 0, root;
+    size_t *mark = sim_xcalloc(n + 1, sizeof *mark);
+    char *out = sim_xmalloc(n + 2);
+    const char *s = p;
+    if (s[0] && s[1] == ':') { out[o++] = s[0]; out[o++] = ':'; s += 2; }
+    while (*s == '/' || *s == '\\') { out[o++] = '\\'; s++; }
+    root = o;
+    while (*s) {
+        const char *e = s;
+        size_t k;
+        while (*e && *e != '/' && *e != '\\') e++;
+        k = (size_t)(e - s);
+        if (k == 2 && s[0] == '.' && s[1] == '.' && depth > 0) o = mark[--depth];
+        else if (k && !(k == 1 && s[0] == '.')) {
+            /* 先頭より上へ出る .. は残す（たどれる名前がない） */
+            if (!(k == 2 && s[0] == '.' && s[1] == '.')) mark[depth++] = o;
+            if (o > root) out[o++] = '\\';
+            memcpy(out + o, s, k);
+            o += k;
+        }
+        s = *e ? e + 1 : e;
+    }
+    out[o] = 0;
+    free(mark);
+    return out;
+}
+
+static int all_digits(const char *s, size_t n)
+{
+    size_t i;
+    if (!n) return 0;
+    for (i = 0; i < n; i++) if (s[i] < '0' || s[i] > '9') return 0;
+    return 1;
+}
+
+/* llvm-symbolizer の場所の行（パス:行:桁）を読む。パスに ':'（ドライブ名）が入るので末尾側から読む。
+ * 形が違えば -1。?? や行番号 0 は「分からない」として *file = NULL */
+static int parse_loc(const char *s, char **file, unsigned long *line)
+{
+    const char *c2 = strrchr(s, ':'), *c1;
+    *file = NULL;
+    *line = 0;
+    if (!c2 || c2 == s || !all_digits(c2 + 1, strlen(c2 + 1))) return -1;
+    for (c1 = c2 - 1; c1 > s && *c1 != ':'; c1--) ;
+    if (*c1 == ':' && all_digits(c1 + 1, (size_t)(c2 - c1 - 1))) {
+        *line = strtoul(c1 + 1, NULL, 10);   /* パス:行:桁 */
+    } else {
+        c1 = c2;                              /* パス:行（桁なし） */
+        *line = strtoul(c2 + 1, NULL, 10);
+    }
+    if (*line == 0 || (c1 - s == 2 && !strncmp(s, "??", 2))) { *line = 0; return 0; }
+    *file = sim_xstrndup(s, (size_t)(c1 - s));
+    return 0;
+}
+
+static void clear_frames(nat *z)
+{
+    int i;
+    for (i = 0; i < z->sym_nframes; i++) { free(z->sym_frames[i].func); free(z->sym_frames[i].file); }
+    memset(z->sym_frames, 0, sizeof z->sym_frames);
+    z->sym_nframes = 0;
+}
+
+/* addr（DLL の優先ベースでの番地）を llvm-symbolizer で調べ、z->sym_frames に入れる。
+ * 起動できない・結果を読めなければ z->sym_nframes = -1 */
+static void symbolize(nat *z, uint64_t addr)
+{
+    char a[32], *tmp, *text, *p;
+    const char *argv[8];
+    sim_buf obj;
+    sim_proc *proc;
+    size_t len = 0;
+    int rc, k = 0, n = 0;
+    clear_frames(z);
+    snprintf(a, sizeof a, "0x%llX", (unsigned long long)addr);
+    sim_buf_init(&obj);
+    sim_buf_printf(&obj, "--obj=%s", z->dll);
+    tmp = sim_path_join(z->dir, "symbolize.tmp");
+    argv[k++] = z->symbolizer;
+    argv[k++] = sim_buf_cstr(&obj);
+    argv[k++] = "--output-style=LLVM";   /* 1 段ごとに「関数名」「パス:行:桁」の 2 行。番地の区切りは空行 */
+    argv[k++] = "--functions=linkage";
+    argv[k++] = "--inlines";             /* インライン展開した呼び出し元も、内側から順に出す */
+    argv[k++] = a;
+    argv[k] = NULL;
+    sim_remove_file(tmp);
+    proc = sim_proc_spawn(argv, tmp);
+    rc = proc ? sim_proc_wait(proc) : -1;
+    text = rc == 0 ? sim_read_file(tmp, &len) : NULL;
+    sim_remove_file(tmp);
+    free(tmp);
+    sim_buf_free(&obj);
+    if (!text) { z->sym_nframes = -1; return; }
+    /* 行に分ける。関数名の行のあとに場所の行が続くものを 1 段とする（エラーの文などは読み飛ばす） */
+    {
+        char *lines[64];
+        int nl = 0, i, ok = 0;
+        for (p = text; *p && nl < 64; ) {
+            char *e = p + strcspn(p, "\n");
+            int more = *e != 0;
+            *e = 0;
+            if (e > p && e[-1] == '\r') e[-1] = 0;
+            lines[nl++] = p;
+            p = more ? e + 1 : e;
+        }
+        for (i = 0; i + 1 < nl; i++) {
+            char *file;
+            unsigned long line;
+            if (!*lines[i]) { if (ok) break; continue; }
+            if (parse_loc(lines[i + 1], &file, &line)) continue;
+            ok = 1;
+            if (n < MAX_FRAMES) {
+                z->sym_frames[n].func = strcmp(lines[i], "??") ? sim_xstrdup(lines[i]) : NULL;
+                z->sym_frames[n].file = file;
+                z->sym_frames[n].line = line;
+                n++;
+            } else free(file);
+            i++;
+        }
+        free(text);
+        z->sym_nframes = ok ? n : -1;
+    }
+}
+
+/* 例外・時間切れで止まった番地 at の場所を、理由の文 err の末尾に足す。DLL の外なら何もしない */
+static void add_location(nat *z, uintptr_t at, int timeout, const char *called, char *err, size_t errlen)
+{
+    const char *label = timeout ? "止めたときに実行していた場所" : "止まった場所";
+    size_t used = strlen(err);
+    uint64_t addr;
+    sim_buf b;
+    int i, shown;
+    /* 上限に達したあとは、直前と同じ番地でも足さない（どの行に場所が出るかを分かりやすくする） */
+    if (!at || at < g_code_lo || at >= g_code_hi || used + 1 >= errlen || z->sym_limit_said) return;
+    addr = z->image_base + (uint64_t)(at - g_code_lo);
+    if (!z->sym_last_addr || addr != z->sym_last_addr) {
+        if (z->sym_runs >= SYM_MAX_RUNS) {
+            if (!z->sym_limit_said && !z->quiet)
+                fprintf(stderr, "native: 止まった場所の表示は %d 件までです\n", SYM_MAX_RUNS);
+            z->sym_limit_said = 1;
+            return;
+        }
+        z->sym_runs++;
+        symbolize(z, addr);
+        z->sym_last_addr = addr;
+    }
+    sim_buf_init(&b);
+    if (z->sym_nframes < 0) {
+        sim_buf_printf(&b, " %s: DLL の中の位置 0x%llX%s", label, (unsigned long long)addr,
+                       z->sym_explained ? "" : "（行番号を出すには llvm-symbolizer が要ります。clang と同じフォルダにあります。"
+                                               "native_symbolizer = で指定できます）");
+        z->sym_explained = 1;
+    } else if (!z->sym_nframes || !z->sym_frames[0].file) {
+        sim_buf_printf(&b, " %s: DLL の中の位置 0x%llX（行番号が分かりません）", label, (unsigned long long)addr);
+    } else {
+        const frame_t *f = &z->sym_frames[0];
+        char *full = tidy_path(f->file);
+        sim_buf_printf(&b, " %s: %s の %lu 行目（", label, sim_basename(full), f->line);
+        if (f->func && (!called || strcmp(f->func, called))) sim_buf_printf(&b, "関数 %s、", f->func);
+        sim_buf_printf(&b, "%s:%lu）", full, f->line);   /* パス:行 は、エディタにそのまま渡せる形 */
+        free(full);
+        for (i = 1, shown = 0; i < z->sym_nframes; i++) {
+            f = &z->sym_frames[i];
+            if (!f->file) continue;
+            full = tidy_path(f->file);
+            sim_buf_printf(&b, "%s%s の %lu 行目", shown++ ? " ← " : "。インライン展開した呼び出し元: ",
+                           sim_basename(full), f->line);
+            if (f->func && (!called || strcmp(f->func, called))) sim_buf_printf(&b, "（関数 %s）", f->func);
+            free(full);
+        }
+    }
+    /* 入りきらないときは足さない（文字の途中で切らない） */
+    if (used + b.len < errlen) memcpy(err + used, sim_buf_cstr(&b), b.len + 1);
+    sim_buf_free(&b);
 }
 
 #endif
@@ -1487,6 +1691,8 @@ static int b_call(sim_backend *b, const sim_func *f, const int64_t *args, int na
     g_stack = (uintptr_t)__builtin_frame_address(0);
     g_timeout = 0;
     g_exception = 0;
+    g_instruction = 0;
+    g_stopped_at = 0;
     if (__builtin_setjmp(g_jmp)) {
         g_in_call = 0;   /* 復帰させた側が 0 にしているが、念のため */
         g_deadline = 0;
@@ -1501,6 +1707,8 @@ static int b_call(sim_backend *b, const sim_func *f, const int64_t *args, int na
             snprintf(err, errlen, "native: 関数 %s の実行中に、0 での割り算が起きました（マイコンでは止まらずに決まった値になりますが、PC では例外になります）", g_call_name);
         else
             snprintf(err, errlen, "native: 関数 %s の実行中に例外 0x%08lX が起きました", g_call_name, (unsigned long)g_exception);
+        /* ここは通常の文脈なので、外部のプログラムを起動してよい */
+        add_location(z, g_timeout ? (uintptr_t)g_stopped_at : (uintptr_t)g_instruction, g_timeout, g_call_name, err, errlen);
         return -1;
     }
     g_deadline = z->timeout_ms ? sim_now_ns() + (uint64_t)z->timeout_ms * 1000000u : 0;
@@ -1589,6 +1797,7 @@ static void b_print_info(sim_backend *b, FILE *out)
     }
     fprintf(out, "  インクルード・パス: %d 個、定義マクロ: %d 個、定義解除マクロ: %d 個\n", z->nincs, ndefs, nundefs);
     fprintf(out, "  コンパイラ: %s\n", z->cc);
+    fprintf(out, "  止まった場所を調べる道具: %s（native_symbolizer）\n", z->symbolizer ? z->symbolizer : "");
     fprintf(out, "  今回コンパイルしたもの: %d 個、使い回したもの: %d 個、DLL: %s\n",
             z->ncompiled, z->nreused, z->linked ? "作り直した" : "前回のまま");
     fprintf(out, "  DLL: %s\n", z->dll ? z->dll : "");
@@ -1650,6 +1859,7 @@ static int read_dwarf(nat *z, char *err, size_t errlen)
     if (optlen < 64 || !pe_range(len, opt, optlen) || pe_u16(d + opt) != 0x20b) goto bad;
     image_base = pe_u32(d + opt + 24) | (uint64_t)pe_u32(d + opt + 28) << 32;
     image_size = pe_u32(d + opt + 56);
+    z->image_base = image_base;
     if (!image_size || loaded > UINT64_MAX - image_size) goto bad;
     sections = opt + optlen;
     if (!pe_range(len, sections, (size_t)nsects * 40)) goto bad;
@@ -1863,6 +2073,15 @@ sim_backend *native_backend_open(const sim_open_opts *o, int *handled, char *err
                               "（LLVM の配布物を展開したフォルダの bin\\clang.exe）", z->cc);
         goto fail;
     }
+    /* 止まった場所を調べる llvm-symbolizer。指定がなければ clang と同じフォルダのもの。
+     * 起動できるかは、使うときに分かればよいので、ここでは確かめない */
+    if ((s = sim_cfg_get(&z->cfg, "native_symbolizer")) && *s)
+        z->symbolizer = strchr(s, '/') || strchr(s, '\\') ? sim_cfg_path(&z->cfg, s) : sim_xstrdup(s);
+    else if (strchr(z->cc, '/') || strchr(z->cc, '\\')) {
+        char *d = dir_of(z->cc);
+        z->symbolizer = sim_path_join(d, "llvm-symbolizer.exe");
+        free(d);
+    } else z->symbolizer = sim_xstrdup("llvm-symbolizer");
     if (getenv("SIM_NATIVE_RT") && *getenv("SIM_NATIVE_RT")) z->rt_dir = sim_xstrdup(getenv("SIM_NATIVE_RT"));
     else z->rt_dir = sim_path_join(o->exe_dir ? o->exe_dir : ".", "native");
 
@@ -1875,11 +2094,13 @@ sim_backend *native_backend_open(const sim_open_opts *o, int *handled, char *err
     if (add_dll_sections(z, z->lib)) { snprintf(err, errlen, "native: DLL のセクションが多すぎます"); goto fail; }
     z->exception_handler = AddVectoredExceptionHandler(1, on_exception);
     if (!z->exception_handler) { snprintf(err, errlen, "native: 例外ハンドラを登録できません"); goto fail; }
-    if (z->timeout_ms) {
+    {   /* 止まった場所を調べるのにも使うので、時間の上限がなくても控える */
         const IMAGE_DOS_HEADER *dh = (const IMAGE_DOS_HEADER *)z->lib;
         const IMAGE_NT_HEADERS64 *nh = (const IMAGE_NT_HEADERS64 *)((const char *)z->lib + dh->e_lfanew);
         g_code_lo = (uintptr_t)z->lib;
         g_code_hi = g_code_lo + nh->OptionalHeader.SizeOfImage;
+    }
+    if (z->timeout_ms) {
         g_stop = 0;
         (void)sim_now_ns();
         z->watcher = CreateThread(NULL, 0, watch_calls, NULL, 0, NULL);
