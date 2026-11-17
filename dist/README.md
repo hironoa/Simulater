@@ -17,7 +17,7 @@
 
 | 項目 | 内容 |
 | --- | --- |
-| ビルド元 | `5ebefe9`（PC 用 DLL の方式 `exec = native` で、変数と関数をデバッグ情報から取る変更（段階 2）と、`long int` と `__asm` のあるソースをコンパイルできるようにする修正（プリプロセス後に型と `__asm` を書き直す）を含む） |
+| ビルド元 | `1baa929`（PC 用 DLL の方式 `exec = native` で、変数と関数をデバッグ情報から取る変更（段階 2）と、`long int` と `__asm` のあるソースをコンパイルできるようにする修正（プリプロセス後に型と `__asm` を書き直す。GNU の修飾子の別名と、`__asm` のあとの行の情報も扱う）を含む） |
 | ビルドした日 | 2026-11-17 |
 | ビルド方法 | Windows 11 の上で `tools\build_dist.bat`（MinGW-w64 の gcc 16.2.0、x86_64、UCRT。`build.bat` の `CC=gcc` と同じ設定） |
 | 依存する DLL | Windows 標準のものだけ（KERNEL32、SHELL32、WS2_32、UCRT）。MinGW の DLL は要らない |
