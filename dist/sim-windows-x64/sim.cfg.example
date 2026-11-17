@@ -118,8 +118,8 @@ max_insns = 100000000
 # native_src = .
 # インクルード・パスを足す（複数行可）
 # native_include = ../stub/inc
-# 呼ぶ関数（複数行可）。型は void / s8 / u8 / s16 / u16 / s32 / u32 / ptr、引数は 8 個まで
-# native_func = s16 calc_add(s16 a, s16 b)
+# 最適化は 0（既定）または 2。関数の型は DLL のデバッグ情報から取る
+# native_opt = 0
 # native の clang（既定は xlate_cc、環境変数 SIM_XLATE_CC、PATH の clang の順）
 # native_cc = C:\tools\clang+llvm-18.1.8-x86_64-pc-windows-msvc\bin\clang.exe
 # native のコンパイル結果を置くフォルダ（既定はこのファイルの隣の .simnative）と、コンパイルの並列数

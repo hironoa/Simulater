@@ -1,12 +1,12 @@
 /*
- * native_backend.c - PC 用 DLL の方式（exec = native）。段階 1: 土台
+ * native_backend.c - PC 用 DLL の方式（exec = native）。段階 2: 変数と関数
  *
  * やること:
  *   1. CS+ のプロジェクトファイル（mtpj）から、ビルド対象の .c、インクルード・パス、定義・定義解除マクロを取る。
  *      ドライバやスタブなど、製品とは別に管理するソースは native_src で足す。
  *   2. 各ソースの先頭に rt/sim_native_pre.h を差し込み（-include）、clang で並列にコンパイルする。
  *   3. オブジェクトを 1 つの DLL にまとめる（C ライブラリなし。LLVM の配布物の clang と lld-link だけで作れる）。
- *   4. DLL を読み込み、native_func に書いた関数を呼べるようにする。
+ *   4. DLL を読み込み、デバッグ情報から変数と関数を取る。
  *   5. 0xF0000〜0xFFFFF に、同じ番地のメモリを確保する（番地を直接書いたレジスタや RAM のアクセス用）。
  *
  * キャッシュのフォルダは、設定ファイルの隣の .simnative/<mtpj の名前>-<鍵>/（native_dir で変えられる）。
@@ -16,14 +16,13 @@
  *   <名前>-<パスの鍵>.sig   ソースと、読んだファイルすべての中身から作った値。同じならコンパイルし直さない
  *   native-N.dll            できあがり（読み込み中のファイルは上書きできないので、作るたびに番号を進める）
  *   current.txt             いま使う DLL の名前
- *   link.sig                DLL に入れたオブジェクトと、外から呼ぶ関数の一覧から作った値
+ *   link.sig                DLL に入れたオブジェクトと、その中身から作った値
  *   cc.log / cc_times.txt   コンパイラの出力 / コンパイルの所要秒数
  *
  * 今の方式（exec = interp / xlate）と違い、失敗したときに戻る先がない。コンパイラがない、コンパイルに
  * 失敗した、番地を確保できない、のどれもエラーにする。
  *
- * 段階 1 でできないこと（docs/DESIGN.md の 4.3 節にも書く）:
- *   - 変数を名前で読み書きする（番地の指定 0xFFF01:1 と、ヘッダーの番地の定義 defines は使える）
+ * まだできないこと（docs/DESIGN.md の 4.3 節にも書く）:
  *   - スタブの切り替え、GUI
  *   - #asm 〜 #endasm、`short int` などの書き直し、標準ヘッダー
  *   - Windows 以外での実行
@@ -35,6 +34,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "../rl78/rl78_be.h"
 #include "sim_cc.h"
 #include "sim_cfg.h"
 #include "sim_mtpj.h"
@@ -58,16 +58,6 @@ typedef struct {
 } range_t;
 
 typedef struct {
-    sim_func f;
-    char *name;
-    char *pnames[MAX_ARGS];
-    const char *pname_ptrs[MAX_ARGS];
-    const sim_type *ptypes[MAX_ARGS];
-    void *entry;                 /* DLL の中の入口 */
-    int line;                    /* sim.cfg の行 */
-} nfunc;
-
-typedef struct {
     char *src;                   /* ソースのパス */
     char *base;                  /* キャッシュの中の名前（拡張子なし） */
     char *obj, *dep, *sig;
@@ -86,7 +76,10 @@ typedef struct {
     char **asms; int nasms;
     char **incs; int nincs;
     char **macros; int nmacros;
-    nfunc *funcs; int nfuncs;
+    rl78_symtab st;
+    rl78_warns w;
+    char *dll_data;             /* DLL のファイルを閉じるまで保持する */
+    int opt;
     int ncompiled, nreused, linked;
     double build_sec;
     void *lib;
@@ -94,25 +87,6 @@ typedef struct {
     uint8_t *heap; size_t heap_used;
     uint64_t calls;
 } nat;
-
-/* ---- 型（native_func に書けるもの） ---- */
-
-static const sim_type T_S8  = {SIM_T_INT,  "s8",  1, NULL, 0, NULL, 0, 0};
-static const sim_type T_U8  = {SIM_T_UINT, "u8",  1, NULL, 0, NULL, 0, 0};
-static const sim_type T_S16 = {SIM_T_INT,  "s16", 2, NULL, 0, NULL, 0, 0};
-static const sim_type T_U16 = {SIM_T_UINT, "u16", 2, NULL, 0, NULL, 0, 0};
-static const sim_type T_S32 = {SIM_T_INT,  "s32", 4, NULL, 0, NULL, 0, 0};
-static const sim_type T_U32 = {SIM_T_UINT, "u32", 4, NULL, 0, NULL, 0, 0};
-static const sim_type T_PTR = {SIM_T_PTR,  "ptr", 8, NULL, 0, NULL, 0, 0};
-
-static const sim_type *type_by_name(const char *s, size_t n)
-{
-    static const sim_type *const all[] = {&T_S8, &T_U8, &T_S16, &T_U16, &T_S32, &T_U32, &T_PTR, NULL};
-    int i;
-    for (i = 0; all[i]; i++)
-        if (strlen(all[i]->name) == n && !memcmp(all[i]->name, s, n)) return all[i];
-    return NULL;
-}
 
 /* ---- 小物 ---- */
 
@@ -209,7 +183,7 @@ static void free_list(char **list, int n)
 
 static void nat_free(nat *z)
 {
-    int i, k;
+    int i;
     if (!z) return;
     sim_cfg_free(&z->cfg);
     free(z->cc); free(z->rt_dir); free(z->dir); free(z->dll); free(z->mtpj_path); free(z->mode_name);
@@ -217,94 +191,11 @@ static void nat_free(nat *z)
     free_list(z->asms, z->nasms);
     free_list(z->incs, z->nincs);
     free_list(z->macros, z->nmacros);
-    for (i = 0; i < z->nfuncs; i++) {
-        free(z->funcs[i].name);
-        for (k = 0; k < MAX_ARGS; k++) free(z->funcs[i].pnames[k]);
-    }
-    free(z->funcs);
+    rl78_symtab_free(&z->st);
+    rl78_warns_free(&z->w);
+    free(z->dll_data);
     for (i = 0; i < z->nranges; i++) free(z->ranges[i].init);
     free(z);
-}
-
-/* ---- native_func = 戻り値の型 名前(型 引数名, ...) ---- */
-
-static const char *skip_ws(const char *p) { while (*p == ' ' || *p == '\t') p++; return p; }
-
-static const char *word(const char *p, const char **start, size_t *len)
-{
-    p = skip_ws(p);
-    *start = p;
-    while (sim_is_ident_char((unsigned char)*p)) p++;
-    *len = (size_t)(p - *start);
-    return p;
-}
-
-static int parse_func(nat *z, const sim_cfg_entry *e, char *err, size_t errlen)
-{
-    static const char *const form = "native_func = 戻り値の型 関数名(型 引数名, ...)。型は void / s8 / u8 / s16 / u16 / s32 / u32 / ptr";
-    const char *p = e->value, *w;
-    size_t n;
-    nfunc *f;
-    const sim_type *ret;
-    int void_ret, np = 0;
-
-    z->funcs = sim_xrealloc(z->funcs, sizeof *z->funcs * (size_t)(z->nfuncs + 1));
-    f = &z->funcs[z->nfuncs];
-    memset(f, 0, sizeof *f);
-    f->line = e->line;
-
-    p = word(p, &w, &n);
-    void_ret = n == 4 && !memcmp(w, "void", 4);
-    ret = void_ret ? NULL : type_by_name(w, n);
-    if (!void_ret && !ret) goto bad;
-    p = word(p, &w, &n);
-    if (!n) goto bad;
-    f->name = sim_xstrndup(w, n);
-    z->nfuncs++;                     /* ここから先は nat_free が解放する */
-    p = skip_ws(p);
-    if (*p != '(') goto bad;
-    p = skip_ws(p + 1);
-    if (!strncmp(p, "void", 4) && *skip_ws(p + 4) == ')') p = skip_ws(p + 4);
-    while (*p != ')') {
-        const sim_type *t;
-        if (np == MAX_ARGS) {
-            snprintf(err, errlen, "sim.cfg:%d: native_func の引数は %d 個までです", e->line, MAX_ARGS);
-            return -1;
-        }
-        p = word(p, &w, &n);
-        t = type_by_name(w, n);
-        if (!t) goto bad;
-        p = word(p, &w, &n);
-        if (!n) goto bad;
-        f->ptypes[np] = t;
-        f->pnames[np] = sim_xstrndup(w, n);
-        np++;
-        p = skip_ws(p);
-        if (*p == ',') p = skip_ws(p + 1);
-        else if (*p != ')') goto bad;
-    }
-    if (*skip_ws(p + 1)) goto bad;
-    f->f.ret = ret;
-    f->f.nparams = np;
-    f->f.is_external = 1;
-    f->f.file = "";
-    return 0;
-bad:
-    snprintf(err, errlen, "sim.cfg:%d: native_func = %s を読めません。書き方: %s", e->line, e->value, form);
-    return -1;
-}
-
-/* realloc で場所が変わるので、全部読み終わってから sim_func の中のポインタをつなぐ */
-static void link_funcs(nat *z)
-{
-    int i, k;
-    for (i = 0; i < z->nfuncs; i++) {
-        nfunc *f = &z->funcs[i];
-        for (k = 0; k < f->f.nparams; k++) f->pname_ptrs[k] = f->pnames[k];
-        f->f.name = f->name;
-        f->f.param_names = f->pname_ptrs;
-        f->f.param_types = f->ptypes;
-    }
 }
 
 /* ---- ソースの一覧 ---- */
@@ -583,12 +474,13 @@ static void common_flags(nat *z, char ***flags, int *n)
 {
     static const char *const fixed[] = {
         "-std=gnu89",               /* 古い書き方（宣言なしの関数の呼び出しなど）を受け付ける */
-        "-O2", "-w", "-ffreestanding", "-fno-strict-aliasing", "-fwrapv",
+        "-gdwarf-4", "-w", "-ffreestanding", "-fno-strict-aliasing", "-fwrapv",
         "-mno-stack-arg-probe",     /* C ランタイムがないので、スタックの確保の確認（__chkstk）を呼ばせない */
         NULL
     };
     int i;
     for (i = 0; fixed[i]; i++) push(flags, n, sim_xstrdup(fixed[i]));
+    push(flags, n, sim_xstrdup(z->opt == 2 ? "-O2" : "-O0"));
     /* sim_defines_load と同じ順（mtpj の定義・定義解除 → cdef → --cdef → cundef）を保つ。 */
     for (i = 0; i < z->nmacros; i++) push(flags, n, sim_xstrdup(z->macros[i]));
     for (i = 0; i < z->nincs; i++) {
@@ -763,7 +655,7 @@ static int build(nat *z, char *err, size_t errlen)
         }
     }
 
-    /* リンク: オブジェクトの組、その中身の値、外から呼ぶ関数が前回と同じで、DLL も残っていれば作り直さない */
+    /* リンク: オブジェクトの組、その中身の値が前回と同じで、DLL も残っていれば作り直さない */
     sim_buf_init(&ls);
     for (i = 0; i < nunits; i++) {
         size_t n = 0;
@@ -771,7 +663,6 @@ static int build(nat *z, char *err, size_t errlen)
         sim_buf_printf(&ls, "%s %.16s\n", units[i].base, sg ? sg : "");
         free(sg);
     }
-    for (i = 0; i < z->nfuncs; i++) sim_buf_printf(&ls, "export %s\n", z->funcs[i].name);
     want = sim_xstrdup(sim_buf_cstr(&ls));
     sim_buf_free(&ls);
     linksig_path = sim_path_join(z->dir, "link.sig");
@@ -791,9 +682,8 @@ static int build(nat *z, char *err, size_t errlen)
         free(name);
     }
     if (!z->dll) {
-        const char **argv = sim_xcalloc((size_t)(nunits + z->nfuncs) + 16, sizeof *argv);
-        char **exports = NULL, name[64], *old = NULL;
-        int nexports = 0;
+        const char **argv = sim_xcalloc((size_t)nunits + 16, sizeof *argv);
+        char name[64], *old = NULL;
         k = 0;
         snprintf(name, sizeof name, "native-%d.dll", gen + 1);
         z->dll = sim_path_join(z->dir, name);
@@ -802,24 +692,17 @@ static int build(nat *z, char *err, size_t errlen)
         argv[k++] = "-nostdlib";
         argv[k++] = "-fuse-ld=lld";       /* LLVM の配布物に入っている lld-link。Windows SDK は要らない */
         argv[k++] = "-Wl,/noentry";
-        for (i = 0; i < z->nfuncs; i++) {
-            sim_buf b;
-            sim_buf_init(&b);
-            sim_buf_printf(&b, "-Wl,/export:%s", z->funcs[i].name);
-            push(&exports, &nexports, sim_xstrdup(sim_buf_cstr(&b)));
-            sim_buf_free(&b);
-            argv[k++] = exports[nexports - 1];
-        }
+        argv[k++] = "-Wl,/debug:dwarf";
+        argv[k++] = "-Wl,/opt:noref";
         for (i = 0; i < nunits; i++) argv[k++] = units[i].obj;
         argv[k++] = "-o";
         argv[k++] = z->dll;
         argv[k] = NULL;
         i = sim_cc_run_wait(argv, log);
         free(argv);
-        free_list(exports, nexports);
         if (i != 0) {
             snprintf(err, errlen, "native: DLL を作れませんでした。コンパイラの出力は %s にあります"
-                                  "（native_func に書いた関数がソースにない、static である、定義のない関数や変数を使っている、など）", log);
+                                  "（定義のない関数や変数を使っている、など）", log);
             goto out_link;
         }
         if (sim_write_file(linksig_path, want, strlen(want)) || sim_write_file(cur, name, strlen(name))) {
@@ -974,10 +857,14 @@ static int b_call(sim_backend *b, const sim_func *f, const int64_t *args, int na
     nat *z = b->impl;
     int64_t a[MAX_ARGS] = {0};
     entry_fn fn = NULL;
+    void *entry = NULL;
+    size_t j;
     int i;
-    for (i = 0; i < z->nfuncs; i++)
-        if (&z->funcs[i].f == f) *(void **)&fn = z->funcs[i].entry;
-    if (!fn) { snprintf(err, errlen, "native: 関数 %s は呼べません", f->name); return -1; }
+    for (j = 0; j < z->st.nfuncs; j++)
+        if (&z->st.funcs[j].f == f) entry = (void *)(uintptr_t)f->addr;
+    memcpy(&fn, &entry, sizeof fn);
+    if (!fn) { snprintf(err, errlen, "native: シンボル表にない関数は呼べません"); return -1; }
+    if (nargs < 0 || nargs > MAX_ARGS) { snprintf(err, errlen, "native: 引数は 8 個までです"); return -1; }
     for (i = 0; i < nargs && i < MAX_ARGS; i++) a[i] = args[i];
     /* x64 の呼び出しの決まりでは、整数とポインタの引数は 64 ビットの枠で渡り、関数は自分の型の幅だけを読む。
      * 戻り値も 64 ビットのレジスタの下位に入るので、引数が 8 個までの関数は同じ形で呼べる */
@@ -985,7 +872,24 @@ static int b_call(sim_backend *b, const sim_func *f, const int64_t *args, int na
     g_call_name = f->name;
     InterlockedExchange(&g_in_call, 1);
 #endif
-    *ret_raw = (uint64_t)fn(a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7]);
+    *ret_raw = 0;
+    if (f->ret && f->ret->kind == SIM_T_FLOAT && f->ret->size == 4) {
+        float (*ff)(int64_t, int64_t, int64_t, int64_t, int64_t, int64_t, int64_t, int64_t);
+        float v;
+        uint32_t bits;
+        memcpy(&ff, &entry, sizeof ff);
+        v = ff(a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7]);
+        memcpy(&bits, &v, sizeof bits);
+        *ret_raw = bits;
+    } else if (f->ret && f->ret->kind == SIM_T_FLOAT && f->ret->size == 8) {
+        double (*df)(int64_t, int64_t, int64_t, int64_t, int64_t, int64_t, int64_t, int64_t);
+        double v;
+        memcpy(&df, &entry, sizeof df);
+        v = df(a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7]);
+        memcpy(ret_raw, &v, sizeof v);
+    } else {
+        *ret_raw = (uint64_t)fn(a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7]);
+    }
 #ifdef _WIN32
     InterlockedExchange(&g_in_call, 0);
 #endif
@@ -995,15 +899,23 @@ static int b_call(sim_backend *b, const sim_func *f, const int64_t *args, int na
 
 /* ---- 列挙、情報、後始末 ---- */
 
-static size_t b_var_count(sim_backend *b) { (void)b; return 0; }
-static const sim_var *b_var_at(sim_backend *b, size_t i) { (void)b; (void)i; return NULL; }
-static size_t b_func_count(sim_backend *b) { return (size_t)((nat *)b->impl)->nfuncs; }
-static const sim_func *b_func_at(sim_backend *b, size_t i) { return &((nat *)b->impl)->funcs[i].f; }
+static size_t b_var_count(sim_backend *b) { return ((nat *)b->impl)->st.nvars; }
+static const sim_var *b_var_at(sim_backend *b, size_t i)
+{
+    nat *z = b->impl;
+    return i < z->st.nvars ? &z->st.vars[i] : NULL;
+}
+static size_t b_func_count(sim_backend *b) { return ((nat *)b->impl)->st.nfuncs; }
+static const sim_func *b_func_at(sim_backend *b, size_t i)
+{
+    nat *z = b->impl;
+    return i < z->st.nfuncs ? &z->st.funcs[i].f : NULL;
+}
 
 static void b_print_info(sim_backend *b, FILE *out)
 {
     nat *z = b->impl;
-    int i, k, ndefs = 0, nundefs = 0;
+    int i, ndefs = 0, nundefs = 0;
     for (i = 0; i < z->nmacros; i++) {
         if (!strncmp(z->macros[i], "-D", 2)) ndefs++;
         else if (!strncmp(z->macros[i], "-U", 2)) nundefs++;
@@ -1023,15 +935,12 @@ static void b_print_info(sim_backend *b, FILE *out)
             z->ncompiled, z->nreused, z->linked ? "作り直した" : "前回のまま");
     fprintf(out, "  DLL: %s\n", z->dll ? z->dll : "");
     fprintf(out, "  番地を再現する範囲: 0x%X〜0x%X\n", WIN_LO, WIN_HI - 1);
-    fprintf(out, "  native sources=%d asm=%d files=%d off=%d compiled=%d reused=%d linked=%d funcs=%d\n",
-            z->nsrcs, z->nasms, z->files_total, z->files_off, z->ncompiled, z->nreused, z->linked, z->nfuncs);
-    fprintf(out, "  呼べる関数（native_func）: %d 個\n", z->nfuncs);
-    for (i = 0; i < z->nfuncs; i++) {
-        const sim_func *f = &z->funcs[i].f;
-        fprintf(out, "    %s %s(", f->ret ? f->ret->name : "void", f->name);
-        for (k = 0; k < f->nparams; k++) fprintf(out, "%s%s %s", k ? ", " : "", f->param_types[k]->name, f->param_names[k]);
-        fprintf(out, ")\n");
-    }
+    fprintf(out, "  native sources=%d asm=%d files=%d off=%d compiled=%d reused=%d linked=%d funcs=%d vars=%d opt=%d\n",
+            z->nsrcs, z->nasms, z->files_total, z->files_off, z->ncompiled, z->nreused, z->linked,
+            (int)z->st.nfuncs, (int)z->st.nvars, z->opt);
+    fprintf(out, "  変数: %zu 個、関数: %zu 個（デバッグ情報から）\n", z->st.nvars, z->st.nfuncs);
+    fprintf(out, "  最適化: native_opt = %d\n", z->opt);
+    if (z->w.n) fprintf(out, "警告: %d 件%s\n", z->w.n, z->w.verbose ? "" : "（--verbose で表示）");
 }
 
 static void b_close(sim_backend *b)
@@ -1043,6 +952,103 @@ static void b_close(sim_backend *b)
 /* ---- 開く ---- */
 
 #ifdef _WIN32
+/* PE32+ の数値は、構造体へのキャストをせずリトルエンディアンで読む。 */
+static uint32_t pe_u32(const uint8_t *p)
+{
+    return (uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24;
+}
+
+static unsigned pe_u16(const uint8_t *p) { return (unsigned)p[0] | (unsigned)p[1] << 8; }
+static int pe_range(size_t len, size_t off, size_t n) { return off <= len && n <= len - off; }
+
+/* DISCARDABLE なデバッグ情報は、ロードしたメモリではなくファイルから取る。 */
+static int read_dwarf(nat *z, char *err, size_t errlen)
+{
+    size_t len = 0, pe, opt, sections, strings = 0, strings_len = 0, i, n;
+    const uint8_t *d;
+    unsigned nsects, optlen;
+    uint64_t image_base, loaded = (uint64_t)(uintptr_t)z->lib;
+    uint32_t image_size, symptr, nsyms;
+    rl78_dwarf_secs secs = {0};
+    rl78_dwarf_opts opts = {0};
+    z->dll_data = sim_read_file(z->dll, &len);
+    d = (const uint8_t *)z->dll_data;
+    if (!d) goto bad;
+    if (!pe_range(len, 0, 64) || d[0] != 'M' || d[1] != 'Z') goto bad;
+    pe = pe_u32(d + 60);
+    if (!pe_range(len, pe, 24) || memcmp(d + pe, "PE\0\0", 4)) goto bad;
+    nsects = pe_u16(d + pe + 6);
+    optlen = pe_u16(d + pe + 20);
+    opt = pe + 24;
+    if (optlen < 64 || !pe_range(len, opt, optlen) || pe_u16(d + opt) != 0x20b) goto bad;
+    image_base = pe_u32(d + opt + 24) | (uint64_t)pe_u32(d + opt + 28) << 32;
+    image_size = pe_u32(d + opt + 56);
+    if (!image_size || loaded > UINT64_MAX - image_size) goto bad;
+    sections = opt + optlen;
+    if (!pe_range(len, sections, (size_t)nsects * 40)) goto bad;
+    symptr = pe_u32(d + pe + 12);
+    nsyms = pe_u32(d + pe + 16);
+    if (symptr) {
+        if (!pe_range(len, symptr, 0) || nsyms > (len - symptr) / 18) goto bad;
+        strings = (size_t)symptr + (size_t)nsyms * 18;
+        if (!pe_range(len, strings, 4)) goto bad;
+        strings_len = pe_u32(d + strings);
+        if (strings_len < 4 || !pe_range(len, strings, strings_len)) goto bad;
+    }
+    for (i = 0; i < nsects; i++) {
+        const uint8_t *h = d + sections + i * 40;
+        const char *name;
+        char short_name[9];
+        size_t raw = pe_u32(h + 20), size = pe_u32(h + 16), vsize = pe_u32(h + 8);
+        /* SizeOfRawData はファイルの境界まで 0 で埋めた大きさ。0 の埋め草を CU と読まないよう VirtualSize で切る */
+        if (vsize && vsize < size) size = vsize;
+        memcpy(short_name, h, 8); short_name[8] = 0;
+        name = short_name;
+        if (h[0] == '/') {
+            size_t j, off = 0;
+            for (j = 1; j < 8 && h[j]; j++) {
+                if (h[j] < '0' || h[j] > '9') goto bad;
+                off = off * 10 + (h[j] - '0');
+            }
+            if (j == 1 || off < 4 || off >= strings_len) goto bad;
+            name = (const char *)d + strings + off;
+            if (!memchr(name, 0, strings_len - off)) goto bad;
+        }
+        if (!pe_range(len, raw, size)) goto bad;
+        if (!strcmp(name, ".debug_info")) { secs.info = d + raw; secs.info_len = size; }
+        if (!strcmp(name, ".debug_abbrev")) { secs.abbrev = d + raw; secs.abbrev_len = size; }
+        if (!strcmp(name, ".debug_str")) { secs.str = d + raw; secs.str_len = size; }
+    }
+    if (!secs.info_len || !secs.abbrev_len || !secs.str_len) {
+        snprintf(err, errlen, "native: DLL にデバッグ情報がありません（.debug_info / .debug_abbrev / .debug_str）");
+        return -1;
+    }
+    opts.default_ptr_size = 8;
+    if (rl78_dwarf_read_secs(&z->st, &secs, &opts, &z->w) <= 0) {
+        snprintf(err, errlen, "native: DLL のデバッグ情報のコンパイル単位を読めません");
+        return -1;
+    }
+    /* リンカが捨てた番地は除き、残ったものを実際のロード先に移す。 */
+    for (i = 0, n = 0; i < z->st.nvars; i++) {
+        sim_var v = z->st.vars[i];
+        if (v.addr < image_base || v.addr - image_base >= image_size) continue;
+        v.addr = loaded + (v.addr - image_base);
+        z->st.vars[n++] = v;
+    }
+    z->st.nvars = n;
+    for (i = 0, n = 0; i < z->st.nfuncs; i++) {
+        rl78_funcinfo f = z->st.funcs[i];
+        if (f.f.addr < image_base || f.f.addr - image_base >= image_size) continue;
+        f.f.addr = loaded + (f.f.addr - image_base);
+        z->st.funcs[n++] = f;
+    }
+    z->st.nfuncs = n;
+    return 0;
+bad:
+    snprintf(err, errlen, "native: DLL の PE/COFF ヘッダーを読めません（%s）", z->dll);
+    return -1;
+}
+
 /* 読み込んだ DLL のセクションを、読み書きできる範囲として登録する。書けるセクションは中身を取っておく */
 static int add_dll_sections(nat *z, void *lib)
 {
@@ -1117,20 +1123,19 @@ sim_backend *native_backend_open(const sim_open_opts *o, int *handled, char *err
     /* 番地の確保は、ほかのメモリの確保より先に行う（遅くなるほど、ほかのものに取られやすい） */
     if (map_memory(z, err, errlen)) goto fail;
 
+    z->w.verbose = o->verbose;
+    rl78_symtab_init(&z->st);
     for (i = 0; i < z->cfg.n; i++) {
         if (strcmp(z->cfg.e[i].key, "native_func")) continue;
         z->cfg.e[i].used = 1;
-        if (parse_func(z, &z->cfg.e[i], err, errlen)) goto fail;
+        fprintf(stderr, "sim.cfg:%d: native_func は不要になりました（関数の型はデバッグ情報から取ります）。この行は無視します\n", z->cfg.e[i].line);
     }
-    link_funcs(z);
-    for (i = 0; i < z->nfuncs; i++) {
-        int k;
-        for (k = 0; k < i; k++) {
-            if (!strcmp(z->funcs[i].name, z->funcs[k].name)) {
-                snprintf(err, errlen, "sim.cfg:%d: native_func の関数 %s が 2 回書かれています", z->funcs[i].line, z->funcs[i].name);
-                goto fail;
-            }
+    if ((s = sim_cfg_get(&z->cfg, "native_opt"))) {
+        if (strcmp(s, "0") && strcmp(s, "2")) {
+            snprintf(err, errlen, "sim.cfg: native_opt = %s は 0 / 2 にしてください", s);
+            goto fail;
         }
+        z->opt = s[0] - '0';
     }
     if (collect_sources(z, o, err, errlen)) goto fail;
 
@@ -1152,21 +1157,16 @@ sim_backend *native_backend_open(const sim_open_opts *o, int *handled, char *err
 
     z->lib = sim_dl_open(z->dll, cerr, sizeof cerr);
     if (!z->lib) { snprintf(err, errlen, "native: DLL %s を読み込めません（%s）", z->dll, cerr); goto fail; }
-    for (i = 0; i < z->nfuncs; i++) {
-        z->funcs[i].entry = sim_dl_sym(z->lib, z->funcs[i].name);
-        if (!z->funcs[i].entry) {
-            snprintf(err, errlen, "sim.cfg:%d: native_func の関数 %s が DLL にありません", z->funcs[i].line, z->funcs[i].name);
-            goto fail;
-        }
-        z->funcs[i].f.addr = (uint64_t)(uintptr_t)z->funcs[i].entry;
-    }
+    if (read_dwarf(z, err, errlen)) goto fail;
+    if (z->w.n && !z->w.verbose) fprintf(stderr, "sim: 読み込みの警告が %d 件あります（--verbose で表示）\n", z->w.n);
     if (add_dll_sections(z, z->lib)) { snprintf(err, errlen, "native: DLL のセクションが多すぎます"); goto fail; }
     AddVectoredExceptionHandler(1, on_exception);
 
     z->b.csv_init = sim_cfg_csv_init(&z->cfg, o->csv_init, err, errlen);
     if (z->b.csv_init < 0) goto fail;
     if ((s = sim_cfg_get(&z->cfg, "func"))) {
-        for (i = 0; i < z->nfuncs; i++) if (!strcmp(z->funcs[i].name, s)) z->b.default_func = z->funcs[i].name;
+        size_t j;
+        for (j = 0; j < z->st.nfuncs; j++) if (!strcmp(z->st.funcs[j].f.name, s)) z->b.default_func = z->st.funcs[j].f.name;
     }
     b = &z->b;
     b->name = "native";

@@ -74,7 +74,6 @@ typedef struct { uint16_t at, form; int64_t ic; } dspec;
 
 typedef struct {
     rl78_symtab *t;
-    const rl78_elf *e;
     const rl78_dwarf_opts *o;
     rl78_warns *w;
     const uint8_t *info, *abbr, *str;
@@ -586,7 +585,7 @@ static uint32_t ptr_size(dctx *x, int di)
         }
         return 4;
     }
-    return 2;
+    return x->o->default_ptr_size ? (uint32_t)x->o->default_ptr_size : 2;
 }
 
 static const sim_type *ty(dctx *x, int di, int depth)
@@ -1003,23 +1002,30 @@ static void add_var(dctx *x, int di)
 
 int rl78_dwarf_read(rl78_symtab *t, const rl78_elf *e, const rl78_dwarf_opts *o, rl78_warns *w)
 {
-    dctx x;
     const rl78_sect *si = rl78_elf_section(e, ".debug_info");
     const rl78_sect *sa = rl78_elf_section(e, ".debug_abbrev");
     const rl78_sect *ss = rl78_elf_section(e, ".debug_str");
+    rl78_dwarf_secs s = {0};
+    if (!si || !sa || !si->size) return 0;
+    s.info = e->data + si->offset; s.info_len = si->size;
+    s.abbrev = e->data + sa->offset; s.abbrev_len = sa->size;
+    if (ss && ss->type != RL78_SHT_NOBITS) { s.str = e->data + ss->offset; s.str_len = ss->size; }
+    return rl78_dwarf_read_secs(t, &s, o, w);
+}
+
+int rl78_dwarf_read_secs(rl78_symtab *t, const rl78_dwarf_secs *s, const rl78_dwarf_opts *o, rl78_warns *w)
+{
+    dctx x;
     int i, n;
     size_t nv0 = t->nvars, nf0 = t->nfuncs;
-    if (!si || !sa || !si->size) return 0;
+    if (!s->info || !s->abbrev || !s->info_len) return 0;
     memset(&x, 0, sizeof x);
     x.t = t;
-    x.e = e;
     x.o = o;
     x.w = w;
-    x.info = e->data + si->offset;
-    x.info_len = si->size;
-    x.abbr = e->data + sa->offset;
-    x.abbr_len = sa->size;
-    if (ss && ss->type != RL78_SHT_NOBITS) { x.str = e->data + ss->offset; x.str_len = ss->size; }
+    x.info = s->info; x.info_len = s->info_len;
+    x.abbr = s->abbrev; x.abbr_len = s->abbrev_len;
+    x.str = s->str; x.str_len = s->str_len;
     n = load_cus(&x);
     t->ncu = x.ncus;
     link_tree(&x);
