@@ -415,8 +415,103 @@ flush:
     sim_buf_free(&cur);
 }
 
+/* 存在確認は build の間だけ共有する。パスのつづりは変えない。 */
+typedef struct path_entry {
+    char *path;
+    int exists;
+    struct path_entry *next;
+} path_entry;
+
+#define PATH_BUCKETS 4096
+typedef struct { path_entry *buckets[PATH_BUCKETS]; } path_cache;
+
+static int path_exists(path_cache *cache, const char *path)
+{
+    size_t bucket = (size_t)(hash_str(SIM_CC_FNV_INIT, path) % PATH_BUCKETS);
+    path_entry *e;
+    for (e = cache->buckets[bucket]; e; e = e->next)
+        if (!strcmp(e->path, path)) return e->exists;
+    e = sim_xmalloc(sizeof *e);
+    e->path = sim_xstrdup(path);
+    e->exists = sim_path_kind(path) == 1;
+    e->next = cache->buckets[bucket];
+    cache->buckets[bucket] = e;
+    return e->exists;
+}
+
+static void path_cache_free(path_cache *cache)
+{
+    size_t i;
+    for (i = 0; i < PATH_BUCKETS; i++) {
+        path_entry *e = cache->buckets[i];
+        while (e) {
+            path_entry *next = e->next;
+            free(e->path);
+            free(e);
+            e = next;
+        }
+    }
+}
+
+static void push_unique(char ***list, int *n, char *s)
+{
+    int i;
+    for (i = 0; i < *n; i++)
+        if (!strcmp((*list)[i], s)) { free(s); return; }
+    push(list, n, s);
+}
+
+/* a と b の先頭 n 文字が同じなら 1。区切りの / と \ は同じとみなす（clang は依存パスの区切りを \ にそろえて
+ * 書くが、こちらが持つインクルード・パスには / が混ざる） */
+static int same_prefix(const char *a, const char *b, size_t n)
+{
+    size_t i;
+    for (i = 0; i < n; i++) {
+        char x = a[i] == '\\' ? '/' : a[i], y = b[i] == '\\' ? '/' : b[i];
+        if (x != y) return 0;
+    }
+    return 1;
+}
+
+/* 探索順で先に当たる場所に同名のファイルが置かれると、clang が読むファイルは変わるのに、前回読んだファイルの
+ * 中身は変わらない。そこで、依存ファイルごとに「探索フォルダ + つづり」の形に分け、ほかの探索フォルダ
+ * （インクルード・パスと、ソースや依存ファイルのあるフォルダ）に同じつづりのファイルがあるかを調べて、
+ * あったものの一覧も値に混ぜる。置かれても消えても値が変わる */
+static uint64_t hash_candidates(nat *z, path_cache *cache, uint64_t h, char **files, int n)
+{
+    char **dirs = NULL, **found = NULL;
+    int ndirs = 0, nfound = 0, i, j, k;
+    for (i = 0; i < z->nincs; i++)
+        push_unique(&dirs, &ndirs, sim_xstrdup(z->incs[i]));
+    for (i = 0; i < n; i++)
+        push_unique(&dirs, &ndirs, dir_of(files[i]));
+    for (i = 0; i < n; i++) {
+        size_t len = strlen(files[i]);
+        for (j = 0; j < ndirs; j++) {
+            size_t m = strlen(dirs[j]);
+            const char *rel;
+            if (m >= len || !same_prefix(files[i], dirs[j], m)) continue;
+            if (files[i][m] != '/' && files[i][m] != '\\') continue;
+            rel = files[i] + m + 1;
+            for (k = 0; k < ndirs; k++) {
+                char *candidate;
+                if (k == j) continue;
+                candidate = sim_path_join(dirs[k], rel);
+                if (path_exists(cache, candidate)) push(&found, &nfound, candidate);
+                else free(candidate);
+            }
+        }
+    }
+    if (nfound > 1) qsort(found, (size_t)nfound, sizeof *found, name_cmp);
+    for (i = 0; i < nfound; i++)
+        if (!i || strcmp(found[i - 1], found[i])) h = hash_str(h, found[i]);
+    free_list(found, nfound);
+    free_list(dirs, ndirs);
+    return h;
+}
+
 /* ソースと、読んだファイルすべての中身から作った値を文字列にする。読めないファイルがあれば NULL */
-static char *make_sig(char **files, int n)
+static char *make_sig(nat *z, path_cache *cache, char **files, int n)
 {
     uint64_t h = SIM_CC_FNV_INIT;
     sim_buf out;
@@ -426,6 +521,7 @@ static char *make_sig(char **files, int n)
         h = sim_cc_fnv(h, &fh, sizeof fh);
     }
     if (!ok) return NULL;
+    h = hash_candidates(z, cache, h, files, n);
     sim_buf_init(&out);
     sim_buf_printf(&out, "%016llx\n", (unsigned long long)h);
     for (i = 0; i < n; i++) { sim_buf_adds(&out, files[i]); sim_buf_addc(&out, '\n'); }
@@ -434,7 +530,7 @@ static char *make_sig(char **files, int n)
 }
 
 /* 前回の .sig と、いまのファイルの中身が合えば 1 */
-static int unit_fresh(const unit_t *u)
+static int unit_fresh(nat *z, path_cache *cache, const unit_t *u)
 {
     size_t n = 0;
     char *old = sim_read_file(u->sig, &n), *p, *q, *now, **files = NULL;
@@ -447,7 +543,7 @@ static int unit_fresh(const unit_t *u)
         if (!q) break;
         push(&files, &nfiles, sim_xstrndup(p, (size_t)(q - p)));
     }
-    now = nfiles ? make_sig(files, nfiles) : NULL;
+    now = nfiles ? make_sig(z, cache, files, nfiles) : NULL;
     same = now && strlen(now) == n && !memcmp(now, old, n);
     free(now);
     free_list(files, nfiles);
@@ -456,7 +552,7 @@ static int unit_fresh(const unit_t *u)
 }
 
 /* コンパイルのあと、.d から .sig を作る。0 なら成功 */
-static int unit_write_sig(const unit_t *u)
+static int unit_write_sig(nat *z, path_cache *cache, const unit_t *u)
 {
     size_t n = 0;
     char *d = sim_read_file(u->dep, &n), *sig, **files = NULL;
@@ -464,7 +560,7 @@ static int unit_write_sig(const unit_t *u)
     if (!d) return -1;
     parse_dep(d, &files, &nfiles);
     free(d);
-    sig = nfiles ? make_sig(files, nfiles) : NULL;
+    sig = nfiles ? make_sig(z, cache, files, nfiles) : NULL;
     if (sig) rc = sim_write_file(u->sig, sig, strlen(sig));
     free(sig);
     free_list(files, nfiles);
@@ -529,6 +625,7 @@ static int build(nat *z, char *err, size_t errlen)
     sim_buf ls;
     const char *s, *stem;
     char keytext[32];
+    path_cache cache = {{0}};
 
     /* フォルダ: 指定がなければ設定ファイルの隣の .simnative */
     if ((s = sim_cfg_get(&z->cfg, "native_dir")) && *s) base = sim_cfg_path(&z->cfg, s);
@@ -597,7 +694,7 @@ static int build(nat *z, char *err, size_t errlen)
         sim_buf_init(&nm); sim_buf_printf(&nm, "%s.obj", u->base); u->obj = sim_path_join(z->dir, sim_buf_cstr(&nm)); sim_buf_free(&nm);
         sim_buf_init(&nm); sim_buf_printf(&nm, "%s.d", u->base);   u->dep = sim_path_join(z->dir, sim_buf_cstr(&nm)); sim_buf_free(&nm);
         sim_buf_init(&nm); sim_buf_printf(&nm, "%s.sig", u->base); u->sig = sim_path_join(z->dir, sim_buf_cstr(&nm)); sim_buf_free(&nm);
-        u->compile = !unit_fresh(u);
+        u->compile = !unit_fresh(z, &cache, u);
         if (!u->compile) { z->nreused++; continue; }
         sim_remove_file(u->obj);
         sim_remove_file(u->sig);
@@ -660,7 +757,7 @@ static int build(nat *z, char *err, size_t errlen)
         }
         sim_cc_write_times(jobs, (size_t)njobs, z->dir, "native", say_line, z);
         for (i = 0; i < nunits; i++) {
-            if (units[i].compile && unit_write_sig(&units[i])) {
+            if (units[i].compile && unit_write_sig(z, &cache, &units[i])) {
                 snprintf(err, errlen, "native: %s を書けません", units[i].sig);
                 goto out;
             }
@@ -755,6 +852,7 @@ out:
     free(jobs);
     free(log);
 out_early:
+    path_cache_free(&cache);
     free_list(flags, nflags);
     free(pre);
     free(rt);

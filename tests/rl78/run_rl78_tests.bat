@@ -328,6 +328,14 @@ call :has "%NW%\info2.log" "compiled=1 reused=3 linked=1" "native: a changed hea
 call :has "%NW%\info3.log" "compiled=3 reused=1 linked=1" "native: a header used by every source recompiles them all"
 "%RS%" run --cfg "%NC%" "%NW%\csv\native_basic.csv" -o "%NW%\out2" > "%NW%\again.log" 2>&1
 call :has "%NW%\again.log" "OK 16, NG 0, NO Check 0" "native: all rows are OK after the rebuild"
+
+rem a header of the same name appears earlier in the search order (next to the source that includes it)
+copy /y "%NW%\product\inc\reg.h" "%NW%\product\src\reg.h" >nul
+"%RS%" info --cfg "%NC%" > "%NW%\info4.log" 2>&1
+call :has "%NW%\info4.log" "compiled=1 reused=3 linked=1" "native: a header that shadows another recompiles its users"
+del "%NW%\product\src\reg.h"
+"%RS%" info --cfg "%NC%" > "%NW%\info5.log" 2>&1
+call :has "%NW%\info5.log" "compiled=1 reused=3 linked=1" "native: removing the shadowing header recompiles again"
 rem an address that is not mapped (below 0x10000): the run stops with exit code 2 and names the address
 "%RS%" run --cfg "%NC%" "%NW%\csv\native_low.csv" -o "%NW%\out3" > "%NW%\low.log" 2>&1
 set RC=%ERRORLEVEL%
