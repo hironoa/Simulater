@@ -55,6 +55,7 @@ jobs:
           xcopy /e /i /y build\sim\native dist\native
           if exist build\sim\sim_gui.html copy build\sim\sim_gui.html dist\
           copy example\sim.cfg dist\sim.cfg.example
+          copy example\native_ram_clear.c dist\
           copy README.md dist\
       - uses: actions/upload-artifact@v4
         with:

@@ -8,6 +8,7 @@
  *   - 置き場所や呼び出し方の指定（__far、__near、sreg、callt、norec など）: 空にする
  *   - boolean / bit: 1 バイトの型にする（マイコンでは 1 ビットだが、値は 0 / 1 で同じ）
  *   - 割り込みの許可・禁止などの組み込み関数（DI()、EI()、NOP() など）: 何もしない
+ * ほかに、マイコンの番地の範囲をクリアする部品（sim_native_clear_range）を宣言する。
  *
  * int はここでは定義しない。プリプロセス後に sim が字句ごとに書き直して 16 ビットにする。
  * long int / short int は int を消し、unsigned / signed だけの宣言には short を補う。
@@ -55,5 +56,11 @@ typedef unsigned char bit;
 #define HALT() ((void)0)
 #define STOP() ((void)0)
 #define BRK() ((void)0)
+
+/* マイコンの番地の範囲をクリアする（sim_native_rt.c。製品のアセンブラの「RAM の範囲をクリアする」関数の代わりから呼ぶ）。
+ * 番地は整数で渡す（ポインタは (unsigned long long)(unsigned long)p のように整数にする）。native_layout が要る。
+ * 型は int の書き直しに関わらないよう unsigned long long で書く */
+void sim_native_clear_range(unsigned long long first, unsigned long long end);          /* [first, end) */
+void sim_native_clear_range_incl(unsigned long long first, unsigned long long last);    /* [first, last] */
 
 #endif

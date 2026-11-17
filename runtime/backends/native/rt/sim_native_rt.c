@@ -53,3 +53,27 @@ unsigned long long __sim_near(unsigned long long v)
 {
     return (v - 1ULL < 0xFFFFULL) ? v + 0xF0000ULL : v;
 }
+
+/* マイコンの番地の範囲をクリアする（製品のアセンブラの「RAM の範囲をクリアする」関数の代わりから呼ぶ）。
+ * 中身は sim.exe の側にある。sim は DLL を読み込んだあと、__sim_host_clear に自分の関数の番地を入れる
+ * （空のままなら何もしない）。sim.exe の側は native_layout のロードモジュールで番地と変数を対応づけ、
+ * 範囲にある C の変数と、0xF0000〜0xFFFFF の確保したメモリを 0 にする。
+ * 1〜0xFFFF は near の番地として 0xF0000 を補う（native_near = off で 16 ビットの番地が届いたときのため） */
+void (*__sim_host_clear)(unsigned long long first, unsigned long long end, int inclusive) = 0;
+
+static unsigned long long sim_near_addr(unsigned long long v)
+{
+    return (v - 1ULL < 0xFFFFULL) ? v + 0xF0000ULL : v;
+}
+
+/* [first, end) をクリアする（end は含まない） */
+void sim_native_clear_range(unsigned long long first, unsigned long long end)
+{
+    if (__sim_host_clear) __sim_host_clear(sim_near_addr(first), sim_near_addr(end), 0);
+}
+
+/* [first, last] をクリアする（last の番地の 1 バイトまで） */
+void sim_native_clear_range_incl(unsigned long long first, unsigned long long last)
+{
+    if (__sim_host_clear) __sim_host_clear(sim_near_addr(first), sim_near_addr(last), 1);
+}
