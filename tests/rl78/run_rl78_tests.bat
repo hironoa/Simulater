@@ -545,13 +545,13 @@ if "%RC%"=="0" (call :ok "native: RAM clear run exits 0") else (call :ng "native
 call :has "%NW%\clear.log" "OK 11, NG 0, NO Check 0" "native: all RAM clear rows are OK"
 call :has "%NW%\clear.log" "g_outer" "native: a crossing variable of another size is named and kept"
 "%RS%" info --cfg "%PCL%\sim.cfg" > "%NW%\clear_info.log" 2>&1
-call :has "%NW%\clear_info.log" "native layout vars=97 matched=56 unmatched=41 size_diff=20 dll_only=0 skipped_src=0" "native: info counts the variables matched with the load module"
+call :has "%NW%\clear_info.log" "native layout vars=97 matched=56 unmatched=41 size_diff=20 dll_only=0 skipped_src=0 ambiguous=0" "native: info counts the variables matched with the load module"
 copy /y "%PCL%\sim.cfg" "%PCL%\opt2.cfg" >nul
 >> "%PCL%\opt2.cfg" echo native_opt = 2
 "%RS%" run --cfg "%PCL%\opt2.cfg" "%NW%\csv\native_ram_clear_opt2.csv" -o "%NW%\out_clear_opt2" > "%NW%\clear_opt2.log" 2>&1
 call :has "%NW%\clear_opt2.log" "OK 10, NG 0, NO Check 0" "native: optimization 2 keeps the RAM clear results"
 "%RS%" info --cfg "%PCL%\opt2.cfg" > "%NW%\clear_opt2_info.log" 2>&1
-call :has "%NW%\clear_opt2_info.log" "native layout vars=97 matched=50 unmatched=47 size_diff=20 dll_only=0 skipped_src=0" "native: optimization 2 drops six static variables from the layout"
+call :has "%NW%\clear_opt2_info.log" "native layout vars=97 matched=50 unmatched=47 size_diff=20 dll_only=0 skipped_src=0 ambiguous=0" "native: optimization 2 drops six static variables from the layout"
 rem native_near = off: the clear function itself adds 0xF0000 to 16-bit addresses (the C code that reads 0xE022 fails).
 copy /y "%PCL%\sim.cfg" "%PCL%\nearoff.cfg" >nul
 >> "%PCL%\nearoff.cfg" echo native_near = off
@@ -572,7 +572,7 @@ call :has "%NW%\clear_nolayout.log" "OK 4, NG 7, NO Check 0" "native: without na
 call :has "%NW%\out_clear_nolayout\native_ram_clear.csv" ",1,2,3,4,5,6,7,1,2?(0),3?(0),4?(0),5?(0),6,7,NG" "native: without native_layout g_bss_ui is not cleared"
 call :has "%NW%\clear_nolayout.log" "native_layout" "native: without native_layout the clear call warns"
 "%RS%" info --cfg "%PCL%\nolayout.cfg" > "%NW%\clear_nolayout_info.log" 2>&1
-call :has "%NW%\clear_nolayout_info.log" "native layout vars=0 matched=0 unmatched=0 size_diff=0 dll_only=0 skipped_src=0" "native: info without native_layout"
+call :has "%NW%\clear_nolayout_info.log" "native layout vars=0 matched=0 unmatched=0 size_diff=0 dll_only=0 skipped_src=0 ambiguous=0" "native: info without native_layout"
 copy /y "%NC%" "%NW%\driver\badlayout.cfg" >nul
 >> "%NW%\driver\badlayout.cfg" echo native_layout = no_such_file.lmf
 call :native_err "native: a missing native_layout file is an error" "no_such_file.lmf" badlayout.cfg
