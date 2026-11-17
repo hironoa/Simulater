@@ -121,6 +121,7 @@ max_insns = 100000000
 # インクルード・パスを足す（複数行可）
 # native_include = ../stub/inc
 # 最適化は 0（既定）または 2。関数の型は DLL のデバッグ情報から取る
+# stub / stub_auto / skip と CSV の % 行による置換も、今の方式と同じ書き方で使えます
 # native_opt = 0
 # 1 回の呼び出しの上限（ミリ秒。既定 10000、0 なら無効、最大 86400000）
 # native_timeout_ms = 10000

@@ -1,0 +1,31 @@
+mod,periph_task,native stub,1,1
+%,AMSTB_periph_wait,periph_wait
+#COMMENT,@mode,periph_task@@
+,0,17
+mod,periph_task,native stub,1,1
+%,STUB_wait_alt,periph_wait
+#COMMENT,@mode,periph_task@@
+,0,13
+mod,periph_task,native stub,1,1
+%,AMSTB_periph_read,periph_read
+#COMMENT,@mode,periph_task@@
+,1,120
+mod,periph_calc,native stub,1,1
+#COMMENT,@x,periph_calc@@
+,5,11
+mod,periph_calc,native stub,1,1
+%,AMSTB_periph_local,periph.c/periph_local
+#COMMENT,@x,periph_calc@@
+,5,1006
+mod,asmcall_run,native stub,1,1
+%,AMSTB_asm_get_value,asm_get_value
+#COMMENT,@n,asmcall_run@@
+,3,603
+mod,periph_calc,native stub,1,1
+%,AMSTB_periph_local,periph_local
+%,AMSTB_periph_local,no_such_func
+#COMMENT,@x,periph_calc@@
+,5,11
+mod,periph_calc,native stub,1,1
+#COMMENT,@x,periph_calc@@
+,5,11

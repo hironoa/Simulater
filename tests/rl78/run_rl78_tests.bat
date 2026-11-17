@@ -319,8 +319,8 @@ if errorlevel 1 (call :ng "native: a header name uses the same #if branch as the
 "%HAS%" /b /l /c:",65535,65535,OK" "%NW%\out\native_basic.csv" >nul
 if errorlevel 1 (call :ng "native: RAM written by address is read by the function") else (call :ok "native: RAM written by address is read by the function")
 "%RS%" info --cfg "%NC%" > "%NW%\info.log" 2>&1
-call :has "%NW%\info.log" "native sources=6 asm=1 files=7 off=1 compiled=0 reused=7 linked=0" "native: second open compiles nothing"
-call :has "%NW%\info.log" "funcs=35 vars=22 opt=0" "native: variables and functions come from the debug information"
+call :has "%NW%\info.log" "native sources=8 asm=1 files=8 off=1 compiled=0 reused=9 linked=0" "native: second open compiles nothing"
+call :has "%NW%\info.log" "funcs=49 vars=22 opt=0" "native: variables and functions come from the debug information"
 call :has "%NW%\info.log" "defines auto=1" "native: header definitions are automatic"
 copy /y "%NC%" "%NW%\driver\autoff.cfg" >nul
 >> "%NW%\driver\autoff.cfg" echo defines_auto = off
@@ -328,33 +328,81 @@ call :native_err "native: disabling auto leaves P3 undefined" "P3" autoff.cfg
 copy /y "%NC%" "%NW%\driver\autobad.cfg" >nul
 >> "%NW%\driver\autobad.cfg" echo defines_auto = maybe
 call :native_err "native: invalid defines_auto is an error" "defines_auto" autobad.cfg
-call :has "%NW%\info.log" "native rewrite int=24 int_dropped=7 short_added=6 asm=4 asm_files=1" "native: legacy assembly is counted on cache reuse"
+call :has "%NW%\info.log" "native rewrite int=28 int_dropped=7 short_added=6 asm=4 asm_files=1" "native: legacy assembly is counted on cache reuse"
 "%RS%" run --cfg "%NC%" "%NW%\csv\native_legacy.csv" -o "%NW%\out_legacy" > "%NW%\legacy.log" 2>&1
 set RC=%ERRORLEVEL%
 if "%RC%"=="0" (call :ok "native: legacy run exits 0") else (call :ng "native: legacy run exits 0" & type "%NW%\legacy.log")
 call :has "%NW%\legacy.log" "OK 3, NG 0, NO Check 0" "native: all legacy rows are OK"
 call :has "%NW%\info.log" "startup.asm" "native: assembler sources are listed"
-call :has "%NW%\info.log" "files=7 off=1" "native: a file that is not a build target is left out"
+call :has "%NW%\info.log" "files=8 off=1" "native: a file that is not a build target is left out"
 call :has "%NW%\info.log" "native undef funcs=6 data=5 skipped=0" "native: undefined assembly names are substituted"
 "%RS%" run --cfg "%NC%" "%NW%\csv\native_asmcall.csv" -o "%NW%\out_asmcall" > "%NW%\asmcall.log" 2>&1
 call :has "%NW%\asmcall.log" "OK 6, NG 0, NO Check 0" "native: assembly substitutes return zero"
+rem Stage 3: entry patches, CSV replacement and restoration of configured stubs.
+call :native_stub_run sim.cfg native_stub_csv 2 "OK 7, NG 0, NO Check 0"
+powershell -NoProfile -Command "$t=[IO.File]::ReadAllText('%NW%\stub.log',[Text.Encoding]::UTF8); if ($t -match 'OK 7, NG 0, NO Check 0, \u30a8\u30e9\u30fc 1') {exit 0} else {exit 1}"
+if errorlevel 1 (call :ng "native: CSV has exactly one invalid block") else (call :ok "native: CSV has exactly one invalid block")
+copy /y "%NC%" "%NW%\driver\stub.cfg" >nul
+>> "%NW%\driver\stub.cfg" echo stub = periph_wait:AMSTB_periph_wait
+>> "%NW%\driver\stub.cfg" echo stub = periph_read:AMSTB_periph_read
+call :native_stub_run stub.cfg native_stub_cfg 0 "OK 6, NG 0, NO Check 0"
+call :native_stub_row native_stub_cfg ",0,17,OK"
+call :native_stub_row native_stub_cfg ",1,120,OK"
+"%RS%" info --cfg "%NW%\driver\stub.cfg" > "%NW%\stub_info.log" 2>&1
+call :has "%NW%\stub_info.log" "native stubs=2 auto=0 skips=0" "native: info counts configured stubs"
+call :native_stub_run stub.cfg native_stub_priority 0 "OK 3, NG 0, NO Check 0"
+copy /y "%NC%" "%NW%\driver\stubauto.cfg" >nul
+>> "%NW%\driver\stubauto.cfg" echo stub_auto = on
+call :native_stub_run stubauto.cfg native_stub_auto 0 "OK 6, NG 0, NO Check 0"
+call :native_stub_row native_stub_auto ",5,1006,OK"
+call :native_stub_row native_stub_auto ",3,603,OK"
+"%RS%" info --cfg "%NW%\driver\stubauto.cfg" > "%NW%\stub_info.log" 2>&1
+call :has "%NW%\stub_info.log" "native stubs=0 auto=4 skips=0" "native: auto includes static and assembly functions"
+copy /y "%NC%" "%NW%\driver\skip.cfg" >nul
+>> "%NW%\driver\skip.cfg" echo skip = periph_wait:5
+>> "%NW%\driver\skip.cfg" echo skip = periph_read
+>> "%NW%\driver\skip.cfg" echo skip = periph_value:9
+>> "%NW%\driver\skip.cfg" echo skip = periph_ratio
+call :native_stub_run skip.cfg native_stub_skip 0 "OK 6, NG 0, NO Check 0"
+call :native_stub_row native_stub_skip ",0,15,OK"
+call :native_stub_row native_stub_skip ",1,20,OK"
+call :native_stub_row native_stub_skip ",10,OK"
+call :native_stub_row native_stub_skip ",0,OK"
+"%RS%" info --cfg "%NW%\driver\skip.cfg" > "%NW%\stub_info.log" 2>&1
+call :has "%NW%\stub_info.log" "native stubs=0 auto=0 skips=4" "native: info counts skips"
+copy /y "%NC%" "%NW%\driver\skipbad.cfg" >nul
+>> "%NW%\driver\skipbad.cfg" echo skip = periph_ratio:2
+call :native_err "native: nonzero float skip is an error" "skip = periph_ratio:2" skipbad.cfg
+copy /y "%NC%" "%NW%\driver\stubmissing.cfg" >nul
+>> "%NW%\driver\stubmissing.cfg" echo stub = no_such_func:AMSTB_periph_wait
+call :native_err "native: missing original is an error" "no_such_func" stubmissing.cfg
+copy /y "%NC%" "%NW%\driver\stubdestmissing.cfg" >nul
+>> "%NW%\driver\stubdestmissing.cfg" echo stub = periph_wait:no_such_stub
+call :native_err "native: missing destination is an error" "no_such_stub" stubdestmissing.cfg
+copy /y "%NC%" "%NW%\driver\stubtimeout.cfg" >nul
+>> "%NW%\driver\stubtimeout.cfg" echo native_timeout_ms = 300
+call :native_stub_run stubtimeout.cfg native_stub_cfg 1 "OK 4, NG 2, NO Check 0"
+>> "%NW%\driver\stubtimeout.cfg" echo stub = periph_wait:AMSTB_periph_wait
+>> "%NW%\driver\stubtimeout.cfg" echo stub = periph_read:AMSTB_periph_read
+call :native_stub_run stubtimeout.cfg native_stub_cfg 0 "OK 6, NG 0, NO Check 0"
+
 rem a header changes: only the sources that include it are compiled again (reg.h is included by io.c only)
 >> "%NW%\product\inc\reg.h" echo /* changed */
 "%RS%" info --cfg "%NC%" > "%NW%\info2.log" 2>&1
-call :has "%NW%\info2.log" "compiled=1 reused=6 linked=1" "native: a changed header recompiles only its users"
+call :has "%NW%\info2.log" "compiled=1 reused=8 linked=1" "native: a changed header recompiles only its users"
 >> "%NW%\product\inc\types.h" echo /* changed */
 "%RS%" info --cfg "%NC%" > "%NW%\info3.log" 2>&1
-call :has "%NW%\info3.log" "compiled=6 reused=1 linked=1" "native: a header used by every source recompiles them all"
+call :has "%NW%\info3.log" "compiled=8 reused=1 linked=1" "native: a header used by every source recompiles them all"
 "%RS%" run --cfg "%NC%" "%NW%\csv\native_basic.csv" -o "%NW%\out2" > "%NW%\again.log" 2>&1
 call :has "%NW%\again.log" "OK 18, NG 0, NO Check 0" "native: all rows are OK after the rebuild"
 
 rem a header of the same name appears earlier in the search order (next to the source that includes it)
 copy /y "%NW%\product\inc\reg.h" "%NW%\product\src\reg.h" >nul
 "%RS%" info --cfg "%NC%" > "%NW%\info4.log" 2>&1
-call :has "%NW%\info4.log" "compiled=1 reused=6 linked=1" "native: a header that shadows another recompiles its users"
+call :has "%NW%\info4.log" "compiled=1 reused=8 linked=1" "native: a header that shadows another recompiles its users"
 del "%NW%\product\src\reg.h"
 "%RS%" info --cfg "%NC%" > "%NW%\info5.log" 2>&1
-call :has "%NW%\info5.log" "compiled=1 reused=6 linked=1" "native: removing the shadowing header recompiles again"
+call :has "%NW%\info5.log" "compiled=1 reused=8 linked=1" "native: removing the shadowing header recompiles again"
 copy /y "%NW%\extra\asm_impl.c" "%NW%\driver\asm_impl.c" >nul
 "%RS%" run --cfg "%NC%" "%NW%\csv\native_asmcall2.csv" -o "%NW%\out_asmcall2" > "%NW%\asmcall2.log" 2>&1
 call :has "%NW%\asmcall2.log" "OK 6, NG 0, NO Check 0" "native: native_src definition overrides the substitute"
@@ -604,6 +652,20 @@ rem :cfg_err name cfg-file expected_text  (sim info exits 2 with the text)
 set RC=%ERRORLEVEL%
 "%HAS%" /l /c:"%~3" "%WORK%\r.log" >nul
 if errorlevel 1 (call :ng "%~1: message contains %~3") else if "%RC%"=="2" (call :ok "%~1") else (call :ng "%~1: exit code 2, got %RC%")
+exit /b 0
+
+rem :native_stub_row csv-basename expected-prefix
+:native_stub_row
+"%HAS%" /b /l /c:"%~2" "%NW%\out_stub\%~1.csv" >nul
+if errorlevel 1 (call :ng "native: %~1 row %~2") else (call :ok "native: %~1 row %~2")
+exit /b 0
+
+rem :native_stub_run cfg-file csv-basename expected-exit expected-summary
+:native_stub_run
+"%RS%" run --cfg "%NW%\driver\%~1" "%NW%\csv\%~2.csv" -o "%NW%\out_stub" > "%NW%\stub.log" 2>&1
+set RC=%ERRORLEVEL%
+if "%RC%"=="%~3" (call :ok "native: %~1 %~2 exits %~3") else (call :ng "native: %~1 %~2 exit %RC%" & type "%NW%\stub.log")
+call :has "%NW%\stub.log" "%~4" "native: %~1 %~2 row counts"
 exit /b 0
 
 rem :native_err name expected_text cfg-file-in-driver-folder

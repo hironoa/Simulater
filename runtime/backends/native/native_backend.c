@@ -1,5 +1,5 @@
 /*
- * native_backend.c - PC 用 DLL の方式（exec = native）。段階 2: 変数と関数
+ * native_backend.c - PC 用 DLL の方式（exec = native）。段階 3: スタブへの置換
  *
  * やること:
  *   1. CS+ のプロジェクトファイル（mtpj）から、ビルド対象の .c、インクルード・パス、定義・定義解除マクロを取る。
@@ -24,7 +24,7 @@
  * 失敗した、番地を確保できない、のどれもエラーにする。
  *
  * まだできないこと（docs/DESIGN.md の 4.3 節にも書く）:
- *   - スタブの切り替え、GUI
+ *   - GUI
  *   - #asm 〜 #endasm、__asm { … }、型を書かない宣言
  *   - Windows 以外での実行
  */
@@ -32,6 +32,7 @@
 #include "native_rewrite.h"
 #include "native_coff.h"
 
+#include <ctype.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -53,6 +54,7 @@
 #define WIN_LO 0xF0000u          /* 番地を再現する範囲 */
 #define WIN_HI 0x100000u
 #define HEAP_SIZE 0x100000u      /* $ptr 用の領域 */
+#define MAX_STUBS 256
 #define MAX_ARGS 8
 #define MAX_RANGES 64
 
@@ -95,6 +97,22 @@ typedef struct {
 #define UNDEF_DATA_SIZE 4096 /* 大きさが分からない変数の代わり。表として読まれても範囲外になりにくいよう大きめに取る */
 #define UNDEF_ALIGN_MIN 16   /* 変数の代わりの整列の最小。SSE の命令（movaps など）が前提にする境界 */
 
+/* 設定と CSV を別々に保持し、入口は番地ごとに一度だけ保存する。 */
+typedef struct {
+    uint64_t orig, target, value;
+    uint64_t limit;             /* 書き換えてよい範囲の終わり（次の関数の先頭か、コードのセクションの終わり） */
+    const char *oname, *sname;
+    const sim_type *ret;        /* 戻り値の型（デバッグ情報になければ NULL） */
+    uint32_t size;
+    int skip, floating, automatic;
+} stub_t;
+typedef struct {
+    uint64_t addr;
+    uint8_t saved[14];
+    size_t len;
+} patch_t;
+typedef struct { const char *name; uint64_t addr; } code_sym_t;
+
 typedef struct {
     sim_backend b;
     sim_cfg cfg;
@@ -105,6 +123,12 @@ typedef struct {
     char **asms; int nasms;
     char **incs; int nincs;
     char **macros; int nmacros;
+    stub_t stubs[MAX_STUBS], csv_stubs[MAX_STUBS];
+    int nstubs, ncsv;
+    patch_t patches[MAX_STUBS * 2];
+    int npatches;
+    code_sym_t *code_syms;
+    size_t ncode_syms;
     rl78_symtab st;
     rl78_warns w;
     char *dll_data;             /* DLL のファイルを閉じるまで保持する */
@@ -247,6 +271,7 @@ static void nat_free(nat *z)
     rl78_symtab_free(&z->st);
     rl78_warns_free(&z->w);
     free(z->dll_data);
+    free(z->code_syms);
     for (i = 0; i < z->nundefs; i++) free(z->undefs[i].name);
     free(z->undefs);
     for (i = 0; i < z->nranges; i++) free(z->ranges[i].init);
@@ -1269,6 +1294,7 @@ static int build(nat *z, char *err, size_t errlen)
         argv[k++] = "-Wl,/noentry";
         argv[k++] = "-Wl,/debug:dwarf";
         argv[k++] = "-Wl,/opt:noref";
+        argv[k++] = "-Wl,/opt:noicf";     /* 同じ中身の関数を 1 つにまとめない（入口の書き換えが別の関数に及ばないように） */
         for (i = 0; i < nunits; i++) argv[k++] = units[i].obj;
         if (undef_obj) argv[k++] = undef_obj;
         argv[k++] = "-o";
@@ -1844,6 +1870,20 @@ static void b_print_info(sim_backend *b, FILE *out)
             z->nsrcs, z->nasms, z->files_total, z->files_off, z->ncompiled, z->nreused, z->linked,
             (int)z->st.nfuncs, (int)z->st.nvars, z->opt);
     fprintf(out, "  変数: %zu 個、関数: %zu 個（デバッグ情報から）\n", z->st.nvars, z->st.nfuncs);
+    {
+        int k, stubs = 0, automatic = 0, skips = 0;
+        for (k = 0; k < z->nstubs; k++) {
+            const stub_t *t = &z->stubs[k];
+            if (t->skip) { skips++; fprintf(out, "skip = %s:%llu\n", t->oname, (unsigned long long)t->value); }
+            else {
+                if (t->automatic) automatic++; else stubs++;
+                fprintf(out, "スタブ: %s（0x%llX）-> %s（0x%llX）（先頭を書き換え）\n",
+                        t->oname, (unsigned long long)t->orig, t->sname, (unsigned long long)t->target);
+            }
+        }
+        if (!z->nstubs) fprintf(out, "スタブ: なし\n");
+        fprintf(out, "  native stubs=%d auto=%d skips=%d\n", stubs, automatic, skips);
+    }
     fprintf(out, "  native timeout_ms=%u\n", z->timeout_ms);
     if (z->timeout_ms) fprintf(out, "  1 回の呼び出しの上限: %u ミリ秒（native_timeout_ms）\n", z->timeout_ms);
     else fprintf(out, "  1 回の呼び出しの上限: なし（native_timeout_ms）\n");
@@ -1868,6 +1908,289 @@ static uint32_t pe_u32(const uint8_t *p)
 
 static unsigned pe_u16(const uint8_t *p) { return (unsigned)p[0] | (unsigned)p[1] << 8; }
 static int pe_range(size_t len, size_t off, size_t n) { return off <= len && n <= len - off; }
+
+/* addr から書き換えてよい範囲の終わり: addr を含む実行できるセクションの終わりと、addr より後ろで最初の関数の先頭
+ * （デバッグ情報と COFF の表の両方）の小さいほう。実行できるセクションの外なら 0 */
+static uint64_t code_limit(nat *z, uint64_t addr)
+{
+    const BYTE *base = z->lib;
+    const IMAGE_NT_HEADERS *nt = (const IMAGE_NT_HEADERS *)(base + ((const IMAGE_DOS_HEADER *)base)->e_lfanew);
+    const IMAGE_SECTION_HEADER *s = IMAGE_FIRST_SECTION(nt);
+    uint64_t limit = 0;
+    size_t i;
+    int k;
+    for (k = 0; k < nt->FileHeader.NumberOfSections; k++, s++) {
+        uint64_t lo = (uint64_t)(uintptr_t)(base + s->VirtualAddress), hi = lo + s->Misc.VirtualSize;
+        if ((s->Characteristics & IMAGE_SCN_MEM_EXECUTE) && addr >= lo && addr < hi) { limit = hi; break; }
+    }
+    if (!limit) return 0;
+    for (i = 0; i < z->st.nfuncs; i++) {
+        uint64_t a = z->st.funcs[i].f.addr;
+        if (a > addr && a < limit) limit = a;
+    }
+    for (i = 0; i < z->ncode_syms; i++) {
+        uint64_t a = z->code_syms[i].addr;
+        if (a > addr && a < limit) limit = a;
+    }
+    return limit;
+}
+
+/* 名前だけなら外部を優先し、static だけなら最初の一致を使う（RL78 と同じ）。 */
+static int resolve_stub(nat *z, const char *name, stub_t *t, int target)
+{
+    const char *sl = strrchr(name, '/'), *nm = sl ? sl + 1 : name;
+    char file[512];
+    const rl78_funcinfo *hit = NULL, *nofile = NULL;
+    uint64_t addr = 0;
+    const char *resolved = NULL;
+    size_t i;
+    if (sl) {
+        size_t n = (size_t)(sl - name);
+        if (!n || n >= sizeof file || !*nm) return -1;
+        memcpy(file, name, n); file[n] = 0;
+    }
+    for (i = 0; i < z->st.nfuncs; i++) {
+        const rl78_funcinfo *f = &z->st.funcs[i];
+        if (strcmp(f->f.name, nm)) continue;
+        if (sl) {
+            if (f->f.file && *f->f.file) {
+                if (sim_path_suffix_match(f->f.file, file)) { hit = f; break; }
+            } else if (!nofile) nofile = f;
+        } else {
+            if (!hit) hit = f;
+            if (f->f.is_external) { hit = f; break; }
+        }
+    }
+    if (!hit) hit = nofile;
+    if (hit) { addr = hit->f.addr; resolved = hit->f.name; }
+    else {
+        /* 別のファイルにしかない同名関数を COFF 経由で選ばない。 */
+        if (sl) for (i = 0; i < z->st.nfuncs; i++)
+            if (!strcmp(z->st.funcs[i].f.name, nm)) return -1;
+        for (i = 0; i < z->ncode_syms; i++) if (!strcmp(z->code_syms[i].name, nm)) {
+            addr = z->code_syms[i].addr; resolved = z->code_syms[i].name; break;
+        }
+    }
+    if (!addr) return -1;
+    if (target) { t->target = addr; t->sname = resolved; }
+    else {
+        t->orig = addr; t->oname = resolved;
+        t->size = hit ? hit->size : 0;
+        t->ret = hit ? hit->f.ret : NULL;
+        t->floating = hit && hit->f.ret && hit->f.ret->kind == SIM_T_FLOAT;
+        t->limit = code_limit(z, addr);
+    }
+    return 0;
+}
+
+/* clang の関数の間の埋め草（int3、nop、0F 1F の複数バイトの nop。66 / 2E の接頭辞つき）の 1 命令の長さ。埋め草でなければ 0 */
+static size_t pad_len(const uint8_t *p, size_t avail)
+{
+    size_t i = 0, len;
+    unsigned m, mod, rm;
+    if (!avail) return 0;
+    if (p[0] == 0xcc) return 1;
+    while (i < avail && i < 14 && (p[i] == 0x66 || p[i] == 0x2e)) i++;
+    if (i < avail && p[i] == 0x90) return i + 1;
+    if (i + 2 >= avail || p[i] != 0x0f || p[i + 1] != 0x1f) return 0;
+    m = p[i + 2]; mod = m >> 6; rm = m & 7; len = i + 3;
+    if (mod != 3 && rm == 4) {
+        if (len >= avail) return 0;
+        if (mod == 0 && (p[len] & 7) == 5) len += 4;
+        len++;
+    }
+    if (mod == 1) len += 1;
+    else if (mod == 2 || (mod == 0 && rm == 5)) len += 4;
+    return len <= avail ? len : 0;
+}
+
+static int write_code(uint64_t addr, const uint8_t *code, size_t n, char *err, size_t errlen)
+{
+    void *p = (void *)(uintptr_t)addr;
+    DWORD old, ignored;
+    int protected_ok, flushed;
+    if (!VirtualProtect(p, n, PAGE_EXECUTE_READWRITE, &old)) goto bad;
+    memcpy(p, code, n);
+    protected_ok = VirtualProtect(p, n, old, &ignored) != 0;
+    flushed = FlushInstructionCache(GetCurrentProcess(), p, n) != 0;
+    if (protected_ok && flushed) return 0;
+bad:
+    snprintf(err, errlen, "native: 関数の入口を書き換えられません（エラー %lu）", (unsigned long)GetLastError());
+    return -1;
+}
+
+static int restore_stubs(nat *z, char *err, size_t errlen)
+{
+    int i, failed = 0;
+    for (i = z->npatches - 1; i >= 0; i--) {
+        patch_t *p = &z->patches[i];
+        if (write_code(p->addr, p->saved, p->len, err, errlen)) failed = 1;
+    }
+    if (!failed) z->npatches = 0;
+    return failed ? -1 : 0;
+}
+
+static int patch_stub(nat *z, const stub_t *t, char *err, size_t errlen)
+{
+    uint8_t code[14];
+    size_t n = 0, i;
+    uint64_t value = t->skip ? t->value : t->target;
+    patch_t *p;
+    if (t->skip && t->floating) { code[n++] = 0x0f; code[n++] = 0x57; code[n++] = 0xc0; }
+    code[n++] = 0x48; code[n++] = 0xb8;
+    for (i = 0; i < 8; i++) code[n++] = (uint8_t)(value >> (i * 8));
+    if (t->skip) code[n++] = 0xc3;
+    else { code[n++] = 0xff; code[n++] = 0xe0; }
+    /* 次の関数の先頭（またはセクションの終わり）まで命令が収まり、関数の大きさが分かれば、
+     * 関数の終わりから書き換える範囲の終わりまでが埋め草であること（.text の中の表などを壊さない） */
+    if (!t->limit || t->limit <= t->orig || t->limit - t->orig < n) goto short_func;
+    if (t->size && t->size < n) {
+        const uint8_t *bytes = (const uint8_t *)(uintptr_t)t->orig;
+        size_t room = (size_t)(t->limit - t->orig), k;
+        for (i = t->size; i < n; i += k)
+            if (!(k = pad_len(bytes + i, room - i))) goto short_func;
+    }
+    p = &z->patches[z->npatches++];
+    p->addr = t->orig; p->len = n;
+    memcpy(p->saved, (const void *)(uintptr_t)t->orig, n);
+    return write_code(t->orig, code, n, err, errlen);
+short_func:
+    snprintf(err, errlen, "関数 %s は短すぎて置き換えられません（入口の %zu バイトを書き換えると、次の関数か関数の間の埋め草でないところにかかります）",
+             t->oname, n);
+    return -1;
+}
+
+/* CSV が指定する入口には設定の置換を重ねず、元の命令から書き換える。 */
+static int apply_stubs(nat *z, char *err, size_t errlen)
+{
+    int i, j;
+    if (restore_stubs(z, err, errlen)) return -1;
+    for (i = 0; i < z->nstubs; i++) {
+        for (j = 0; j < z->ncsv && z->csv_stubs[j].orig != z->stubs[i].orig; j++) {}
+        if (j == z->ncsv && patch_stub(z, &z->stubs[i], err, errlen)) return -1;
+    }
+    for (i = 0; i < z->ncsv; i++) if (patch_stub(z, &z->csv_stubs[i], err, errlen)) return -1;
+    return 0;
+}
+
+static int b_set_csv_stubs(sim_backend *b, const char *const *origs, const char *const *stubs, int n,
+                           char *err, size_t errlen)
+{
+    nat *z = b->impl;
+    int i, k;
+    char recovery[512];
+    z->ncsv = 0;
+    if (apply_stubs(z, err, errlen)) goto fail;
+    for (i = 0; i < n; i++) {
+        stub_t t = {0};
+        if (resolve_stub(z, origs[i], &t, 0)) {
+            snprintf(err, errlen, "%% 行: 置き換え元の関数 '%s' がロードモジュールに見つかりません", origs[i]); goto fail;
+        }
+        if (resolve_stub(z, stubs[i], &t, 1)) {
+            snprintf(err, errlen, "%% 行: スタブ関数 '%s' がロードモジュールに見つかりません", stubs[i]); goto fail;
+        }
+        if (t.orig == t.target) continue;
+        for (k = 0; k < z->ncsv && z->csv_stubs[k].orig != t.orig; k++) {}
+        if (k == MAX_STUBS) { snprintf(err, errlen, "%% 行の置換が多すぎます（%d 個まで）", MAX_STUBS); goto fail; }
+        z->csv_stubs[k] = t;
+        if (k == z->ncsv) z->ncsv++;
+    }
+    if (!apply_stubs(z, err, errlen)) return 0;
+fail:
+    z->ncsv = 0;
+    if (apply_stubs(z, recovery, sizeof recovery)) snprintf(err, errlen, "%s", recovery);
+    return -1;
+}
+
+static int add_stub(nat *z, const char *orig, const char *dest, int automatic, char *err, size_t errlen)
+{
+    stub_t t = {0};
+    int k;
+    if (resolve_stub(z, orig, &t, 0)) {
+        snprintf(err, errlen, "sim.cfg: stub の置き換え元 '%s' が見つかりません", orig); return -1;
+    }
+    if (resolve_stub(z, dest, &t, 1)) {
+        snprintf(err, errlen, "sim.cfg: stub の置き換え先 '%s' が見つかりません", dest); return -1;
+    }
+    if (t.orig == t.target) return 0;
+    for (k = 0; k < z->nstubs && z->stubs[k].orig != t.orig; k++) {}
+    if (k == MAX_STUBS) { snprintf(err, errlen, "スタブが多すぎます（%d 個まで）", MAX_STUBS); return -1; }
+    t.automatic = automatic;
+    z->stubs[k] = t;
+    if (k == z->nstubs) z->nstubs++;
+    return 0;
+}
+
+static int setup_stubs(nat *z, char *err, size_t errlen)
+{
+    const char *s = sim_cfg_get(&z->cfg, "stub_auto");
+    int on = 0, i;
+    size_t j;
+    if (s) {
+        if (!strcmp(s, "on") || !strcmp(s, "1") || !strcmp(s, "yes") || !strcmp(s, "true") || !strcmp(s, "ON")) on = 1;
+        else if (strcmp(s, "off") && strcmp(s, "0") && strcmp(s, "no") && strcmp(s, "false") && strcmp(s, "OFF")) {
+            snprintf(err, errlen, "sim.cfg: stub_auto = %s は on / off にしてください", s); return -1;
+        }
+    }
+    if (on) for (j = 0; j < z->st.nfuncs; j++) {
+        const char *nm = z->st.funcs[j].f.name;
+        stub_t t = {0};
+        if (!strncmp(nm, "AMSTB_", 6) && nm[6] && !resolve_stub(z, nm + 6, &t, 0))
+            if (add_stub(z, nm + 6, nm, 1, err, errlen)) return -1;
+    }
+    for (i = 0; i < z->cfg.n; i++) {
+        sim_cfg_entry *e = &z->cfg.e[i];
+        char *a, *dest, *end;
+        int rc;
+        if (strcmp(e->key, "stub")) continue;
+        e->used = 1;
+        a = sim_xstrdup(e->value); dest = strchr(a, ':');
+        if (!dest) { free(a); snprintf(err, errlen, "sim.cfg:%d: stub = 元の関数:スタブ関数 の形にしてください", e->line); return -1; }
+        *dest++ = 0;
+        end = a + strlen(a); while (end > a && end[-1] == ' ') *--end = 0;
+        while (*dest == ' ') dest++;
+        rc = add_stub(z, a, dest, 0, err, errlen); free(a);
+        if (rc) return -1;
+    }
+    for (i = 0; i < z->cfg.n; i++) {
+        sim_cfg_entry *e = &z->cfg.e[i];
+        stub_t t = {0};
+        char *a, *value, *end;
+        int k;
+        if (strcmp(e->key, "skip")) continue;
+        e->used = 1;
+        a = sim_xstrdup(e->value); value = strchr(a, ':');
+        if (value) *value++ = 0;
+        end = a + strlen(a); while (end > a && isspace((unsigned char)end[-1])) *--end = 0;
+        if (resolve_stub(z, a, &t, 0)) {
+            snprintf(err, errlen, "sim.cfg:%d: skip の関数 '%s' が見つかりません", e->line, a); free(a); return -1;
+        }
+        for (k = 0; k < z->nstubs; k++) if (z->stubs[k].orig == t.orig) {
+            snprintf(err, errlen, "sim.cfg:%d: skip %s は stub / skip と重複しています", e->line, a); free(a); return -1;
+        }
+        /* 戻り値を書いたときは、今の方式と同じく、型が分かり、その大きさに収まる整数（真偽値は 0 / 1、ポインタ）だけ。
+         * 浮動小数を返す関数は 0 だけ（XMM0 を 0 にする） */
+        if (value) {
+            const sim_type *r = t.ret;
+            int ok = !sim_parse_uint(value, UINT64_MAX, &t.value) && r;
+            free(a);
+            if (ok && r->kind == SIM_T_FLOAT) ok = t.value == 0;
+            else if (ok) {
+                ok = (r->kind == SIM_T_INT || r->kind == SIM_T_UINT || r->kind == SIM_T_BOOL || r->kind == SIM_T_PTR) &&
+                     (r->size == 1 || r->size == 2 || r->size == 4 || r->size == 8) &&
+                     (r->size == 8 || t.value < (UINT64_C(1) << (8 * r->size))) && (r->kind != SIM_T_BOOL || t.value <= 1);
+            }
+            if (!ok) {
+                snprintf(err, errlen, "sim.cfg:%d: skip = %s を読めません（skip の戻り値は、型が分かる整数・ポインタで、その大きさに収まる値だけ。"
+                         "浮動小数を返す関数は 0 だけ）", e->line, e->value);
+                return -1;
+            }
+        } else free(a);
+        if (z->nstubs == MAX_STUBS) { snprintf(err, errlen, "スタブが多すぎます（%d 個まで）", MAX_STUBS); return -1; }
+        t.skip = 1; z->stubs[z->nstubs++] = t;
+    }
+    return apply_stubs(z, err, errlen);
+}
 
 /* DISCARDABLE なデバッグ情報は、ロードしたメモリではなくファイルから取る。 */
 static int read_dwarf(nat *z, char *err, size_t errlen)
@@ -1903,6 +2226,32 @@ static int read_dwarf(nat *z, char *err, size_t errlen)
         if (!pe_range(len, strings, 4)) goto bad;
         strings_len = pe_u32(d + strings);
         if (strings_len < 4 || !pe_range(len, strings, strings_len)) goto bad;
+    }
+    /* DLL の COFF 表には、デバッグ情報のないアセンブラの代わりも残る。 */
+    for (i = 0; symptr && i < nsyms; ) {
+        const uint8_t *sym = d + symptr + i * 18;
+        unsigned section = pe_u16(sym + 12), aux = sym[17];
+        const char *name;
+        char short_name[9];
+        uint32_t value = pe_u32(sym + 8);
+        if ((size_t)aux >= nsyms - i) goto bad;
+        if (!pe_u32(sym)) {
+            size_t off = pe_u32(sym + 4);
+            if (off < 4 || off >= strings_len) goto bad;
+            name = (const char *)d + strings + off;
+            if (!memchr(name, 0, strings_len - off)) goto bad;
+        } else { memcpy(short_name, sym, 8); short_name[8] = 0; name = short_name; }
+        if (section && section <= nsects) {
+            const uint8_t *h = d + sections + (section - 1) * 40;
+            uint64_t rva = (uint64_t)pe_u32(h + 12) + value;
+            if ((pe_u32(h + 36) & IMAGE_SCN_MEM_EXECUTE) && rva < image_size && sym[16] == 2) {
+                code_sym_t *c;
+                z->code_syms = sim_xrealloc(z->code_syms, (z->ncode_syms + 1) * sizeof *z->code_syms);
+                c = &z->code_syms[z->ncode_syms++];
+                c->name = ar_strdup(&z->st.ar, name); c->addr = loaded + rva;
+            }
+        }
+        i += 1 + aux;
     }
     for (i = 0; i < nsects; i++) {
         const uint8_t *h = d + sections + i * 40;
@@ -2122,6 +2471,7 @@ sim_backend *native_backend_open(const sim_open_opts *o, int *handled, char *err
     z->lib = sim_dl_open(z->dll, cerr, sizeof cerr);
     if (!z->lib) { snprintf(err, errlen, "native: DLL %s を読み込めません（%s）", z->dll, cerr); goto fail; }
     if (read_dwarf(z, err, errlen)) goto fail;
+    if (setup_stubs(z, err, errlen)) goto fail;
     if (z->w.n && !z->w.verbose) fprintf(stderr, "sim: 読み込みの警告が %d 件あります（--verbose で表示）\n", z->w.n);
     if (add_dll_sections(z, z->lib)) { snprintf(err, errlen, "native: DLL のセクションが多すぎます"); goto fail; }
     z->exception_handler = AddVectoredExceptionHandler(1, on_exception);
@@ -2158,6 +2508,7 @@ sim_backend *native_backend_open(const sim_open_opts *o, int *handled, char *err
     b->call = b_call;
     b->alloc = b_alloc;
     b->reset = b_reset;
+    b->set_csv_stubs = b_set_csv_stubs;
     b->close = b_close;
     b->print_info = b_print_info;
     b->cpu_hz = 0;

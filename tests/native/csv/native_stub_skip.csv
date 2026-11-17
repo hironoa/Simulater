@@ -1,0 +1,18 @@
+mod,periph_task,native stub,1,1
+#COMMENT,@mode,periph_task@@
+,0,15
+mod,periph_task,native stub,1,1
+#COMMENT,@mode,periph_task@@
+,1,20
+mod,periph_calc,native stub,1,1
+#COMMENT,@x,periph_calc@@
+,5,11
+mod,periph_use_value,native stub,0,1
+#COMMENT,periph_use_value@@
+,10
+mod,periph_use_ratio,native stub,0,1
+#COMMENT,periph_use_ratio@@
+,0
+mod,asmcall_run,native stub,1,1
+#COMMENT,@n,asmcall_run@@
+,3,100
