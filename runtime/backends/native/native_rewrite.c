@@ -18,17 +18,28 @@ static int eq(const char *s, token t, const char *w)
 {
     return t.b - t.a == strlen(w) && !memcmp(s + t.a, w, t.b - t.a);
 }
+/* 型の語の種類。W_OTHER は別の型の語で、並びを切らずに int / short の書き換えを止める。
+ * W_QUAL は修飾子・指定子（GNU の別名を含む）で、並びを切らず判定にも影響しない。 */
+enum { W_NONE, W_QUAL, W_SIGN, W_INT, W_LONGSHORT, W_OTHER };
 static int type_word(const char *s, token t)
 {
-    static const char *const words[] = {
-        "unsigned", "signed", "long", "short", "int", "char", "const", "volatile",
-        "static", "extern", "register", "auto", "typedef", "inline", "__inline",
-        "__inline__", "__signed__", "__const", "__volatile__"
+    static const struct { const char *w; int k; } words[] = {
+        {"unsigned", W_SIGN}, {"signed", W_SIGN}, {"__signed", W_SIGN}, {"__signed__", W_SIGN},
+        {"int", W_INT}, {"long", W_LONGSHORT}, {"short", W_LONGSHORT},
+        {"char", W_OTHER}, {"_Bool", W_OTHER}, {"float", W_OTHER}, {"double", W_OTHER},
+        {"void", W_OTHER}, {"_Complex", W_OTHER}, {"__int8", W_OTHER}, {"__int16", W_OTHER},
+        {"__int32", W_OTHER}, {"__int64", W_OTHER},
+        {"const", W_QUAL}, {"__const", W_QUAL}, {"__const__", W_QUAL},
+        {"volatile", W_QUAL}, {"__volatile", W_QUAL}, {"__volatile__", W_QUAL},
+        {"restrict", W_QUAL}, {"__restrict", W_QUAL}, {"__restrict__", W_QUAL},
+        {"inline", W_QUAL}, {"__inline", W_QUAL}, {"__inline__", W_QUAL},
+        {"__extension__", W_QUAL}, {"static", W_QUAL}, {"extern", W_QUAL},
+        {"register", W_QUAL}, {"auto", W_QUAL}, {"typedef", W_QUAL}
     };
     size_t i;
-    if (t.kind != IDENT) return 0;
-    for (i = 0; i < sizeof words / sizeof *words; i++) if (eq(s, t, words[i])) return 1;
-    return 0;
+    if (t.kind != IDENT) return W_NONE;
+    for (i = 0; i < sizeof words / sizeof *words; i++) if (eq(s, t, words[i].w)) return words[i].k;
+    return W_NONE;
 }
 /* 行の情報のフラグだけを読む。pragma では現在の状態を変えない。 */
 static void line_info(const char *s, size_t p, size_t end, int *system)
@@ -114,7 +125,8 @@ int native_rewrite(const char *s, size_t len, sim_buf *out, native_rewrite_stats
         if (ts[i].kind == IDENT && eq(s, ts[i], "__asm")) {
             int depth = 0;
             j = i + 1;
-            while (j < n && ts[j].kind == SPACE) j++;
+            /* clang -E は __asm と ( の間にも行の情報を出すことがある。LINE は残す（下の消す範囲で除く）。 */
+            while (j < n && (ts[j].kind == SPACE || ts[j].kind == LINE)) j++;
             if (j < n && ts[j].kind == OTHER && eq(s, ts[j], "(")) {
                 for (k = j; k < n; k++) {
                     if (ts[k].kind != OTHER) continue;
@@ -129,25 +141,25 @@ int native_rewrite(const char *s, size_t len, sim_buf *out, native_rewrite_stats
             }
         }
         if (type_word(s, ts[i])) {
-            int has_int = 0, has_longshort = 0, has_char = 0;
+            int has_int = 0, has_longshort = 0, has_other = 0, w = W_NONE;
             size_t sign = n;
             j = i;
-            while (j < n && (ts[j].kind == SPACE || ts[j].kind == LINE || type_word(s, ts[j]))) {
+            while (j < n && (ts[j].kind == SPACE || ts[j].kind == LINE || (w = type_word(s, ts[j])) != W_NONE)) {
                 if (ts[j].kind == IDENT) {
-                    if (eq(s, ts[j], "int")) has_int = 1;
-                    if (eq(s, ts[j], "long") || eq(s, ts[j], "short")) has_longshort = 1;
-                    if (eq(s, ts[j], "char")) has_char = 1;
-                    if (sign == n && (eq(s, ts[j], "unsigned") || eq(s, ts[j], "signed") || eq(s, ts[j], "__signed__"))) sign = j;
+                    if (w == W_INT) has_int = 1;
+                    if (w == W_LONGSHORT) has_longshort = 1;
+                    if (w == W_OTHER) has_other = 1;
+                    if (sign == n && w == W_SIGN) sign = j;
                 }
                 j++;
             }
-            for (k = i; k < j; k++) {
+            for (k = i; k < j && !has_other; k++) {
                 if (ts[k].kind == IDENT && eq(s, ts[k], "int")) {
                     ts[k].action = has_longshort ? 1 : 2;
                     if (has_longshort) counts.int_dropped++; else counts.int_replaced++;
                 }
             }
-            if (!has_int && !has_longshort && !has_char && sign != n) {
+            if (!has_int && !has_longshort && !has_other && sign != n) {
                 ts[sign].action = 3; counts.short_added++;
             }
             i = j; continue;

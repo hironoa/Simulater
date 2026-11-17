@@ -56,6 +56,22 @@ static const struct { const char *in, *out; } cases[] = {
     {"unsigned\n# 14 \"a.c\"\n int x;", "unsigned\n# 14 \"a.c\"\n short x;"},
     {"long\n# 14 \"a.c\"\n int x;", "long\n# 14 \"a.c\"\n x;"},
     {"__asm(\n# 9 \"a.c\"\n\"di\");", "\n# 9 \"a.c\"\n;"},
+    {"__asm\n# 14 \"a.c\"\n(\"di\");", "\n# 14 \"a.c\"\n;"},
+    /* GNU の修飾子の別名と、別の型の語 */
+    {"unsigned __const__ char v;", "unsigned __const__ char v;"},
+    {"unsigned __volatile char v;", "unsigned __volatile char v;"},
+    {"__const__ int a;", "__const__ short a;"},
+    {"unsigned __volatile__ x;", "unsigned short __volatile__ x;"},
+    {"__extension__ long long int z;", "__extension__ long long z;"},
+    {"unsigned __int64 q;", "unsigned __int64 q;"},
+    {"long double d;", "long double d;"},
+    {"const void *p;", "const void *p;"},
+    {"__signed__ char c;", "__signed__ char c;"},
+    {"__signed__ w;", "__signed__ short w;"},
+    {"__signed w; signed __int8 b; unsigned _Bool f; long long int g; unsigned long long int h;",
+     "__signed short w; signed __int8 b; unsigned _Bool f; long long g; unsigned long long h;"},
+    {"unsigned * __restrict__ p; int * restrict q; static __inline__ unsigned f(void);",
+     "unsigned short * __restrict__ p; short * restrict q; static __inline__ unsigned short f(void);"},
     /* 入力の終わりと閉じていないもの */
     {"", ""},
     {"int", "short"},
@@ -121,12 +137,12 @@ int main(void)
         sim_buf_free(&out); sim_buf_free(&a); sim_buf_free(&b);
     }
     {
-        const char *in = "int x; long int y; unsigned z; __asm(\"di\"); __asm(\"ei\");";
+        const char *in = "int x; long int y; unsigned z; __asm(\"di\"); __asm(\"ei\"); __asm\n# 14 \"a.c\"\n(\"nop\");";
         native_rewrite_stats st;
         sim_buf out;
         sim_buf_init(&out);
         native_rewrite(in, strlen(in), &out, &st);
-        if (st.int_replaced != 1 || st.int_dropped != 1 || st.short_added != 1 || st.asm_removed != 2) {
+        if (st.int_replaced != 1 || st.int_dropped != 1 || st.short_added != 1 || st.asm_removed != 3) {
             puts("統計の数が違います"); failed++;
         }
         sim_buf_free(&out);

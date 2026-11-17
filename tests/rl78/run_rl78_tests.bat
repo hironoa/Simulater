@@ -320,7 +320,7 @@ if errorlevel 1 (call :ng "native: RAM written by address is read by the functio
 "%RS%" info --cfg "%NC%" > "%NW%\info.log" 2>&1
 call :has "%NW%\info.log" "native sources=5 asm=1 files=6 off=1 compiled=0 reused=6 linked=0" "native: second open compiles nothing"
 call :has "%NW%\info.log" "funcs=26 vars=21 opt=0" "native: variables and functions come from the debug information"
-call :has "%NW%\info.log" "native rewrite int=22 int_dropped=7 short_added=6 asm=3 asm_files=1" "native: legacy assembly is counted on cache reuse"
+call :has "%NW%\info.log" "native rewrite int=22 int_dropped=7 short_added=6 asm=4 asm_files=1" "native: legacy assembly is counted on cache reuse"
 "%RS%" run --cfg "%NC%" "%NW%\csv\native_legacy.csv" -o "%NW%\out_legacy" > "%NW%\legacy.log" 2>&1
 set RC=%ERRORLEVEL%
 if "%RC%"=="0" (call :ok "native: legacy run exits 0") else (call :ng "native: legacy run exits 0" & type "%NW%\legacy.log")

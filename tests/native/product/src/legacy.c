@@ -19,6 +19,20 @@ signed legacy_asm(void)
     signed value = 6;
     __asm("\tdi");
     value++;
+    __asm
+
+
+
+
+
+
+
+
+
+
+
+
+    ("\tdi");
     __asm("\tei");
     return value;
 }
