@@ -1,7 +1,7 @@
 <CubeSuiteProject>
   <!-- テスト用の合成データ（PC 用 DLL の方式 exec = native の試験）。tests/defines_scope/proj/scope_test.mtpj と同じく、
        tests/ca78k0r_probe/ca78k0r_probe.mtpj（CS+ 5.02、CA78K0R V1.60）の構造を写したもので、CS+ が保存した実物ではない。
-       登録ファイル: calc.c、io.c、vars.c、legacy.c、asmcall.c と periph.c（ビルド対象）、broken.c（ビルド対象外）、startup.asm（アセンブラ）。
+       登録ファイル: calc.c、io.c、vars.c、legacy.c、asmcall.c、periph.c と near.c（ビルド対象）、broken.c（ビルド対象外）、startup.asm（アセンブラ）。
        定義マクロ: GAIN=3。定義解除マクロ: FEATURE_X。インクルード・パス: ..\inc。 -->
   <ProductVersion>5.02.00.00</ProductVersion>
   <Class Guid="68f4a651-b9cd-473b-a595-b00447132ffa">
@@ -53,6 +53,12 @@
       <RelativePath>..\src\periph.c</RelativePath>
       <ParentItem>f072d5ef-98af-4a13-9020-57d2f1b830e1</ParentItem>
     </Instance>
+    <Instance Guid="b0000000-0000-0000-0000-000000000009">
+      <Name>near.c</Name>
+      <Type>File</Type>
+      <RelativePath>..\src\near.c</RelativePath>
+      <ParentItem>f072d5ef-98af-4a13-9020-57d2f1b830e1</ParentItem>
+    </Instance>
   </Class>
   <Class Guid="11ff4962-ca73-4419-bb4a-67e9b8de9571">
     <Instance Guid="11ff4962-ca73-4419-bb4a-67e9b8de9571">
@@ -76,7 +82,9 @@
       <SourceItemType6>CSource</SourceItemType6>
       <SourceItemGuid7>b0000000-0000-0000-0000-000000000008</SourceItemGuid7>
       <SourceItemType7>CSource</SourceItemType7>
-      <SourceItemCount>8</SourceItemCount>
+      <SourceItemGuid8>b0000000-0000-0000-0000-000000000009</SourceItemGuid8>
+      <SourceItemType8>CSource</SourceItemType8>
+      <SourceItemCount>9</SourceItemCount>
     </Instance>
     <Instance Guid="86700a2f-4f2c-4aec-8af7-7d69ad94a4a1">
       <MacroDefinitions-0>GAIN=3
@@ -98,6 +106,7 @@
       <SourceItem7-BuildingTarget-0>True</SourceItem7-BuildingTarget-0>
       <SourceItem6-BuildingTarget-0>True</SourceItem6-BuildingTarget-0>
       <SourceItem3-BuildingTarget-0>True</SourceItem3-BuildingTarget-0>
+      <SourceItem8-BuildingTarget-0>True</SourceItem8-BuildingTarget-0>
     </Instance>
   </Class>
 </CubeSuiteProject>

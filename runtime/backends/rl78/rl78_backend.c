@@ -1199,7 +1199,7 @@ static const char *const KNOWN_KEYS[] = {
     "abs", "abi", "map", "core", "mdu", "mirror", "rom_size", "ram", "heap", "sentinel", "call_sp", "init_end", "func",
     "skip", "poke", "stub", "stub_auto", "cpu_hz", "max_insns", "startup_max_insns", "halt", "stop", "ram_fill", "bitfield_order",
     "exec", "xlate_cc", "xlate_dir", "xlate_jobs",
-    "native_cc", "native_dir", "native_jobs", "native_src", "native_include", "native_func", "native_opt", "native_timeout_ms", "native_symbolizer", NULL
+    "native_cc", "native_dir", "native_jobs", "native_src", "native_include", "native_func", "native_opt", "native_near", "native_timeout_ms", "native_symbolizer", NULL
 };
 
 sim_backend *sim_backend_open(const sim_open_opts *o, char *err, size_t errlen)

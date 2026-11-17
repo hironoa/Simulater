@@ -46,3 +46,10 @@ int memcmp(const void *a, const void *b, sim_size n)
         if (*x != *y) return *x < *y ? -1 : 1;
     return 0;
 }
+
+/* 整数からポインタへの変換で、値が実行時に決まるもの（native_near.c が呼び出しを差し込む）。
+ * 1〜0xFFFF は RL78 の near の番地なので 0xF0000 を補う。0（NULL）と 0x10000 以上はそのまま */
+unsigned long long __sim_near(unsigned long long v)
+{
+    return (v - 1ULL < 0xFFFFULL) ? v + 0xF0000ULL : v;
+}

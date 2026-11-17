@@ -319,22 +319,41 @@ if errorlevel 1 (call :ng "native: a header name uses the same #if branch as the
 "%HAS%" /b /l /c:",65535,65535,OK" "%NW%\out\native_basic.csv" >nul
 if errorlevel 1 (call :ng "native: RAM written by address is read by the function") else (call :ok "native: RAM written by address is read by the function")
 "%RS%" info --cfg "%NC%" > "%NW%\info.log" 2>&1
-call :has "%NW%\info.log" "native sources=8 asm=1 files=8 off=1 compiled=0 reused=9 linked=0" "native: second open compiles nothing"
-call :has "%NW%\info.log" "funcs=49 vars=22 opt=0" "native: variables and functions come from the debug information"
+call :has "%NW%\info.log" "native sources=9 asm=1 files=9 off=1 compiled=0 reused=10 linked=0" "native: second open compiles nothing"
+call :has "%NW%\info.log" "funcs=56 vars=24 opt=0" "native: variables and functions come from the debug information"
 call :has "%NW%\info.log" "defines auto=1" "native: header definitions are automatic"
+rem Integer-to-pointer conversions: 1 to 0xFFFF is a near address and gets 0xF0000 (native_near, on by default).
+call :has "%NW%\info.log" "native near=1 const=6 dyn=3 kept=0" "native: info counts the near address conversions"
+"%RS%" run --cfg "%NC%" "%NW%\csv\native_near.csv" -o "%NW%\out_near" > "%NW%\near.log" 2>&1
+set RC=%ERRORLEVEL%
+if "%RC%"=="0" (call :ok "native: near address run exits 0") else (call :ng "native: near address run exits 0" & type "%NW%\near.log")
+call :has "%NW%\near.log" "OK 11, NG 0, NO Check 0" "native: all near address rows are OK"
+copy /y "%NC%" "%NW%\driver\nearoff.cfg" >nul
+>> "%NW%\driver\nearoff.cfg" echo native_near = off
+"%RS%" run --cfg "%NW%\driver\nearoff.cfg" "%NW%\csv\native_near.csv" -o "%NW%\out_nearoff" > "%NW%\nearoff.log" 2>&1
+set RC=%ERRORLEVEL%
+if "%RC%"=="1" (call :ok "native: without native_near the near rows fail") else (call :ng "native: without native_near the near rows fail: exit code 1, got %RC%" & type "%NW%\nearoff.log")
+call :has "%NW%\nearoff.log" "0xFFD4" "native: without native_near near_read stops at 0xFFD4"
+"%HAS%" /b /l /c:",0xABCD,43981,NG" "%NW%\out_nearoff\native_near.csv" >nul
+if errorlevel 1 (call :ng "native: without native_near the near_read row is NG") else (call :ok "native: without native_near the near_read row is NG")
+"%RS%" info --cfg "%NW%\driver\nearoff.cfg" > "%NW%\nearoff_info.log" 2>&1
+call :has "%NW%\nearoff_info.log" "native near=0 const=0 dyn=0 kept=0" "native: info shows native_near = off"
+copy /y "%NC%" "%NW%\driver\nearbad.cfg" >nul
+>> "%NW%\driver\nearbad.cfg" echo native_near = maybe
+call :native_err "native: invalid native_near is an error" "native_near" nearbad.cfg
 copy /y "%NC%" "%NW%\driver\autoff.cfg" >nul
 >> "%NW%\driver\autoff.cfg" echo defines_auto = off
 call :native_err "native: disabling auto leaves P3 undefined" "P3" autoff.cfg
 copy /y "%NC%" "%NW%\driver\autobad.cfg" >nul
 >> "%NW%\driver\autobad.cfg" echo defines_auto = maybe
 call :native_err "native: invalid defines_auto is an error" "defines_auto" autobad.cfg
-call :has "%NW%\info.log" "native rewrite int=28 int_dropped=7 short_added=6 asm=4 asm_files=1" "native: legacy assembly is counted on cache reuse"
+call :has "%NW%\info.log" "native rewrite int=31 int_dropped=7 short_added=6 asm=4 asm_files=1" "native: legacy assembly is counted on cache reuse"
 "%RS%" run --cfg "%NC%" "%NW%\csv\native_legacy.csv" -o "%NW%\out_legacy" > "%NW%\legacy.log" 2>&1
 set RC=%ERRORLEVEL%
 if "%RC%"=="0" (call :ok "native: legacy run exits 0") else (call :ng "native: legacy run exits 0" & type "%NW%\legacy.log")
 call :has "%NW%\legacy.log" "OK 3, NG 0, NO Check 0" "native: all legacy rows are OK"
 call :has "%NW%\info.log" "startup.asm" "native: assembler sources are listed"
-call :has "%NW%\info.log" "files=8 off=1" "native: a file that is not a build target is left out"
+call :has "%NW%\info.log" "files=9 off=1" "native: a file that is not a build target is left out"
 call :has "%NW%\info.log" "native undef funcs=6 data=5 skipped=0" "native: undefined assembly names are substituted"
 "%RS%" run --cfg "%NC%" "%NW%\csv\native_asmcall.csv" -o "%NW%\out_asmcall" > "%NW%\asmcall.log" 2>&1
 call :has "%NW%\asmcall.log" "OK 6, NG 0, NO Check 0" "native: assembly substitutes return zero"
@@ -389,20 +408,20 @@ call :native_stub_run stubtimeout.cfg native_stub_cfg 0 "OK 6, NG 0, NO Check 0"
 rem a header changes: only the sources that include it are compiled again (reg.h is included by io.c only)
 >> "%NW%\product\inc\reg.h" echo /* changed */
 "%RS%" info --cfg "%NC%" > "%NW%\info2.log" 2>&1
-call :has "%NW%\info2.log" "compiled=1 reused=8 linked=1" "native: a changed header recompiles only its users"
+call :has "%NW%\info2.log" "compiled=1 reused=9 linked=1" "native: a changed header recompiles only its users"
 >> "%NW%\product\inc\types.h" echo /* changed */
 "%RS%" info --cfg "%NC%" > "%NW%\info3.log" 2>&1
-call :has "%NW%\info3.log" "compiled=8 reused=1 linked=1" "native: a header used by every source recompiles them all"
+call :has "%NW%\info3.log" "compiled=9 reused=1 linked=1" "native: a header used by every source recompiles them all"
 "%RS%" run --cfg "%NC%" "%NW%\csv\native_basic.csv" -o "%NW%\out2" > "%NW%\again.log" 2>&1
 call :has "%NW%\again.log" "OK 18, NG 0, NO Check 0" "native: all rows are OK after the rebuild"
 
 rem a header of the same name appears earlier in the search order (next to the source that includes it)
 copy /y "%NW%\product\inc\reg.h" "%NW%\product\src\reg.h" >nul
 "%RS%" info --cfg "%NC%" > "%NW%\info4.log" 2>&1
-call :has "%NW%\info4.log" "compiled=1 reused=8 linked=1" "native: a header that shadows another recompiles its users"
+call :has "%NW%\info4.log" "compiled=1 reused=9 linked=1" "native: a header that shadows another recompiles its users"
 del "%NW%\product\src\reg.h"
 "%RS%" info --cfg "%NC%" > "%NW%\info5.log" 2>&1
-call :has "%NW%\info5.log" "compiled=1 reused=8 linked=1" "native: removing the shadowing header recompiles again"
+call :has "%NW%\info5.log" "compiled=1 reused=9 linked=1" "native: removing the shadowing header recompiles again"
 copy /y "%NW%\extra\asm_impl.c" "%NW%\driver\asm_impl.c" >nul
 "%RS%" run --cfg "%NC%" "%NW%\csv\native_asmcall2.csv" -o "%NW%\out_asmcall2" > "%NW%\asmcall2.log" 2>&1
 call :has "%NW%\asmcall2.log" "OK 6, NG 0, NO Check 0" "native: native_src definition overrides the substitute"
@@ -428,6 +447,8 @@ copy /y "%NC%" "%NW%\driver\opt2.cfg" >nul
 >> "%NW%\driver\opt2.cfg" echo native_opt = 2
 "%RS%" run --cfg "%NW%\driver\opt2.cfg" "%NW%\csv\native_basic.csv" -o "%NW%\out_opt2" > "%NW%\opt2.log" 2>&1
 call :has "%NW%\opt2.log" "OK 18, NG 0, NO Check 0" "native: optimization 2 keeps basic results"
+"%RS%" run --cfg "%NW%\driver\opt2.cfg" "%NW%\csv\native_near.csv" -o "%NW%\out_opt2_near" > "%NW%\opt2_near.log" 2>&1
+call :has "%NW%\opt2_near.log" "OK 11, NG 0, NO Check 0" "native: optimization 2 keeps near address results"
 rem with optimization 2 clang copies the 16-byte arrays with movaps, so the substitutes must be 16-byte aligned
 "%RS%" run --cfg "%NW%\driver\opt2.cfg" "%NW%\csv\native_asmcall.csv" -o "%NW%\out_opt2_asmcall" > "%NW%\opt2_asmcall.log" 2>&1
 call :has "%NW%\opt2_asmcall.log" "OK 6, NG 0, NO Check 0" "native: optimization 2 keeps substitute variables aligned"
@@ -440,15 +461,25 @@ copy /y "%NC%" "%NW%\driver\oldfn.cfg" >nul
 call :has "%NW%\oldfn.log" "OK 18, NG 0, NO Check 0" "native: obsolete function setting is ignored"
 call :has "%NW%\oldfn.log" "native_func" "native: obsolete function setting warns"
 
-rem An unmapped address fails only its row; the next row still runs.
-"%RS%" run --cfg "%NC%" "%NW%\csv\native_low.csv" -o "%NW%\out3" > "%NW%\low.log" 2>&1
+rem With native_near (default) 0x100 is the near address 0xF0100, which is mapped and reads 0.
+"%RS%" run --cfg "%NC%" "%NW%\csv\native_low.csv" -o "%NW%\out_lownear" > "%NW%\lownear.log" 2>&1
+call :has "%NW%\lownear.log" "OK 2, NG 0, NO Check 0" "native: with native_near address 0x100 reads 0xF0100"
+rem An unmapped address fails only its row; the next row still runs (native_near = off keeps 0x100 below 0x10000).
+"%RS%" run --cfg "%NW%\driver\nearoff.cfg" "%NW%\csv\native_low.csv" -o "%NW%\out3" > "%NW%\low.log" 2>&1
 set RC=%ERRORLEVEL%
 "%HAS%" /l /c:"0x100 " "%NW%\low.log" >nul
 if errorlevel 1 (call :ng "native: reading an unmapped address names it" & type "%NW%\low.log") else if "%RC%"=="1" (call :ok "native: reading an unmapped address names it") else (call :ng "native: reading an unmapped address: exit code 1, got %RC%")
 call :has "%NW%\low.log" "OK 1, NG 1, NO Check 0" "native: access fault fails only its row"
 "%HAS%" /b /l /c:",1,2,3,OK" "%NW%\out3\native_low.csv" >nul
 if errorlevel 1 (call :ng "native: normal row after access fault is OK") else (call :ok "native: normal row after access fault is OK")
-copy /y "%NC%" "%NW%\driver\timeout.cfg" >nul
+copy /y "%NC%" "%NW%\driver\timeoutnear.cfg" >nul
+>> "%NW%\driver\timeoutnear.cfg" echo native_timeout_ms = 300
+"%RS%" run --cfg "%NW%\driver\timeoutnear.cfg" "%NW%\csv\native_fault.csv" -o "%NW%\out_faultnear" > "%NW%\faultnear.log" 2>&1
+call :has "%NW%\faultnear.log" "OK 6, NG 2, NO Check 0" "native: with native_near only the divide and timeout rows fail"
+call :has "%NW%\faultnear.log" "\src\io.c:29" "native: with native_near divide by zero shows io.c line 29"
+call :has "%NW%\faultnear.log" "\src\io.c:34" "native: with native_near timeout shows io.c line 34"
+rem The fault rows below use native_near = off, so that io_read_low still reads an unmapped address.
+copy /y "%NW%\driver\nearoff.cfg" "%NW%\driver\timeout.cfg" >nul
 >> "%NW%\driver\timeout.cfg" echo native_timeout_ms = 300
 "%RS%" run --cfg "%NW%\driver\timeout.cfg" "%NW%\csv\native_fault.csv" -o "%NW%\out_fault" > "%NW%\fault.log" 2>&1
 set RC=%ERRORLEVEL%
