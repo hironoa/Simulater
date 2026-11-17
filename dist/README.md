@@ -17,11 +17,11 @@
 
 | 項目 | 内容 |
 | --- | --- |
-| ビルド元 | `31554b7`（PC 用 DLL の方式 `exec = native` で、変数と関数をデバッグ情報から取る変更（段階 2）と、`long int` と `__asm` のあるソースをコンパイルできるようにする修正（プリプロセス後に型と `__asm` を書き直す。GNU の修飾子の別名、`__asm` のあとの行の情報、型の語の途中にある属性なども扱う）と、どの `.c` にも定義がない関数と変数（アセンブラの中のものなど）の代わりを自動で作る修正を含む） |
+| ビルド元 | `5b97bb3`（PC 用 DLL の方式 `exec = native` で、変数と関数をデバッグ情報から取る変更（段階 2）と、`long int` と `__asm` のあるソースをコンパイルできるようにする修正（プリプロセス後に型と `__asm` を書き直す。GNU の修飾子の別名、`__asm` のあとの行の情報、型の語の途中にある属性なども扱う）と、どの `.c` にも定義がない関数と変数（アセンブラの中のものなど）の代わりを自動で作る修正（float / double を返す関数の代わりは 0.0 を返す）を含む） |
 | ビルドした日 | 2026-11-17 |
 | ビルド方法 | Windows 11 の上で `tools\build_dist.bat`（MinGW-w64 の gcc 16.2.0、x86_64、UCRT。`build.bat` の `CC=gcc` と同じ設定） |
 | 依存する DLL | Windows 標準のものだけ（KERNEL32、SHELL32、WS2_32、UCRT）。MinGW の DLL は要らない |
-| 確認 | ビルドした Windows の PC で実行した。ビルド元のソースは `tests\run_tests.bat` 786 件、`rl78\tests\run_tests.bat` 4,903,782 件が成功。このフォルダの `sim.exe` そのものでは、`exec = native` の試験用の CSV（`native_basic.csv` 17 行、変数を名前で読み書きする `native_vars.csv` 11 行、`long int`・`unsigned` だけの宣言・`__asm` のあるソースを試す `native_legacy.csv` 3 行、アセンブラの中にある想定の関数と変数を使う `native_asmcall.csv` 4 行）が全行 OK になることを確かめた |
+| 確認 | ビルドした Windows の PC で実行した。ビルド元のソースは `tests\run_tests.bat` 786 件、`rl78\tests\run_tests.bat` 4,903,782 件（`31554b7` で実行。戻り値の修正のあとは実行していない）が成功。このフォルダの `sim.exe` そのものでは、`exec = native` の試験用の CSV（`native_basic.csv` 17 行、変数を名前で読み書きする `native_vars.csv` 11 行、`long int`・`unsigned` だけの宣言・`__asm` のあるソースを試す `native_legacy.csv` 3 行、アセンブラの中にある想定の関数と変数を使う `native_asmcall.csv` 5 行）が全行 OK になることを確かめた |
 
 普段の配布物は CI（GitHub Actions の `windows` ジョブの成果物 `sim-windows-x64`）が作ります。
 このフォルダは、CI を使えなかったときの代わりに置いたものです。ソースを変えても自動では作り直されないので、
