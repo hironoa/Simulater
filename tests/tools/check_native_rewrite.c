@@ -91,6 +91,23 @@ static const struct { const char *in, *out; } cases[] = {
     {"unsigned _Alignas(4) char a; unsigned __attribute__((a)) __attribute__((b)) char b;",
      "unsigned _Alignas(4) char a; unsigned __attribute__((a)) __attribute__((b)) char b;"},
     {"unsigned __attribute__((aligned(sizeof(int)))) x;", "unsigned short __attribute__((aligned(sizeof(short)))) x;"},
+    /* かっこが続く拡張の語は関数や変数の名前とみなして並びを終える */
+    {"int __legacy(a) long a; { return a; }", "short __legacy(a) long a; { return a; }"},
+    {"long _Gx(a) int a; { return a; }", "long _Gx(a) short a; { return a; }"},
+    {"unsigned __hx(a) char a; { return a; }", "unsigned short __hx(a) char a; { return a; }"},
+    {"unsigned __declspec(dllexport) char d;", "unsigned __declspec(dllexport) char d;"},
+    {"unsigned __arr[3];", "unsigned short __arr[3];"},
+    {"int (*__fp)(int);", "short (*__fp)(short);"},
+    {"unsigned __near char n;", "unsigned __near char n;"},
+    {"int (*__kr(a))(int) long a; { return 0; }", "short (*__kr(a))(short) long a; { return 0; }"},
+    {"unsigned __far *__get(n) unsigned n; { return 0; }", "unsigned short __far *__get(n) unsigned short n; { return 0; }"},
+    {"static __inline__ unsigned __attribute__((always_inline)) _Hf(int x) { return x; }",
+     "static __inline__ unsigned short __attribute__((always_inline)) _Hf(short x) { return x; }"},
+    /* typeof と _Atomic */
+    {"static __typeof__(x) a; extern _Atomic(unsigned) b; const _Atomic(int) c; static typeof(int) d;",
+     "static __typeof__(x) a; extern _Atomic(unsigned short) b; const _Atomic(short) c; static typeof(short) d;"},
+    {"unsigned _Atomic char e; int _Atomic f; _Alignas(2) int g; unsigned __pragma(pack) h;",
+     "unsigned _Atomic char e; short _Atomic f; _Alignas(2) short g; unsigned short __pragma(pack) h;"},
     /* 以前のマクロ（#define int short）と比べる形 */
     {"typeof(int) a; __typeof__(unsigned) b; _Atomic(unsigned) c; _Atomic unsigned d; unsigned _Atomic e;",
      "typeof(short) a; __typeof__(unsigned short) b; _Atomic(unsigned short) c; _Atomic unsigned short d; unsigned short _Atomic e;"},

@@ -21,8 +21,11 @@ static int eq(const char *s, token t, const char *w)
 }
 /* 型の語の種類。W_OTHER は別の型の語で、並びを切らずに int / short の書き換えを止める。
  * W_QUAL は修飾子・指定子（GNU の別名を含む）で、並びを切らず判定にも影響しない。
- * 表にない __ または _ + 英大文字で始まる語（__attribute__、__declspec、_Alignas など。__asm は除く）と、
- * それに続くかっこの組は、並びを切らないものとして読み飛ばす（出力からは消さず、かっこの中は後で処理する）。 */
+ * 表にない語は先読みで次のように扱う（読み飛ばしても出力からは消さず、かっこの中は後で通常どおり処理する）。
+ * - かっこを取る語（paren_word の P_ATTR: __attribute__、__declspec、_Alignas など）は、語と続くかっこの組を
+ *   読み飛ばす。__typeof__ / typeof / _Atomic にかっこが続く形（P_TYPE）は別の型の語と同じ扱いにする。
+ * - それ以外の __ または _ + 英大文字で始まる語（__asm は除く）は、( が続けば関数や変数の名前とみなして
+ *   そこで並びを終え、続かなければ語だけを読み飛ばす（__cdecl、__near など）。 */
 enum { W_NONE, W_QUAL, W_SIGN, W_INT, W_LONGSHORT, W_OTHER };
 static int type_word(const char *s, token t)
 {
@@ -43,6 +46,20 @@ static int type_word(const char *s, token t)
     if (t.kind != IDENT) return W_NONE;
     for (i = 0; i < sizeof words / sizeof *words; i++) if (eq(s, t, words[i].w)) return words[i].k;
     return W_NONE;
+}
+/* かっこを取ると分かっている語。P_ATTR は属性などで判定に影響しない。P_TYPE はかっこが続くと型になる語。 */
+enum { P_NONE, P_ATTR, P_TYPE };
+static int paren_word(const char *s, token t)
+{
+    static const char *const attr[] = {
+        "__attribute__", "__attribute", "__declspec", "_Alignas", "__alignas", "__alignas__", "__pragma"
+    };
+    static const char *const type[] = { "__typeof__", "__typeof", "typeof", "_Atomic" };
+    size_t i;
+    if (t.kind != IDENT) return P_NONE;
+    for (i = 0; i < sizeof attr / sizeof *attr; i++) if (eq(s, t, attr[i])) return P_ATTR;
+    for (i = 0; i < sizeof type / sizeof *type; i++) if (eq(s, t, type[i])) return P_TYPE;
+    return P_NONE;
 }
 /* 処理系の拡張の語（表にない __ または _ + 英大文字で始まる識別子。__asm は別の処理の対象なので除く）。 */
 static int ext_word(const char *s, token t)
@@ -165,7 +182,7 @@ int native_rewrite(const char *s, size_t len, sim_buf *out, native_rewrite_stats
         }
         if (type_word(s, ts[i]) != W_NONE && ts[i].seen) { i++; continue; }
         if (type_word(s, ts[i]) != W_NONE) {
-            int has_int = 0, has_longshort = 0, has_other = 0, w;
+            int has_int = 0, has_longshort = 0, has_other = 0, w, pw;
             size_t sign = n, resume = n;
             j = i;
             while (j < n) {
@@ -178,16 +195,23 @@ int native_rewrite(const char *s, size_t len, sim_buf *out, native_rewrite_stats
                     if (sign == n && w == W_SIGN) sign = j;
                     ts[j].seen = 1; j++; continue;
                 }
-                if (ext_word(s, ts[j])) {
-                    /* 拡張の語に続くかっこの組は先読みで飛ばすだけ。中は resume から通常どおり処理する。 */
+                pw = paren_word(s, ts[j]);
+                if (pw != P_NONE || ext_word(s, ts[j])) {
                     size_t q = skip_blank(ts, j + 1, n), e;
-                    if (q < n && ts[q].kind == OTHER && eq(s, ts[q], "(")) {
-                        e = close_paren(s, ts, q, n);
-                        if (e == n) break;
-                        if (resume == n) resume = q;
-                        j = e + 1; continue;
+                    int paren = q < n && ts[q].kind == OTHER && eq(s, ts[q], "(");
+                    if (!paren) {
+                        /* typeof はかっこなしでは型にならない。_Atomic と拡張の語は修飾子として読み飛ばす。 */
+                        if (eq(s, ts[j], "typeof") || eq(s, ts[j], "__typeof__") || eq(s, ts[j], "__typeof")) break;
+                        j++; continue;
                     }
-                    j++; continue;
+                    /* かっこが続く拡張の語は関数や変数の名前とみなし、そこで並びを終える。 */
+                    if (pw == P_NONE) break;
+                    /* かっこの組は先読みで飛ばすだけ。中は resume から通常どおり処理する。 */
+                    e = close_paren(s, ts, q, n);
+                    if (e == n) break;
+                    if (pw == P_TYPE) has_other = 1;
+                    if (resume == n) resume = q;
+                    j = e + 1; continue;
                 }
                 break;
             }
