@@ -5,6 +5,7 @@
  *   1. CS+ のプロジェクトファイル（mtpj）から、ビルド対象の .c、インクルード・パス、定義・定義解除マクロを取る。
  *      ドライバやスタブなど、製品とは別に管理するソースは native_src で足す。
  *   2. rt/sim_native_pre.h を差し込んでプリプロセスし、型と __asm を書き直してから並列にコンパイルする。
+ *      コンパイルは LLVM IR を経由し、整数からポインタへの変換を near の番地として読み替える（native_near.c）。
  *   3. オブジェクトを 1 つの DLL にまとめる（C ライブラリなし。LLVM の配布物の clang と lld-link だけで作れる）。
  *   4. DLL を読み込み、デバッグ情報から変数と関数を取る。
  *   5. 0xF0000〜0xFFFFF に、同じ番地のメモリを確保する（番地を直接書いたレジスタや RAM のアクセス用）。
@@ -14,11 +15,14 @@
  *   <名前>-<パスの鍵>.obj   ソース 1 つのオブジェクト
  *   <名前>-<パスの鍵>.d     clang が書いた、そのソースが読んだファイルの一覧
  *   <名前>-<パスの鍵>.sig   ソースと、読んだファイルすべての中身から作った値。同じならコンパイルし直さない
+ *   <名前>-<パスの鍵>.i / .pp.c / .rw   プリプロセスの結果 / 書き直した結果 / 書き直しと読み替えの数
+ *   <名前>-<パスの鍵>.ll / .near.ll    LLVM IR（最適化の前）/ inttoptr を読み替えた IR（native_near = off なら作らない）
+ *   <名前>-<パスの鍵>.decl  .ll から取った宣言（定義のない名前の代わりを作るときに使う）
  *   native-N.dll            できあがり（読み込み中のファイルは上書きできないので、作るたびに番号を進める）
  *   current.txt             いま使う DLL の名前
  *   link.sig                DLL に入れたオブジェクトと、その中身から作った値
  *   cc.log / cc_times.txt   コンパイラの出力 / コンパイルの所要秒数
- *   <名前>-<プロセスの ID>-<通し番号>.tmp / .ll   書いてすぐ読んで消す一時ファイル（同時に動くほかの sim と重ならない名前）
+ *   <名前>-<プロセスの ID>-<通し番号>.tmp   書いてすぐ読んで消す一時ファイル（同時に動くほかの sim と重ならない名前）
  *
  * 関数の例外と時間切れは呼び出し元へ復帰する。コンパイラがない、コンパイルに
  * 失敗した、番地を確保できない、のどれもエラーにする。
@@ -30,6 +34,7 @@
  */
 #include "native_backend.h"
 #include "native_rewrite.h"
+#include "native_near.h"
 #include "native_coff.h"
 
 #include <ctype.h>
@@ -68,8 +73,9 @@ typedef struct {
     char *src;                   /* ソースのパス */
     char *base;                  /* キャッシュの中の名前（拡張子なし） */
     char *obj, *dep, *sig, *input, *pp, *rw;
-    char *decl, *ll;             /* 定義のない名前の宣言（.decl はキャッシュ、.ll は作って読んだら消す） */
+    char *ll, *nll, *decl;       /* LLVM IR、読み替えた IR、定義のない名前を調べるための宣言（どれもキャッシュに残す） */
     native_rewrite_stats stats;
+    native_near_stats nst;       /* inttoptr の読み替えの数 */
     int pre;                     /* sim_native_pre.h を差し込む */
     int compile;                 /* 今回コンパイルする */
     uint64_t pre_ns;             /* プリプロセスにかかった時間（cc_times.txt にはコンパイルとの合計を出す） */
@@ -133,12 +139,14 @@ typedef struct {
     rl78_warns w;
     char *dll_data;             /* DLL のファイルを閉じるまで保持する */
     int opt;
+    int near_on;                 /* native_near: 整数からポインタへの変換を near の番地として読み替える */
     unsigned timeout_ms;
 #ifdef _WIN32
     HANDLE watcher, exception_handler;
 #endif
     int ncompiled, nreused, linked;
     native_rewrite_stats rewrite;
+    native_near_stats near_total;
     int asm_files;
     undef_t *undefs;
     int nundefs, undef_skipped;
@@ -621,20 +629,24 @@ static char *unit_path(nat *z, const char *src, const char *ext)
     return p;
 }
 
+/* .rw の 1 行: 書き直しの数 4 つと、inttoptr の読み替えの数 3 つ（定数、実行時、書き換えなかったもの） */
 static int read_rewrite_stats(unit_t *u)
 {
     char *s = sim_read_file(u->rw, NULL), extra;
-    int ok = s && sscanf(s, "%d %d %d %d %c", &u->stats.int_replaced,
-                        &u->stats.int_dropped, &u->stats.short_added, &u->stats.asm_removed, &extra) == 4;
+    int ok = s && sscanf(s, "%d %d %d %d %d %d %d %c", &u->stats.int_replaced,
+                        &u->stats.int_dropped, &u->stats.short_added, &u->stats.asm_removed,
+                        &u->nst.const_replaced, &u->nst.dyn_inserted, &u->nst.kept, &extra) == 7;
     free(s);
     return ok && u->stats.int_replaced >= 0 && u->stats.int_dropped >= 0 &&
-           u->stats.short_added >= 0 && u->stats.asm_removed >= 0;
+           u->stats.short_added >= 0 && u->stats.asm_removed >= 0 &&
+           u->nst.const_replaced >= 0 && u->nst.dyn_inserted >= 0 && u->nst.kept >= 0;
 }
 
 /* ---- どの .c にも定義がない名前の代わり ----
  * 名前の集合は、全オブジェクトのシンボル表から求める（参照され、どこにも定義がないもの）。
  * 関数か変数かは、シンボル表では分からない（clang は未定義のシンボルに関数の印を付けない）ので、
- * その名前を参照しているソースの .pp.c を clang で LLVM IR にし、宣言（declare / external の global）から決める。 */
+ * その名前を参照しているソースの LLVM IR（コンパイルの途中で作る .ll）の宣言（declare / external の global）から決める。
+ * 宣言は、ソースをコンパイルするたびに .ll から .decl に書き出しておく（clang をもう一度起動しない）。 */
 typedef struct {
     undef_t *items; int n, cap;
     int *slots; size_t nslots;       /* items の添字 + 1。0 は空き */
@@ -798,76 +810,20 @@ static int c_identifier(const char *s)
     return 1;
 }
 
-/* 宣言を調べる .ll を作る。flags は 3 段目のコンパイルと同じ共通の引数（マクロとインクルード・パスを除いたもの）。
- * 失敗したら -1（警告は呼び出し側） */
-static int make_decls(nat *z, unit_t *units, int nunits, const unsigned char *need,
-                      char **flags, int nflags, const char *log)
+/* .ll（text）の宣言を .decl に書く。0 なら成功 */
+static int write_decls(const unit_t *u, const char *text, size_t len)
 {
-    sim_cc_job *jobs = sim_xcalloc((size_t)nunits, sizeof *jobs);
-    const char ***argvs = sim_xcalloc((size_t)nunits, sizeof *argvs);
-    int *which = sim_xcalloc((size_t)nunits, sizeof *which);
-    int i, j, k, njobs = 0, par = 0, rc = 0;
-    uint64_t v;
-    const char *s = sim_cfg_get(&z->cfg, "native_jobs");
-    for (i = 0; i < nunits; i++) {
-        unit_t *u = &units[i];
-        const char **argv;
-        if (!need[i] || !u->pre || (sim_path_kind(u->decl) == 1 && decl_ok(u->decl))) continue;
-        argv = sim_xcalloc((size_t)nflags + 12, sizeof *argv);
-        k = 0;
-        argv[k++] = z->cc;
-        for (j = 0; j < nflags; j++) {
-            /* デバッグ情報は付けない。最適化の水準は下で 3 段目と同じものを足す */
-            if (!strncmp(flags[j], "-g", 2) || !strncmp(flags[j], "-O", 2)) continue;
-            argv[k++] = flags[j];
-        }
-        argv[k++] = z->opt == 2 ? "-O2" : "-O0";  /* 3 段目と同じ水準（宣言の整列などが変わりうる） */
-        argv[k++] = "-x";
-        argv[k++] = "cpp-output";
-        argv[k++] = "-S";
-        argv[k++] = "-emit-llvm";
-        argv[k++] = u->pp;
-        argv[k++] = "-o";
-        argv[k++] = u->ll;
-        argv[k] = NULL;
-        sim_remove_file(u->ll);
-        argvs[njobs] = argv;
-        which[njobs] = i;
-        jobs[njobs].argv = argv;
-        jobs[njobs].name = sim_basename(u->src);
-        njobs++;
-    }
-    if (njobs) {
-        if (s && !sim_parse_uint(s, 64, &v) && v) par = (int)v;
-        if (!par) par = sim_cpu_count();
-        if (par > 64) par = 64;
-        say(z, "native: 定義のない名前の宣言を調べます（ソース %d 個）\n", njobs);
-        if (sim_cc_run_jobs(jobs, (size_t)njobs, par, log, "native", say_line, z)) rc = -1;
-        for (j = 0; j < njobs; j++) {
-            unit_t *u = &units[which[j]];
-            size_t len = 0;
-            char *text = rc ? NULL : sim_read_file(u->ll, &len);
-            if (text) {
-                sim_buf b;
-                sim_buf_init(&b);
-                native_ll_decls(text, len, decl_visit, &b);
-                if (sim_write_file(u->decl, sim_buf_cstr(&b), b.len)) rc = -1;
-                sim_buf_free(&b);
-                free(text);
-            } else rc = -1;
-            sim_remove_file(u->ll);
-        }
-    }
-    for (j = 0; j < njobs; j++) free(argvs[j]);
-    free(argvs);
-    free(which);
-    free(jobs);
+    sim_buf b;
+    int rc;
+    sim_buf_init(&b);
+    native_ll_decls(text, len, decl_visit, &b);
+    rc = sim_write_file(u->decl, sim_buf_cstr(&b), b.len);
+    sim_buf_free(&b);
     return rc;
 }
 
 /* 代わりのオブジェクトは集合を求める対象に含めない。製品と部品の件数にも加えない。 */
-static int build_undef(nat *z, unit_t *units, int nunits, char **flags, int nflags, const char *log,
-                       char **object, sim_buf *signature, char *err, size_t errlen)
+static int build_undef(nat *z, unit_t *units, int nunits, const char *log, char **object, sim_buf *signature, char *err, size_t errlen)
 {
     undef_set set;
     sim_buf source, list;
@@ -903,11 +859,14 @@ static int build_undef(nat *z, unit_t *units, int nunits, char **flags, int nfla
             for (i = 0; i < nunits; i++)
                 for (j = 0; j < set.nrefs[i] && !need[i]; j++)
                     if (undef_target(&set.items[set.refs[i][j]])) need[i] = 1;
-            if (make_decls(z, units, nunits, need, flags, nflags, log)) {
-                fprintf(stderr, "native: 警告: 定義のない名前の宣言を調べられないため（コンパイラの出力は %s）、"
-                                "未定義の自動補完を行わずリンクします\n", log);
+            /* .decl はコンパイルのたびに作る（使い回すソースは、.decl が読めることも条件にしている） */
+            for (i = 0; i < nunits && usable; i++) {
+                if (!need[i] || !units[i].pre || decl_ok(units[i].decl)) continue;
+                fprintf(stderr, "native: 警告: 定義のない名前の宣言（%s）を読めないため、"
+                                "未定義の自動補完を行わずリンクします\n", units[i].decl);
                 usable = 0;
-            } else {
+            }
+            if (usable) {
                 for (i = 0; i < nunits; i++)
                     if (need[i] && units[i].pre) decl_merge(&set, units[i].decl);
             }
@@ -1044,7 +1003,10 @@ static int build(nat *z, char *err, size_t errlen)
     /* 鍵: コンパイラの版、共通の引数、差し込むヘッダー、DLL に入れる部品 */
     ver = cc_version(z, base);
     key = hash_str(key, ver);
-    key = hash_str(key, "rewrite-3");  /* 2: .decl に関数の戻り値の種類、3: 変数の整列を入れた（古い .decl を使い回さない） */
+    /* 2: .decl に関数の戻り値の種類、3: 変数の整列を入れた（古い .decl を使い回さない）、
+     * 4: LLVM IR を経由する 4 段のコンパイルにし、.rw に inttoptr の読み替えの数を足した */
+    key = hash_str(key, "rewrite-4");
+    key = hash_str(key, z->near_on ? "near-on" : "near-off");
     free(ver);
     for (i = 0; i < nflags; i++) key = hash_str(key, flags[i]);
     {
@@ -1102,18 +1064,19 @@ static int build(nat *z, char *err, size_t errlen)
             u->pp = unit_path(z, src, ".pp.c");
             u->rw = unit_path(z, src, ".rw");
             u->decl = unit_path(z, src, ".decl");
-            {   /* .ll は作って読んだら消すので、ほかの sim と重ならない名前にする */
-                char *stem = unit_path(z, src, "");
-                u->ll = private_tmp(stem, ".ll");
-                free(stem);
-            }
+            u->ll = unit_path(z, src, ".ll");
+            u->nll = unit_path(z, src, ".near.ll");
         }
-        u->compile = !unit_fresh(z, &cache, u) || (u->pre && !read_rewrite_stats(u));
+        u->compile = !unit_fresh(z, &cache, u) || (u->pre && (!read_rewrite_stats(u) || !decl_ok(u->decl)));
         if (!u->compile) { z->nreused++; continue; }
         sim_remove_file(u->obj);
         sim_remove_file(u->sig);
         sim_remove_file(u->dep);
-        if (u->decl) sim_remove_file(u->decl);  /* コンパイルし直すソースの宣言は、必要になったら作り直す */
+        if (u->pre) {
+            sim_remove_file(u->decl);
+            sim_remove_file(u->ll);
+            sim_remove_file(u->nll);
+        }
         u->argv =sim_xcalloc((size_t)nflags + 16, sizeof *u->argv);
         k = 0;
         u->argv[k++] = z->cc;
@@ -1165,13 +1128,17 @@ static int build(nat *z, char *err, size_t errlen)
         if (par == 0) par = sim_cpu_count();
         if (par > 64) par = 64;
         say(z, "native: %d 個のソースのうち %d 個をコンパイルします（%d 並列。フォルダ %s）\n", nunits, njobs, par, z->dir);
-        for (stage = 0; stage < 2; stage++) {
+        /* 段階 0: プリプロセス（-E）。段階 1: 書き直した .pp.c を LLVM IR（.ll）にする。
+         * 段階 2: .ll から宣言（.decl）を取り、inttoptr を読み替えて（.near.ll）オブジェクトにする。DLL に入れる部品もここ。
+         * native_opt = 2 の IR は、最適化の水準を -O2 にしたまま LLVM の最適化だけを止めて出す（-O0 の IR に付く
+         * optnone が付かず、読み替えの前に番地の定数がたたまれない）。最適化は段階 2 でかける。 */
+        for (stage = 0; stage < 3; stage++) {
             njobs = 0;
             for (i = 0; i < nunits; i++) {
                 unit_t *u = &units[i];
-                if (!u->compile || (stage == 0 && !u->pre)) continue;
-                if (stage == 1 && u->pre) {
-                    sim_buf out, stats;
+                if (!u->compile || (stage < 2 && !u->pre)) continue;
+                if (stage == 1) {
+                    sim_buf out;
                     size_t len = 0;
                     char *text = sim_read_file(u->input, &len);
                     if (!text) {
@@ -1179,28 +1146,62 @@ static int build(nat *z, char *err, size_t errlen)
                         goto out;
                     }
                     sim_buf_init(&out);
-                    sim_buf_init(&stats);
                     native_rewrite(text, len, &out, &u->stats);
                     free(text);
-                    sim_buf_printf(&stats, "%d %d %d %d\n", u->stats.int_replaced,
-                                   u->stats.int_dropped, u->stats.short_added, u->stats.asm_removed);
-                    if (sim_write_file(u->pp, sim_buf_cstr(&out), out.len) ||
-                        sim_write_file(u->rw, sim_buf_cstr(&stats), stats.len)) {
-                        snprintf(err, errlen, "native: %s または %s を書けません", u->pp, u->rw);
+                    if (sim_write_file(u->pp, sim_buf_cstr(&out), out.len)) {
+                        snprintf(err, errlen, "native: %s を書けません", u->pp);
                         sim_buf_free(&out);
-                        sim_buf_free(&stats);
                         goto out;
                     }
                     sim_buf_free(&out);
-                    sim_buf_free(&stats);
                     k = 0;
                     u->argv[k++] = z->cc;
                     /* 共通の引数から、マクロとインクルード・パスを除く（common_flags はこの 2 つを末尾に積む）。 */
                     for (j = 0; j < nflags - z->nmacros - 2 * z->nincs; j++) u->argv[k++] = flags[j];
+                    if (z->opt == 2) {
+                        u->argv[k++] = "-Xclang";
+                        u->argv[k++] = "-disable-llvm-passes";
+                    }
                     u->argv[k++] = "-x";
                     u->argv[k++] = "cpp-output";
-                    u->argv[k++] = "-c";
+                    u->argv[k++] = "-S";
+                    u->argv[k++] = "-emit-llvm";
                     u->argv[k++] = u->pp;
+                    u->argv[k++] = "-o";
+                    u->argv[k++] = u->ll;
+                    u->argv[k] = NULL;
+                } else if (stage == 2 && u->pre) {
+                    sim_buf out, stats;
+                    size_t len = 0;
+                    char *text = sim_read_file(u->ll, &len);
+                    int bad;
+                    if (!text) {
+                        snprintf(err, errlen, "native: %s を読めません", u->ll);
+                        goto out;
+                    }
+                    sim_buf_init(&out);
+                    sim_buf_init(&stats);
+                    bad = write_decls(u, text, len);
+                    if (z->near_on) {
+                        native_near(text, len, &out, &u->nst);
+                        bad = bad || sim_write_file(u->nll, sim_buf_cstr(&out), out.len);
+                    } else memset(&u->nst, 0, sizeof u->nst);
+                    free(text);
+                    sim_buf_printf(&stats, "%d %d %d %d %d %d %d\n", u->stats.int_replaced,
+                                   u->stats.int_dropped, u->stats.short_added, u->stats.asm_removed,
+                                   u->nst.const_replaced, u->nst.dyn_inserted, u->nst.kept);
+                    bad = bad || sim_write_file(u->rw, sim_buf_cstr(&stats), stats.len);
+                    sim_buf_free(&out);
+                    sim_buf_free(&stats);
+                    if (bad) {
+                        snprintf(err, errlen, "native: %s、%s または %s を書けません", u->decl, u->nll, u->rw);
+                        goto out;
+                    }
+                    k = 0;
+                    u->argv[k++] = z->cc;
+                    for (j = 0; j < nflags - z->nmacros - 2 * z->nincs; j++) u->argv[k++] = flags[j];
+                    u->argv[k++] = "-c";
+                    u->argv[k++] = z->near_on ? u->nll : u->ll;
                     u->argv[k++] = "-o";
                     u->argv[k++] = u->obj;
                     u->argv[k] = NULL;
@@ -1224,9 +1225,9 @@ static int build(nat *z, char *err, size_t errlen)
                 goto out;
             }
             /* jobs の並びは、この段階で対象になる units の並びと同じ */
-            if (stage == 0) {
+            if (stage < 2) {
                 for (i = 0, j = 0; i < nunits; i++)
-                    if (units[i].compile && units[i].pre) units[i].pre_ns = jobs[j++].elapsed;
+                    if (units[i].compile && units[i].pre) units[i].pre_ns += jobs[j++].elapsed;
                 continue;
             }
             for (i = 0, j = 0; i < nunits; i++)
@@ -1249,11 +1250,14 @@ static int build(nat *z, char *err, size_t errlen)
         z->rewrite.short_added += st->short_added;
         z->rewrite.asm_removed += st->asm_removed;
         if (st->asm_removed) z->asm_files++;
+        z->near_total.const_replaced += units[i].nst.const_replaced;
+        z->near_total.dyn_inserted += units[i].nst.dyn_inserted;
+        z->near_total.kept += units[i].nst.kept;
     }
 
     /* リンク: オブジェクトの組、その中身の値が前回と同じで、DLL も残っていれば作り直さない */
     sim_buf_init(&ls);
-    if (build_undef(z, units, nunits, flags, nflags - z->nmacros - 2 * z->nincs, log, &undef_obj, &ls, err, errlen)) {
+    if (build_undef(z, units, nunits, log, &undef_obj, &ls, err, errlen)) {
         sim_buf_free(&ls);
         goto out;
     }
@@ -1331,7 +1335,7 @@ out:
     free(undef_obj);
     for (i = 0; i < nunits; i++) {
         free(units[i].src); free(units[i].base); free(units[i].obj); free(units[i].dep); free(units[i].sig);
-        free(units[i].input); free(units[i].pp); free(units[i].rw); free(units[i].decl); free(units[i].ll);
+        free(units[i].input); free(units[i].pp); free(units[i].rw); free(units[i].decl); free(units[i].ll); free(units[i].nll);
         free(units[i].argv);
     }
     free(units);
@@ -1866,6 +1870,12 @@ static void b_print_info(sim_backend *b, FILE *out)
     fprintf(out, "  native rewrite int=%d int_dropped=%d short_added=%d asm=%d asm_files=%d\n",
             z->rewrite.int_replaced, z->rewrite.int_dropped, z->rewrite.short_added,
             z->rewrite.asm_removed, z->asm_files);
+    if (z->near_on)
+        fprintf(out, "  整数からポインタへの変換: 定数 %d か所を 0xF0000 台に読み替え、実行時の読み替え %d か所（native_near）\n",
+                z->near_total.const_replaced, z->near_total.dyn_inserted);
+    else fprintf(out, "  整数からポインタへの変換: 読み替えなし（native_near = off）\n");
+    fprintf(out, "  native near=%d const=%d dyn=%d kept=%d\n", z->near_on,
+            z->near_total.const_replaced, z->near_total.dyn_inserted, z->near_total.kept);
     fprintf(out, "  native sources=%d asm=%d files=%d off=%d compiled=%d reused=%d linked=%d funcs=%d vars=%d opt=%d\n",
             z->nsrcs, z->nasms, z->files_total, z->files_off, z->ncompiled, z->nreused, z->linked,
             (int)z->st.nfuncs, (int)z->st.nvars, z->opt);
@@ -2440,6 +2450,14 @@ sim_backend *native_backend_open(const sim_open_opts *o, int *handled, char *err
             goto fail;
         }
         z->opt = s[0] - '0';
+    }
+    z->near_on = 1;
+    if ((s = sim_cfg_get(&z->cfg, "native_near"))) {
+        if (!strcmp(s, "off")) z->near_on = 0;
+        else if (strcmp(s, "on")) {
+            snprintf(err, errlen, "sim.cfg: native_near = %s は on / off にしてください", s);
+            goto fail;
+        }
     }
     if (collect_sources(z, o, err, errlen)) goto fail;
 

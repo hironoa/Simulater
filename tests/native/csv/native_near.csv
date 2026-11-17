@@ -1,0 +1,25 @@
+mod,near_write,near pointer from a 16-bit address,1,1
+#COMMENT,@v,0xFFFD4:2
+,0x1234,0x1234
+,0xBEEF,0xBEEF
+mod,near_read,near pointer from a 16-bit address,1,1
+#COMMENT,0xFFFD4:2,near_read@@
+,0xABCD,43981
+,7,7
+mod,near_member_write,struct member at 0xF032C,1,1
+#COMMENT,@v,0xF032C:2
+,0x5A5A,0x5A5A
+mod,near_member_read,struct member at 0xF032C,1,1
+#COMMENT,0xF032C:2,near_member_read@@
+,0x0102,258
+mod,near_tbl_read,address from a table at run time,3,1
+#COMMENT,0xFFFD4:2,0xFFE10:2,@i,near_tbl_read@@
+,0x1111,0x2222,0,4369
+,0x1111,0x2222,1,8738
+mod,near_is_null,zero stays NULL,1,1
+#COMMENT,@v,near_is_null@@
+,0,1
+,0x10,0
+mod,near_roundtrip,real pointer through a 64-bit integer,0,1
+#COMMENT,near_roundtrip@@
+,4660
