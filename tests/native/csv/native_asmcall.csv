@@ -1,0 +1,12 @@
+mod,asmcall_run,assembly substitute,1,1
+#COMMENT,@n,asmcall_run@@
+,3,100
+mod,asmcall_tbl_run,function address in a table,0,1
+#COMMENT,asmcall_tbl_run@@
+,7
+mod,asmcall_word,sized substitute variable,0,1
+#COMMENT,asmcall_word@@
+,0
+mod,asmcall_implicit,implicitly declared function,0,1
+#COMMENT,asmcall_implicit@@
+,9

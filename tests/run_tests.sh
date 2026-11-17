@@ -337,6 +337,13 @@ check "native source rewrite boundary cases" test "$RC" -eq 0
 check "native source rewrite ran its cases (0 failed)" grep -q -E "^native rewrite: [1-9][0-9]* cases, 0 failed" "$WORK/native_rewrite.log"
 if [ "$RC" -ne 0 ]; then cat "$WORK/native_rewrite.log"; fi
 
+check "build check_native_coff" "${CC:-clang}" -std=c11 -O2 -Wall -Wextra -I"$ROOT/runtime/src" -I"$ROOT/runtime/backends/native" "$T/tools/check_native_coff.c" "$ROOT/runtime/backends/native/native_coff.c" "$ROOT/runtime/src/sim_util.c" -o "$WORK/check_native_coff" -lm
+"$WORK/check_native_coff" > "$WORK/native_coff.log" 2>&1
+RC=$?
+check "native COFF 境界ケース" test "$RC" -eq 0
+check "native COFF ケース実行 (0 failed)" grep -q -E "^native coff: [1-9][0-9]* cases, 0 failed" "$WORK/native_coff.log"
+if [ "$RC" -ne 0 ]; then cat "$WORK/native_coff.log"; fi
+
 echo "== defines: コンパイルスイッチ（モック）"
 cond_suite "cond mock" "$SIM" 0F9 "$T/defines/cond_mock.csv"
 cond_cfg

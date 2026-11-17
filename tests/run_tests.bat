@@ -997,6 +997,15 @@ if "%RC%"=="0" (call :ok "native source rewrite boundary cases") else (call :ng 
 "%HAS%" /l /c:"cases, 0 failed" "%WORK%\native_rewrite.log" >nul
 if errorlevel 1 (call :ng "native source rewrite ran its cases") else (call :ok "native source rewrite ran its cases")
 
+"%CC%" %GCC_FLAGS% -std=c11 -O2 -Wall -Wextra -I"%ROOT%\runtime\src" -I"%ROOT%\runtime\backends\native" "%T%\tools\check_native_coff.c" "%ROOT%\runtime\backends\native\native_coff.c" "%ROOT%\runtime\src\sim_util.c" -o "%WORK%\check_native_coff.exe" > "%WORK%\native_coff_build.log" 2>&1
+set RC=%ERRORLEVEL%
+if "%RC%"=="0" (call :ok "build check_native_coff") else (call :ng "build check_native_coff" & type "%WORK%\native_coff_build.log")
+"%WORK%\check_native_coff.exe" > "%WORK%\native_coff.log" 2>&1
+set RC=%ERRORLEVEL%
+if "%RC%"=="0" (call :ok "native COFF boundary cases") else (call :ng "native COFF boundary cases" & type "%WORK%\native_coff.log")
+"%HAS%" /l /c:"cases, 0 failed" "%WORK%\native_coff.log" >nul
+if errorlevel 1 (call :ng "native COFF ran its cases") else (call :ok "native COFF ran its cases")
+
 call :cond_cfg
 call :cond_list
 call :cond_has "0x0F964 COND_REG" "cond: no switch takes the else branch"
