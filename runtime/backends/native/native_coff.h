@@ -22,7 +22,11 @@ enum {
     NATIVE_RET_OTHER,   /* それ以外（x86_fp80、ベクタ、構造体の値など）。代わりは正しく作れない */
     NATIVE_RET_SRET     /* 構造体を隠れた第 1 引数の置き場所に返す（sret）。代わりは戻り値を書かない */
 };
-typedef void (*native_ll_visit)(void *ctx, const char *name, int is_function, unsigned long size, int ret);
+#define NATIVE_ALIGN_MAX 4096UL
+/* align は変数の宣言の整列（型のあとの `, align N`）。ないもの、2 の累乗でないもの、NATIVE_ALIGN_MAX を超えるものは 0（不明）。
+ * 関数では 0 */
+typedef void (*native_ll_visit)(void *ctx, const char *name, int is_function, unsigned long size, int ret,
+                                unsigned long align);
 void native_ll_decls(const char *text, size_t len, native_ll_visit visit, void *ctx);
 
 #endif

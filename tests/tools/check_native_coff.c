@@ -73,9 +73,10 @@ static void check(const char *name, const unsigned char *data, size_t len,
     }
 }
 /* ---- LLVM IR の宣言 ---- */
-typedef struct { const char *name; int function; unsigned long size; int ret; } ll_expected;
+typedef struct { const char *name; int function; unsigned long size; int ret; unsigned long align; } ll_expected;
 typedef struct { const ll_expected *items; int n, seen, failed; } ll_visits;
-static void ll_visit(void *ctx, const char *name, int is_function, unsigned long size, int ret)
+static void ll_visit(void *ctx, const char *name, int is_function, unsigned long size, int ret,
+                     unsigned long align)
 {
     ll_visits *v = ctx;
     if (v->seen >= v->n) {
@@ -83,9 +84,10 @@ static void ll_visit(void *ctx, const char *name, int is_function, unsigned long
         v->failed = 1;
     } else {
         const ll_expected *e = &v->items[v->seen];
-        if (strcmp(name, e->name) || is_function != e->function || size != e->size || ret != e->ret) {
-            fprintf(stderr, "  違う: %s %d %lu %d（期待 %s %d %lu %d）\n", name, is_function, size, ret,
-                    e->name, e->function, e->size, e->ret);
+        if (strcmp(name, e->name) || is_function != e->function || size != e->size || ret != e->ret ||
+            align != e->align) {
+            fprintf(stderr, "  違う: %s %d %lu %d %lu（期待 %s %d %lu %d %lu）\n", name, is_function, size, ret, align,
+                    e->name, e->function, e->size, e->ret, e->align);
             v->failed = 1;
         }
     }
@@ -133,18 +135,18 @@ static void check_ll(void)
         "declare void @\"quoted fn\"(ptr)\n"
         "declare dso_local void @asm_t2()";      /* 最後の行に改行がない */
     static const ll_expected items[] = {
-        {"t", 0, 8, NATIVE_RET_INT}, {"w", 0, 2, NATIVE_RET_INT}, {"p", 0, 8, NATIVE_RET_INT}, {"s", 0, 0, NATIVE_RET_INT}, {"u", 0, 0, NATIVE_RET_INT}, {"m", 0, 60, NATIVE_RET_INT},
-        {"asm_t", 0, 1, NATIVE_RET_INT}, {"asm_table", 0, 16, NATIVE_RET_INT}, {"q name", 0, 4, NATIVE_RET_INT}, {"escApe", 0, 4, NATIVE_RET_INT}, {"k", 0, 8, NATIVE_RET_INT},
-        {"odd", 0, 3, NATIVE_RET_INT}, {"big", 0, 0, NATIVE_RET_INT}, {"tls", 0, 8, NATIVE_RET_INT},
-        {"f", 1, 0, NATIVE_RET_INT}, {"start_asm", 1, 0, NATIVE_RET_INT}, {"asm_implicit", 1, 0, NATIVE_RET_INT}, {"quoted fn", 1, 0, NATIVE_RET_INT}, {"asm_t2", 1, 0, NATIVE_RET_INT}
+        {"t", 0, 8, NATIVE_RET_INT, 1}, {"w", 0, 2, NATIVE_RET_INT, 2}, {"p", 0, 8, NATIVE_RET_INT, 0}, {"s", 0, 0, NATIVE_RET_INT, 4}, {"u", 0, 0, NATIVE_RET_INT, 0}, {"m", 0, 60, NATIVE_RET_INT, 16},
+        {"asm_t", 0, 1, NATIVE_RET_INT, 1}, {"asm_table", 0, 16, NATIVE_RET_INT, 1}, {"q name", 0, 4, NATIVE_RET_INT, 0}, {"escApe", 0, 4, NATIVE_RET_INT, 0}, {"k", 0, 8, NATIVE_RET_INT, 0},
+        {"odd", 0, 3, NATIVE_RET_INT, 0}, {"big", 0, 0, NATIVE_RET_INT, 0}, {"tls", 0, 8, NATIVE_RET_INT, 8},
+        {"f", 1, 0, NATIVE_RET_INT, 0}, {"start_asm", 1, 0, NATIVE_RET_INT, 0}, {"asm_implicit", 1, 0, NATIVE_RET_INT, 0}, {"quoted fn", 1, 0, NATIVE_RET_INT, 0}, {"asm_t2", 1, 0, NATIVE_RET_INT, 0}
     };
-    static const ll_expected none[] = {{"", 0, 0, NATIVE_RET_INT}};
+    static const ll_expected none[] = {{"", 0, 0, NATIVE_RET_INT, 0}};
     check_ll_text("LLVM IR の宣言", text, items, (int)(sizeof items / sizeof items[0]));
     check_ll_text("定義だけ", "@g = dso_local global i16 4660\ndefine void @h() {\n}\n", none, 0);
     check_ll_text("壊れた行", "@\"unterminated = external global i8\n@ = external global i8\n"
                              "@x external global i8\n@\"nul\\00\" = external global i8\ndeclare void @\n"
                              "@y = external global [3 x\n@z = external global [3 i8]\n",
-                  (const ll_expected[]){{"y", 0, 0, NATIVE_RET_INT}, {"z", 0, 0, NATIVE_RET_INT}}, 2);
+                  (const ll_expected[]){{"y", 0, 0, NATIVE_RET_INT, 0}, {"z", 0, 0, NATIVE_RET_INT, 0}}, 2);
     check_ll_text("空", "", none, 0);
     {
         static const char rets[] =
@@ -166,14 +168,32 @@ static void check_ll(void)
             "declare dso_local half @h()\n"
             "declare dso_local void @nosret(ptr noundef) #2 ; mysret(\n";
         static const ll_expected items[] = {
-            {"d", 1, 0, NATIVE_RET_F64}, {"f", 1, 0, NATIVE_RET_F32}, {"s", 1, 0, NATIVE_RET_INT},
-            {"v", 1, 0, NATIVE_RET_INT}, {"p", 1, 0, NATIVE_RET_INT}, {"implicit", 1, 0, NATIVE_RET_INT},
-            {"ld", 1, 0, NATIVE_RET_OTHER}, {"sr", 1, 0, NATIVE_RET_SRET}, {"n", 1, 0, NATIVE_RET_INT},
-            {"q fp", 1, 0, NATIVE_RET_F64}, {"r", 1, 0, NATIVE_RET_INT}, {"a", 1, 0, NATIVE_RET_INT},
-            {"vec", 1, 0, NATIVE_RET_OTHER}, {"pair", 1, 0, NATIVE_RET_OTHER},
-            {"byval_ret", 1, 0, NATIVE_RET_OTHER}, {"h", 1, 0, NATIVE_RET_OTHER}, {"nosret", 1, 0, NATIVE_RET_INT}
+            {"d", 1, 0, NATIVE_RET_F64, 0}, {"f", 1, 0, NATIVE_RET_F32, 0}, {"s", 1, 0, NATIVE_RET_INT, 0},
+            {"v", 1, 0, NATIVE_RET_INT, 0}, {"p", 1, 0, NATIVE_RET_INT, 0}, {"implicit", 1, 0, NATIVE_RET_INT, 0},
+            {"ld", 1, 0, NATIVE_RET_OTHER, 0}, {"sr", 1, 0, NATIVE_RET_SRET, 0}, {"n", 1, 0, NATIVE_RET_INT, 0},
+            {"q fp", 1, 0, NATIVE_RET_F64, 0}, {"r", 1, 0, NATIVE_RET_INT, 0}, {"a", 1, 0, NATIVE_RET_INT, 0},
+            {"vec", 1, 0, NATIVE_RET_OTHER, 0}, {"pair", 1, 0, NATIVE_RET_OTHER, 0},
+            {"byval_ret", 1, 0, NATIVE_RET_OTHER, 0}, {"h", 1, 0, NATIVE_RET_OTHER, 0}, {"nosret", 1, 0, NATIVE_RET_INT, 0}
         };
         check_ll_text("戻り値の種類", rets, items, (int)(sizeof items / sizeof items[0]));
+    }
+    {
+        static const char aligns[] =
+            "@a16 = external dso_local global [16 x i8], align 16\n"
+            "@a1 = external dso_local local_unnamed_addr global i8, align 1\n"
+            "@none = external global i32\n"
+            "@sec = external global [4 x i16], section \"x, align 2\", align 8\n"
+            "@a3 = external global i8, align 3\n"
+            "@big = external global i8, align 8192\n"
+            "@max = external global i8, align 4096\n"
+            "@bad = external global i8, align x\n"
+            "@cmt = external global i8, align 32 ; comment\n";
+        static const ll_expected items[] = {
+            {"a16", 0, 16, NATIVE_RET_INT, 16}, {"a1", 0, 1, NATIVE_RET_INT, 1}, {"none", 0, 4, NATIVE_RET_INT, 0},
+            {"sec", 0, 8, NATIVE_RET_INT, 8}, {"a3", 0, 1, NATIVE_RET_INT, 0}, {"big", 0, 1, NATIVE_RET_INT, 0},
+            {"max", 0, 1, NATIVE_RET_INT, 4096}, {"bad", 0, 1, NATIVE_RET_INT, 0}, {"cmt", 0, 1, NATIVE_RET_INT, 32}
+        };
+        check_ll_text("変数の整列", aligns, items, (int)(sizeof items / sizeof items[0]));
     }
 }
 

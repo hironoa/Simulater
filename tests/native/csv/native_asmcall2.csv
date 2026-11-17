@@ -13,3 +13,6 @@ mod,asmcall_implicit,implicitly declared function,0,1
 mod,asmcall_fp,float and double substitutes return zero,0,1
 #COMMENT,asmcall_fp@@
 ,1
+mod,asmcall_copy,aligned array copy,0,1
+#COMMENT,asmcall_copy@@
+,3

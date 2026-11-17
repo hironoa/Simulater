@@ -319,7 +319,7 @@ if errorlevel 1 (call :ng "native: a header name uses the same #if branch as the
 if errorlevel 1 (call :ng "native: RAM written by address is read by the function") else (call :ok "native: RAM written by address is read by the function")
 "%RS%" info --cfg "%NC%" > "%NW%\info.log" 2>&1
 call :has "%NW%\info.log" "native sources=6 asm=1 files=7 off=1 compiled=0 reused=7 linked=0" "native: second open compiles nothing"
-call :has "%NW%\info.log" "funcs=31 vars=22 opt=0" "native: variables and functions come from the debug information"
+call :has "%NW%\info.log" "funcs=32 vars=22 opt=0" "native: variables and functions come from the debug information"
 call :has "%NW%\info.log" "native rewrite int=24 int_dropped=7 short_added=6 asm=4 asm_files=1" "native: legacy assembly is counted on cache reuse"
 "%RS%" run --cfg "%NC%" "%NW%\csv\native_legacy.csv" -o "%NW%\out_legacy" > "%NW%\legacy.log" 2>&1
 set RC=%ERRORLEVEL%
@@ -327,9 +327,9 @@ if "%RC%"=="0" (call :ok "native: legacy run exits 0") else (call :ng "native: l
 call :has "%NW%\legacy.log" "OK 3, NG 0, NO Check 0" "native: all legacy rows are OK"
 call :has "%NW%\info.log" "startup.asm" "native: assembler sources are listed"
 call :has "%NW%\info.log" "files=7 off=1" "native: a file that is not a build target is left out"
-call :has "%NW%\info.log" "native undef funcs=6 data=2 skipped=0" "native: undefined assembly names are substituted"
+call :has "%NW%\info.log" "native undef funcs=6 data=5 skipped=0" "native: undefined assembly names are substituted"
 "%RS%" run --cfg "%NC%" "%NW%\csv\native_asmcall.csv" -o "%NW%\out_asmcall" > "%NW%\asmcall.log" 2>&1
-call :has "%NW%\asmcall.log" "OK 5, NG 0, NO Check 0" "native: assembly substitutes return zero"
+call :has "%NW%\asmcall.log" "OK 6, NG 0, NO Check 0" "native: assembly substitutes return zero"
 rem a header changes: only the sources that include it are compiled again (reg.h is included by io.c only)
 >> "%NW%\product\inc\reg.h" echo /* changed */
 "%RS%" info --cfg "%NC%" > "%NW%\info2.log" 2>&1
@@ -349,12 +349,12 @@ del "%NW%\product\src\reg.h"
 call :has "%NW%\info5.log" "compiled=1 reused=6 linked=1" "native: removing the shadowing header recompiles again"
 copy /y "%NW%\extra\asm_impl.c" "%NW%\driver\asm_impl.c" >nul
 "%RS%" run --cfg "%NC%" "%NW%\csv\native_asmcall2.csv" -o "%NW%\out_asmcall2" > "%NW%\asmcall2.log" 2>&1
-call :has "%NW%\asmcall2.log" "OK 5, NG 0, NO Check 0" "native: native_src definition overrides the substitute"
+call :has "%NW%\asmcall2.log" "OK 6, NG 0, NO Check 0" "native: native_src definition overrides the substitute"
 "%RS%" info --cfg "%NC%" > "%NW%\info_asmcall2.log" 2>&1
-call :has "%NW%\info_asmcall2.log" "native undef funcs=5 data=2 skipped=0" "native: defined function leaves the undefined list"
+call :has "%NW%\info_asmcall2.log" "native undef funcs=5 data=5 skipped=0" "native: defined function leaves the undefined list"
 del "%NW%\driver\asm_impl.c"
 "%RS%" info --cfg "%NC%" > "%NW%\info_asmcall3.log" 2>&1
-call :has "%NW%\info_asmcall3.log" "native undef funcs=6 data=2 skipped=0" "native: removing the definition brings the substitute back"
+call :has "%NW%\info_asmcall3.log" "native undef funcs=6 data=5 skipped=0" "native: removing the definition brings the substitute back"
 rem a macro that the mtpj undefines and cdef defines again: the DLL sees the cdef value (same order as the defines loader)
 copy /y "%NC%" "%NW%\driver\feature.cfg" >nul
 >> "%NW%\driver\feature.cfg" echo cdef = FEATURE_X=7
@@ -372,6 +372,9 @@ copy /y "%NC%" "%NW%\driver\opt2.cfg" >nul
 >> "%NW%\driver\opt2.cfg" echo native_opt = 2
 "%RS%" run --cfg "%NW%\driver\opt2.cfg" "%NW%\csv\native_basic.csv" -o "%NW%\out_opt2" > "%NW%\opt2.log" 2>&1
 call :has "%NW%\opt2.log" "OK 17, NG 0, NO Check 0" "native: optimization 2 keeps basic results"
+rem with optimization 2 clang copies the 16-byte arrays with movaps, so the substitutes must be 16-byte aligned
+"%RS%" run --cfg "%NW%\driver\opt2.cfg" "%NW%\csv\native_asmcall.csv" -o "%NW%\out_opt2_asmcall" > "%NW%\opt2_asmcall.log" 2>&1
+call :has "%NW%\opt2_asmcall.log" "OK 6, NG 0, NO Check 0" "native: optimization 2 keeps substitute variables aligned"
 copy /y "%NC%" "%NW%\driver\opt3.cfg" >nul
 >> "%NW%\driver\opt3.cfg" echo native_opt = 3
 call :native_err "native: invalid optimization is an error" "native_opt" opt3.cfg

@@ -196,6 +196,36 @@ static int ll_has_sret(const char *p, const char *end)
     return 0;
 }
 
+/* 型の後ろ（, section "x", align 16 など）から align N を探す。なければ、または使えない値なら 0 */
+static unsigned long ll_align(const char *p, const char *end)
+{
+    while (p < end) {
+        const char *t;
+        while (p < end && (*p == ' ' || *p == '\t' || *p == ',')) p++;
+        if (p >= end) break;
+        if (*p == '"') {            /* section "…" などの文字列は中を見ない */
+            for (p++; p < end && *p != '"'; p++) {}
+            if (p < end) p++;
+            continue;
+        }
+        for (t = p; t < end && *t != ' ' && *t != '\t' && *t != ','; t++) {}
+        if (ll_word(p, t, "align") == t) {
+            unsigned long v = 0;
+            const char *q;
+            p = t;
+            while (p < end && (*p == ' ' || *p == '\t')) p++;
+            for (q = p; q < end && *q >= '0' && *q <= '9'; q++) {
+                v = v * 10 + (unsigned long)(*q - '0');
+                if (v > NATIVE_ALIGN_MAX) return 0;
+            }
+            if (q == p || (q < end && *q != ',' && *q != ' ' && *q != '\t')) return 0;
+            return v && !(v & (v - 1)) ? v : 0;
+        }
+        p = t;
+    }
+    return 0;
+}
+
 static void ll_line(const char *p, const char *end, native_ll_visit visit, void *ctx)
 {
     char *name = NULL;
@@ -207,7 +237,7 @@ static void ll_line(const char *p, const char *end, native_ll_visit visit, void 
         if (!at || !(after = ll_name(at + 1, end, &name))) return;
         ret = ll_ret_kind(q, at);
         if (ll_has_sret(after, end)) ret = NATIVE_RET_SRET;
-        if (after < end && *after == '(') visit(ctx, name, 1, 0, ret);
+        if (after < end && *after == '(') visit(ctx, name, 1, 0, ret, 0);
     } else if (p < end && *p == '@') {
         /* @名前 = [linkage など] external [dso_local など] global|constant 型, … */
         int ext = 0;
@@ -221,7 +251,10 @@ static void ll_line(const char *p, const char *end, native_ll_visit visit, void 
             for (t = q; t < end && *t != ' ' && *t != '\t'; t++) {}
             if ((w = ll_word(q, t, "external")) == t || (w = ll_word(q, t, "extern_weak")) == t) ext = 1;
             else if ((w = ll_word(q, t, "global")) == t || (w = ll_word(q, t, "constant")) == t) {
-                if (ext) visit(ctx, name, 0, ll_type_size(&t, end, 0), NATIVE_RET_INT);
+                if (ext) {
+                    unsigned long size = ll_type_size(&t, end, 0);
+                    visit(ctx, name, 0, size, NATIVE_RET_INT, ll_align(t, end));
+                }
                 break;
             }
             q = t;

@@ -76,12 +76,14 @@ typedef struct {
     int function;
     int ret;                     /* 関数の戻り値の種類（NATIVE_RET_…） */
     unsigned long size;          /* 変数の大きさ。0 は不明（UNDEF_DATA_SIZE を取る） */
+    unsigned long align;         /* 変数の宣言の整列。0 は不明 */
     /* 以下は集めている間だけ使う */
     int defined, referenced;
     int decl_f, decl_d, size_unknown, ret_set;
 } undef_t;
 
 #define UNDEF_DATA_SIZE 4096 /* 大きさが分からない変数の代わり。表として読まれても範囲外になりにくいよう大きめに取る */
+#define UNDEF_ALIGN_MIN 16   /* 変数の代わりの整列の最小。SSE の命令（movaps など）が前提にする境界 */
 
 typedef struct {
     sim_backend b;
@@ -607,14 +609,15 @@ static void undef_visit(void *ctx, const char *name, int defined, int function)
 
 static int undef_target(const undef_t *u) { return u->referenced && !u->defined; }
 
-/* .decl / undef.txt の 1 行: 「F 戻り値の種類 名前」または「D 大きさ 名前」（大きさ 0 は不明） */
+/* .decl / undef.txt の 1 行: 「F 戻り値の種類 名前」または「D 大きさ 整列 名前」（大きさ・整列の 0 は不明） */
 static const char *const ret_names[] = {"int", "f32", "f64", "other", "sret"};
 #define NRET ((int)(sizeof ret_names / sizeof ret_names[0]))
 
-/* line（改行なし）を読む。name は line の中を指す。読めなければ 0（古い形式の「F 名前」も読めない扱い） */
-static int decl_parse(char *line, char **name, int *function, unsigned long *size, int *ret)
+/* line（改行なし）を読む。name は line の中を指す。読めなければ 0（古い形式の「F 名前」「D 大きさ 名前」も読めない扱い） */
+static int decl_parse(char *line, char **name, int *function, unsigned long *size, int *ret, unsigned long *align)
 {
     *size = 0;
+    *align = 0;
     *ret = NATIVE_RET_INT;
     if (line[0] == 'F' && line[1] == ' ') {
         char *kind = line + 2, *sp = strchr(kind, ' ');
@@ -632,6 +635,8 @@ static int decl_parse(char *line, char **name, int *function, unsigned long *siz
         char *sp;
         if (line[2] < '0' || line[2] > '9') return 0;
         *size = strtoul(line + 2, &sp, 10);
+        if (*sp != ' ' || sp[1] < '0' || sp[1] > '9') return 0;
+        *align = strtoul(sp + 1, &sp, 10);
         if (*sp != ' ' || !sp[1]) return 0;
         *function = 0;
         *name = sp + 1;
@@ -641,11 +646,11 @@ static int decl_parse(char *line, char **name, int *function, unsigned long *siz
 }
 
 /* .ll の宣言を .decl の行にする */
-static void decl_visit(void *ctx, const char *name, int is_function, unsigned long size, int ret)
+static void decl_visit(void *ctx, const char *name, int is_function, unsigned long size, int ret, unsigned long align)
 {
     sim_buf *b = ctx;
     if (is_function) sim_buf_printf(b, "F %s %s\n", ret_names[ret >= 0 && ret < NRET ? ret : NATIVE_RET_OTHER], name);
-    else sim_buf_printf(b, "D %lu %s\n", size, name);
+    else sim_buf_printf(b, "D %lu %lu %s\n", size, align, name);
 }
 
 /* .decl が全部の行を読めれば 1。読めない行（古い形式など）があれば 0 で、作り直す */
@@ -656,10 +661,10 @@ static int decl_ok(const char *path)
     for (line = text; ok && *line; line = end + 1) {
         char *name;
         int function, ret;
-        unsigned long size;
+        unsigned long size, align;
         if (!(end = strchr(line, '\n'))) { ok = 0; break; }
         *end = 0;
-        ok = decl_parse(line, &name, &function, &size, &ret);
+        ok = decl_parse(line, &name, &function, &size, &ret, &align);
     }
     free(text);
     return ok;
@@ -671,13 +676,13 @@ static void decl_merge(undef_set *set, const char *path)
     char *text = sim_read_file(path, NULL), *line, *end;
     if (!text) return;
     for (line = text; *line; line = end + 1) {
-        unsigned long size;
+        unsigned long size, align;
         char *name;
         int i, function, ret;
         undef_t *u;
         if (!(end = strchr(line, '\n'))) break;
         *end = 0;
-        if (!decl_parse(line, &name, &function, &size, &ret)) continue;
+        if (!decl_parse(line, &name, &function, &size, &ret, &align)) continue;
         if ((i = undef_find(set, name, 0)) < 0 || !undef_target(&set->items[i])) continue;
         u = &set->items[i];
         if (function) {
@@ -693,6 +698,7 @@ static void decl_merge(undef_set *set, const char *path)
             u->decl_d = 1;
             if (!size) u->size_unknown = 1;
             else if (size > u->size) u->size = size;
+            if (align > u->align) u->align = align;     /* 食い違えば大きいほう */
         }
     }
     free(text);
@@ -735,11 +741,11 @@ static int make_decls(nat *z, unit_t *units, int nunits, const unsigned char *ne
         k = 0;
         argv[k++] = z->cc;
         for (j = 0; j < nflags; j++) {
-            /* デバッグ情報は付けず、最適化はしない（使われる宣言がそのまま残る） */
+            /* デバッグ情報は付けない。最適化の水準は下で 3 段目と同じものを足す */
             if (!strncmp(flags[j], "-g", 2) || !strncmp(flags[j], "-O", 2)) continue;
             argv[k++] = flags[j];
         }
-        argv[k++] = "-O0";
+        argv[k++] = z->opt == 2 ? "-O2" : "-O0";  /* 3 段目と同じ水準（宣言の整列などが変わりうる） */
         argv[k++] = "-x";
         argv[k++] = "cpp-output";
         argv[k++] = "-S";
@@ -854,7 +860,7 @@ static int build_undef(nat *z, unit_t *units, int nunits, char **flags, int nfla
         size = u->size ? u->size : UNDEF_DATA_SIZE;
         if (!u->function || u->ret < 0 || u->ret >= NRET) u->ret = NATIVE_RET_INT;
         if (u->function) sim_buf_printf(signature, "F %s %s\n", ret_names[u->ret], u->name);
-        else sim_buf_printf(signature, "D %lu %s\n", u->size, u->name);
+        else sim_buf_printf(signature, "D %lu %lu %s\n", u->size, u->align, u->name);
         if (!c_identifier(u->name)) { z->undef_skipped++; continue; }
         if (u->function) {
             /* Windows x64 では float / double は XMM0、それ以外の整数とポインタは RAX で返る */
@@ -866,8 +872,11 @@ static int build_undef(nat *z, unit_t *units, int nunits, char **flags, int nfla
             else if (u->ret == NATIVE_RET_SRET)
                 fprintf(stderr, "native: 警告: 構造体を返す関数 %s の代わりは、戻り値を書きません\n", u->name);
         } else {
-            sim_buf_printf(&list, "D %lu %s\n", u->size, u->name);
-            sim_buf_printf(&source, "__attribute__((aligned(8))) char %s[%lu];\n", u->name, size);
+            /* 整列は宣言のもの（clang は 16 バイト以上の配列を 16 にそろえ、それを前提に movaps などを出す）。
+             * 最小は 16。不明・使えない値（native_coff が 0 にする）も 16 */
+            unsigned long align = u->align > UNDEF_ALIGN_MIN ? u->align : UNDEF_ALIGN_MIN;
+            sim_buf_printf(&list, "D %lu %lu %s\n", u->size, u->align, u->name);
+            sim_buf_printf(&source, "__attribute__((aligned(%lu))) char %s[%lu];\n", align, u->name, size);
         }
         generated++;
     }
@@ -900,12 +909,12 @@ static int build_undef(nat *z, unit_t *units, int nunits, char **flags, int nfla
         if (!(saved = sim_read_file(txt, NULL))) goto write_error;
         for (line = saved; *line; line = end + 1) {
             undef_t *u;
-            unsigned long size;
+            unsigned long size, align;
             char *name;
             int function, ret;
             if (!(end = strchr(line, '\n'))) break;
             *end = 0;
-            if (!decl_parse(line, &name, &function, &size, &ret)) continue;
+            if (!decl_parse(line, &name, &function, &size, &ret, &align)) continue;
             z->undefs = sim_xrealloc(z->undefs, ((size_t)z->nundefs + 1) * sizeof *z->undefs);
             u = &z->undefs[z->nundefs++];
             memset(u, 0, sizeof *u);
@@ -913,6 +922,7 @@ static int build_undef(nat *z, unit_t *units, int nunits, char **flags, int nfla
             u->function = function;
             u->ret = ret;
             u->size = size;
+            u->align = align;
         }
         free(saved);
     }
@@ -958,7 +968,7 @@ static int build(nat *z, char *err, size_t errlen)
     /* 鍵: コンパイラの版、共通の引数、差し込むヘッダー、DLL に入れる部品 */
     ver = cc_version(z, base);
     key = hash_str(key, ver);
-    key = hash_str(key, "rewrite-2");  /* 2: .decl に関数の戻り値の種類を入れた（古い .decl を使い回さない） */
+    key = hash_str(key, "rewrite-3");  /* 2: .decl に関数の戻り値の種類、3: 変数の整列を入れた（古い .decl を使い回さない） */
     free(ver);
     for (i = 0; i < nflags; i++) key = hash_str(key, flags[i]);
     {
