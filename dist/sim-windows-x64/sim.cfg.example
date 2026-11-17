@@ -123,6 +123,9 @@ max_insns = 100000000
 # 最適化は 0（既定）または 2。関数の型は DLL のデバッグ情報から取る
 # stub / stub_auto / skip と CSV の % 行による置換も、今の方式と同じ書き方で使えます
 # native_opt = 0
+# 整数をポインタに変えるとき、1〜0xFFFF の値は near の番地として 0xF0000 を足す（on が既定。off でやめる）。
+# 0 と 0x10000 以上は変えない。16 ビットに切り詰めた番地を near のポインタにする書き方が、マイコンと同じ番地を指す
+# native_near = on
 # 1 回の呼び出しの上限（ミリ秒。既定 10000、0 なら無効、最大 86400000）
 # native_timeout_ms = 10000
 # native の clang（既定は xlate_cc、環境変数 SIM_XLATE_CC、PATH の clang の順）
