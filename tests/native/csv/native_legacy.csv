@@ -1,0 +1,9 @@
+mod,legacy_sizes,type sizes,0,1
+#COMMENT,legacy_sizes@@
+,2422
+mod,legacy_asm,ignored assembly,0,1
+#COMMENT,legacy_asm@@
+,7
+mod,legacy_sum,32 bit sum,0,1
+#COMMENT,legacy_sum@@
+,140000

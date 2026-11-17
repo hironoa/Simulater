@@ -35,7 +35,7 @@ else
     B="$ROOT/runtime/backends/rl78"
     CFLAGS="$CFLAGS -I$ROOT/rl78/include -I$B -I$ROOT/runtime/backends/native"
     SRCS="$COMMON $B/rl78_backend.c $B/rl78_xl.c $B/rl78_abi.c $B/rl78_lmf.c $B/rl78_sym.c $B/rl78_elf.c $B/rl78_dwarf.c $B/rl78_map.c \
-$ROOT/rl78/src/rl78_exec.c $ROOT/rl78/src/rl78_sys.c $ROOT/rl78/src/rl78_disasm.c $ROOT/rl78/src/rl78_xlate.c $ROOT/runtime/backends/native/native_backend.c"
+$ROOT/rl78/src/rl78_exec.c $ROOT/rl78/src/rl78_sys.c $ROOT/rl78/src/rl78_disasm.c $ROOT/rl78/src/rl78_xlate.c $ROOT/runtime/backends/native/native_backend.c $ROOT/runtime/backends/native/native_rewrite.c"
 fi
 
 echo "build.sh: $CC で $OUT/sim をビルドします（バックエンド: ${MODE}）"

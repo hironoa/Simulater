@@ -329,6 +329,14 @@ RC=$?
 check "preprocessor expression evaluator boundary cases" test "$RC" -eq 0
 check "preprocessor expression evaluator ran its cases (0 failed)" grep -q -E "^ppexpr: [1-9][0-9]* cases, 0 failed" "$WORK/ppexpr.log"
 if [ "$RC" -ne 0 ]; then cat "$WORK/ppexpr.log"; fi
+
+check "build check_native_rewrite" "${CC:-clang}" -std=c11 -O2 -Wall -Wextra -I"$ROOT/runtime/src" -I"$ROOT/runtime/backends/native" "$T/tools/check_native_rewrite.c" "$ROOT/runtime/backends/native/native_rewrite.c" "$ROOT/runtime/src/sim_util.c" -o "$WORK/check_native_rewrite" -lm
+"$WORK/check_native_rewrite" > "$WORK/native_rewrite.log" 2>&1
+RC=$?
+check "native source rewrite boundary cases" test "$RC" -eq 0
+check "native source rewrite ran its cases (0 failed)" grep -q -E "^native rewrite: [1-9][0-9]* cases, 0 failed" "$WORK/native_rewrite.log"
+if [ "$RC" -ne 0 ]; then cat "$WORK/native_rewrite.log"; fi
+
 echo "== defines: コンパイルスイッチ（モック）"
 cond_suite "cond mock" "$SIM" 0F9 "$T/defines/cond_mock.csv"
 cond_cfg

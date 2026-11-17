@@ -318,27 +318,32 @@ if errorlevel 1 (call :ng "native: a header name uses the same #if branch as the
 "%HAS%" /b /l /c:",65535,65535,OK" "%NW%\out\native_basic.csv" >nul
 if errorlevel 1 (call :ng "native: RAM written by address is read by the function") else (call :ok "native: RAM written by address is read by the function")
 "%RS%" info --cfg "%NC%" > "%NW%\info.log" 2>&1
-call :has "%NW%\info.log" "native sources=4 asm=1 files=5 off=1 compiled=0 reused=5 linked=0" "native: second open compiles nothing"
-call :has "%NW%\info.log" "funcs=23 vars=16 opt=0" "native: variables and functions come from the debug information"
+call :has "%NW%\info.log" "native sources=5 asm=1 files=6 off=1 compiled=0 reused=6 linked=0" "native: second open compiles nothing"
+call :has "%NW%\info.log" "funcs=26 vars=21 opt=0" "native: variables and functions come from the debug information"
+call :has "%NW%\info.log" "native rewrite int=22 int_dropped=7 short_added=6 asm=4 asm_files=1" "native: legacy assembly is counted on cache reuse"
+"%RS%" run --cfg "%NC%" "%NW%\csv\native_legacy.csv" -o "%NW%\out_legacy" > "%NW%\legacy.log" 2>&1
+set RC=%ERRORLEVEL%
+if "%RC%"=="0" (call :ok "native: legacy run exits 0") else (call :ng "native: legacy run exits 0" & type "%NW%\legacy.log")
+call :has "%NW%\legacy.log" "OK 3, NG 0, NO Check 0" "native: all legacy rows are OK"
 call :has "%NW%\info.log" "startup.asm" "native: assembler sources are listed"
-call :has "%NW%\info.log" "files=5 off=1" "native: a file that is not a build target is left out"
+call :has "%NW%\info.log" "files=6 off=1" "native: a file that is not a build target is left out"
 rem a header changes: only the sources that include it are compiled again (reg.h is included by io.c only)
 >> "%NW%\product\inc\reg.h" echo /* changed */
 "%RS%" info --cfg "%NC%" > "%NW%\info2.log" 2>&1
-call :has "%NW%\info2.log" "compiled=1 reused=4 linked=1" "native: a changed header recompiles only its users"
+call :has "%NW%\info2.log" "compiled=1 reused=5 linked=1" "native: a changed header recompiles only its users"
 >> "%NW%\product\inc\types.h" echo /* changed */
 "%RS%" info --cfg "%NC%" > "%NW%\info3.log" 2>&1
-call :has "%NW%\info3.log" "compiled=4 reused=1 linked=1" "native: a header used by every source recompiles them all"
+call :has "%NW%\info3.log" "compiled=5 reused=1 linked=1" "native: a header used by every source recompiles them all"
 "%RS%" run --cfg "%NC%" "%NW%\csv\native_basic.csv" -o "%NW%\out2" > "%NW%\again.log" 2>&1
 call :has "%NW%\again.log" "OK 17, NG 0, NO Check 0" "native: all rows are OK after the rebuild"
 
 rem a header of the same name appears earlier in the search order (next to the source that includes it)
 copy /y "%NW%\product\inc\reg.h" "%NW%\product\src\reg.h" >nul
 "%RS%" info --cfg "%NC%" > "%NW%\info4.log" 2>&1
-call :has "%NW%\info4.log" "compiled=1 reused=4 linked=1" "native: a header that shadows another recompiles its users"
+call :has "%NW%\info4.log" "compiled=1 reused=5 linked=1" "native: a header that shadows another recompiles its users"
 del "%NW%\product\src\reg.h"
 "%RS%" info --cfg "%NC%" > "%NW%\info5.log" 2>&1
-call :has "%NW%\info5.log" "compiled=1 reused=4 linked=1" "native: removing the shadowing header recompiles again"
+call :has "%NW%\info5.log" "compiled=1 reused=5 linked=1" "native: removing the shadowing header recompiles again"
 rem a macro that the mtpj undefines and cdef defines again: the DLL sees the cdef value (same order as the defines loader)
 copy /y "%NC%" "%NW%\driver\feature.cfg" >nul
 >> "%NW%\driver\feature.cfg" echo cdef = FEATURE_X=7
@@ -347,6 +352,11 @@ call :has "%NW%\feature.log" "OK 1, NG 0, NO Check 0" "native: cdef overrides a 
 rem variables and functions come from the debug information of the DLL
 "%RS%" run --cfg "%NC%" "%NW%\csv\native_vars.csv" -o "%NW%\out_vars" > "%NW%\vars.log" 2>&1
 call :has "%NW%\vars.log" "OK 11, NG 0, NO Check 0" "native: all variable rows are OK"
+rem the cfg is given without a folder: clang drops the leading .\ from the unit name, and vars.c/name must still resolve
+pushd "%NW%\driver"
+"%RS%" run --cfg sim.cfg "%NW%\csv\native_vars.csv" -o "%NW%\out_vars_rel" > "%NW%\vars_rel.log" 2>&1
+popd
+call :has "%NW%\vars_rel.log" "OK 11, NG 0, NO Check 0" "native: file names resolve with the cfg in the current folder"
 copy /y "%NC%" "%NW%\driver\opt2.cfg" >nul
 >> "%NW%\driver\opt2.cfg" echo native_opt = 2
 "%RS%" run --cfg "%NW%\driver\opt2.cfg" "%NW%\csv\native_basic.csv" -o "%NW%\out_opt2" > "%NW%\opt2.log" 2>&1
