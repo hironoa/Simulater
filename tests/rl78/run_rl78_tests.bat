@@ -306,6 +306,16 @@ echo == native: product C sources compiled to a PC DLL (exec = native)
 rem The project is copied so that the cache folder (.simnative) and the edits below stay out of the repository.
 set "NW=%WORK%\native"
 xcopy /e /i /q /y "%T%\native" "%NW%" >nul
+rem A source without external declarations writes an empty .decl file.
+"%RS%" info --cfg "%NW%\empty_decl\sim.cfg" > "%NW%\empty_decl_first.log" 2>&1
+if errorlevel 1 (call :ng "native: build the empty declaration fixture" & type "%NW%\empty_decl_first.log") else (call :ok "native: build the empty declaration fixture")
+set "EMPTY_DECL_SIZE="
+for /r "%NW%\empty_decl\.simnative" %%F in (empty_decl-*.decl) do set "EMPTY_DECL_SIZE=%%~zF"
+if "%EMPTY_DECL_SIZE%"=="0" (call :ok "native: declaration file is empty") else (call :ng "native: declaration file is empty")
+"%RS%" info --cfg "%NW%\empty_decl\sim.cfg" > "%NW%\empty_decl_reuse.log" 2>&1
+call :has "%NW%\empty_decl_reuse.log" "native sources=1 asm=0 files=0 off=0 compiled=0 reused=2 linked=0" "native: empty declaration cache compiles nothing on second open"
+call :has "%NW%\empty_decl_reuse.log" "native compile reasons NO_SIG=0 NO_OBJ=0 UNREADABLE=0 CHANGED=0 CANDIDATES=0 BAD_SIG=0 RW=0 DECL=0" "native: empty declaration cache reports DECL=0"
+
 set "NC=%NW%\driver\sim.cfg"
 "%RS%" run --cfg "%NC%" "%NW%\csv\native_basic.csv" -o "%NW%\out" > "%NW%\first.log" 2>&1
 set RC=%ERRORLEVEL%
