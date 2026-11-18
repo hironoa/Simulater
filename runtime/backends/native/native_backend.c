@@ -72,6 +72,24 @@ typedef struct {
     uint8_t *init;               /* リセットで戻す中身（writable のとき。NULL なら 0 で埋める） */
 } range_t;
 
+typedef enum {
+    UNIT_FRESH, UNIT_NO_SIG, UNIT_NO_OBJ, UNIT_UNREADABLE, UNIT_CHANGED,
+    UNIT_CANDIDATES, UNIT_BAD_SIG, UNIT_RW, UNIT_DECL, UNIT_REASON_COUNT
+} unit_reason;
+
+static const char *const unit_reason_text[UNIT_REASON_COUNT] = {
+    [UNIT_NO_SIG] = ".sig がありません",
+    [UNIT_NO_OBJ] = ".obj がありません",
+    [UNIT_UNREADABLE] = "依存ファイルを読めません",
+    [UNIT_CHANGED] = "依存ファイルの中身が変わりました",
+    [UNIT_CANDIDATES] = "同名のインクルード候補が変わりました",
+    [UNIT_BAD_SIG] = ".sig の書式が古いか、読み取れません",
+    [UNIT_RW] = ".rw の書き直し件数を読めません",
+    [UNIT_DECL] = ".decl の宣言を読めないか、書式が正しくありません"
+};
+
+#define UNIT_DIAGNOSTIC_LIMIT 20
+
 typedef struct {
     char *src;                   /* ソースのパス */
     char *base;                  /* キャッシュの中の名前（拡張子なし） */
@@ -164,6 +182,7 @@ typedef struct {
     HANDLE watcher, exception_handler;
 #endif
     int ncompiled, nreused, linked;
+    int compile_reasons[UNIT_REASON_COUNT];
     native_rewrite_stats rewrite;
     native_near_stats near_total;
     int asm_files;
@@ -508,7 +527,7 @@ static int same_prefix(const char *a, const char *b, size_t n)
  * 中身は変わらない。そこで、依存ファイルごとに「探索フォルダ + つづり」の形に分け、ほかの探索フォルダ
  * （インクルード・パスと、ソースや依存ファイルのあるフォルダ）に同じつづりのファイルがあるかを調べて、
  * あったものの一覧も値に混ぜる。置かれても消えても値が変わる */
-static uint64_t hash_candidates(nat *z, path_cache *cache, uint64_t h, char **files, int n)
+static uint64_t hash_candidates(nat *z, path_cache *cache, uint64_t h, char **files, int n, uint64_t *candidates)
 {
     char **dirs = NULL, **found = NULL;
     int ndirs = 0, nfound = 0, i, j, k;
@@ -534,68 +553,111 @@ static uint64_t hash_candidates(nat *z, path_cache *cache, uint64_t h, char **fi
         }
     }
     if (nfound > 1) qsort(found, (size_t)nfound, sizeof *found, name_cmp);
-    for (i = 0; i < nfound; i++)
-        if (!i || strcmp(found[i - 1], found[i])) h = hash_str(h, found[i]);
+    *candidates = SIM_CC_FNV_INIT;
+    for (i = 0; i < nfound; i++) {
+        if (i && !strcmp(found[i - 1], found[i])) continue;
+        h = hash_str(h, found[i]);
+        *candidates = hash_str(*candidates, found[i]);
+    }
     free_list(found, nfound);
     free_list(dirs, ndirs);
     return h;
 }
 
-/* ソースと、読んだファイルすべての中身から作った値を文字列にする。読めないファイルがあれば NULL */
-static char *make_sig(nat *z, path_cache *cache, char **files, int n)
+/* .sig の先頭はリンクにも使う全体の値。2 行目の印で、パスだけを並べた旧書式を見分ける */
+#define SIG_CANDIDATES "candidates "
+
+static int sig_hash(const char *p, char end)
 {
-    uint64_t h = SIM_CC_FNV_INIT;
-    sim_buf out;
-    int i, ok = 1;
-    for (i = 0; i < n && ok; i++) {
+    return strspn(p, "0123456789abcdef") == 16 && p[16] == end;
+}
+
+/* 使い回せない理由を返す。依存ファイルのパスがあれば呼び出し元で解放する */
+static unit_reason unit_fresh(nat *z, path_cache *cache, const unit_t *u, char **file)
+{
+    size_t n = 0;
+    char *old = sim_read_file(u->sig, &n), *p, *q, **files = NULL;
+    uint64_t h = SIM_CC_FNV_INIT, candidates, saved_candidates;
+    int nfiles = 0, i;
+    unit_reason reason = UNIT_BAD_SIG;
+    if (!old) return sim_path_kind(u->sig) == 0 ? UNIT_NO_SIG : UNIT_BAD_SIG;
+    if (sim_path_kind(u->obj) != 1) { reason = UNIT_NO_OBJ; goto out; }
+
+    if (strlen(old) != n || !sig_hash(old, '\n')) goto out;
+    p = old + 17;
+    if (strncmp(p, SIG_CANDIDATES, sizeof SIG_CANDIDATES - 1)) goto out;
+    p += sizeof SIG_CANDIDATES - 1;
+    if (!sig_hash(p, '\n')) goto out;
+    saved_candidates = strtoull(p, NULL, 16);
+    for (p += 17; *p; p = q + 1) {
+        q = strchr(p, '\n');
+        if (!q || q - p < 18 || !sig_hash(p, ' ')) goto out;
+        *q = 0;
+        push(&files, &nfiles, p + 17);
+    }
+    if (!nfiles) goto out;
+
+    for (i = 0; i < nfiles; i++) {
+        int ok = 1;
         uint64_t fh = hash_file(files[i], &ok);
+        if (!ok || fh != strtoull(files[i] - 17, NULL, 16)) {
+            *file = sim_xstrdup(files[i]);
+            reason = ok ? UNIT_CHANGED : UNIT_UNREADABLE;
+            goto out;
+        }
         h = sim_cc_fnv(h, &fh, sizeof fh);
     }
-    if (!ok) return NULL;
-    h = hash_candidates(z, cache, h, files, n);
-    sim_buf_init(&out);
-    sim_buf_printf(&out, "%016llx\n", (unsigned long long)h);
-    for (i = 0; i < n; i++) { sim_buf_adds(&out, files[i]); sim_buf_addc(&out, '\n'); }
-    (void)sim_buf_cstr(&out);   /* NUL で終える */
-    return out.p;
-}
-
-/* 前回の .sig と、いまのファイルの中身が合えば 1 */
-static int unit_fresh(nat *z, path_cache *cache, const unit_t *u)
-{
-    size_t n = 0;
-    char *old = sim_read_file(u->sig, &n), *p, *q, *now, **files = NULL;
-    int nfiles = 0, same;
-    if (!old) return 0;
-    if (sim_path_kind(u->obj) != 1) { free(old); return 0; }
-    p = strchr(old, '\n');
-    for (p = p ? p + 1 : NULL; p && *p; p = q + 1) {
-        q = strchr(p, '\n');
-        if (!q) break;
-        push(&files, &nfiles, sim_xstrndup(p, (size_t)(q - p)));
-    }
-    now = nfiles ? make_sig(z, cache, files, nfiles) : NULL;
-    same = now && strlen(now) == n && !memcmp(now, old, n);
-    free(now);
-    free_list(files, nfiles);
+    h = hash_candidates(z, cache, h, files, nfiles, &candidates);
+    if (candidates != saved_candidates) reason = UNIT_CANDIDATES;
+    else if (h == strtoull(old, NULL, 16)) reason = UNIT_FRESH;
+out:
+    free(files);
     free(old);
-    return same;
+    return reason;
 }
 
-/* コンパイルのあと、.d から .sig を作る。0 なら成功 */
-static int unit_write_sig(nat *z, path_cache *cache, const unit_t *u)
+/* コンパイルのあと、.d から .sig を作る。失敗した単位は次回もコンパイルする */
+static void unit_write_sig(nat *z, path_cache *cache, const unit_t *u, int *warnings)
 {
-    size_t n = 0;
-    char *d = sim_read_file(u->dep, &n), *sig, **files = NULL;
-    int nfiles = 0, rc = -1;
-    if (!d) return -1;
-    parse_dep(d, &files, &nfiles);
+    char *d = sim_read_file(u->dep, NULL), **files = NULL;
+    const char *kind = "依存一覧", *path = u->dep, *failure = "を読めない";
+    uint64_t h = SIM_CC_FNV_INIT, candidates;
+    int nfiles = 0, i;
+    sim_buf sig, entries;
+    sim_buf_init(&sig);
+    sim_buf_init(&entries);
+    if (d) parse_dep(d, &files, &nfiles);
     free(d);
-    sig = nfiles ? make_sig(z, cache, files, nfiles) : NULL;
-    if (sig) rc = sim_write_file(u->sig, sig, strlen(sig));
-    free(sig);
+    if (!nfiles) goto warn;
+
+    for (i = 0; i < nfiles; i++) {
+        int ok = 1;
+        uint64_t fh = hash_file(files[i], &ok);
+        if (!ok) {
+            kind = "依存ファイル";
+            path = files[i];
+            goto warn;
+        }
+        h = sim_cc_fnv(h, &fh, sizeof fh);
+        sim_buf_printf(&entries, "%016llx %s\n", (unsigned long long)fh, files[i]);
+    }
+    h = hash_candidates(z, cache, h, files, nfiles, &candidates);
+    sim_buf_printf(&sig, "%016llx\n" SIG_CANDIDATES "%016llx\n",
+                   (unsigned long long)h, (unsigned long long)candidates);
+    sim_buf_add(&sig, entries.p, entries.len);
+    if (!sim_write_file(u->sig, sig.p, sig.len)) goto out;
+    kind = "署名";
+    path = u->sig;
+    failure = "を書けない";
+warn:
+    sim_remove_file(u->sig);
+    if ((*warnings)++ < UNIT_DIAGNOSTIC_LIMIT)
+        fprintf(stderr, "native: 警告: %s の%s %s %sので、次回もコンパイルし直します\n",
+                sim_basename(u->src), kind, path, failure);
+out:
+    sim_buf_free(&entries);
+    sim_buf_free(&sig);
     free_list(files, nfiles);
-    return rc;
 }
 
 /* コンパイルの引数のうち、どのソースにも共通の部分。flags に積む（文字列の持ち主は flags） */
@@ -1027,6 +1089,7 @@ static int build(nat *z, char *err, size_t errlen)
     const char *s, *stem;
     char keytext[32];
     path_cache cache = {{0}};
+    int reason_lines = 0;
     char *undef_obj = NULL;
 
     /* フォルダ: 指定がなければ設定ファイルの隣の .simnative */
@@ -1089,6 +1152,8 @@ static int build(nat *z, char *err, size_t errlen)
         unit_t *u = &units[i];
         const char *src = i < z->nsrcs ? z->srcs[i] : rt, *bn = sim_basename(src);
         sim_buf nm;
+        char *reason_file = NULL;
+        unit_reason reason;
         size_t stemlen = strrchr(bn, '.') ? (size_t)(strrchr(bn, '.') - bn) : strlen(bn);
         u->src = sim_xstrdup(src);
         u->pre = i < z->nsrcs;
@@ -1108,8 +1173,23 @@ static int build(nat *z, char *err, size_t errlen)
             u->ll = unit_path(z, src, ".ll");
             u->nll = unit_path(z, src, ".near.ll");
         }
-        u->compile = !unit_fresh(z, &cache, u) || (u->pre && (!read_rewrite_stats(u) || !decl_ok(u->decl)));
+        reason = unit_fresh(z, &cache, u, &reason_file);
+        if (reason == UNIT_FRESH && u->pre) {
+            if (!read_rewrite_stats(u)) reason = UNIT_RW;
+            else if (!decl_ok(u->decl)) reason = UNIT_DECL;
+        }
+        u->compile = reason != UNIT_FRESH;
         if (!u->compile) { z->nreused++; continue; }
+        z->compile_reasons[reason]++;
+        if (z->w.verbose || reason != UNIT_NO_SIG || sim_path_kind(u->obj) == 1) {
+            const char *path = reason_file;
+            if (reason == UNIT_RW) path = u->rw;
+            if (reason == UNIT_DECL) path = u->decl;
+            if (reason_lines++ < UNIT_DIAGNOSTIC_LIMIT)
+                say(z, "native: %s をコンパイルし直す理由: %s%s%s%s\n", bn, unit_reason_text[reason],
+                    path ? "（" : "", path ? path : "", path ? "）" : "");
+        }
+        free(reason_file);
         sim_remove_file(u->obj);
         sim_remove_file(u->sig);
         sim_remove_file(u->dep);
@@ -1155,9 +1235,11 @@ static int build(nat *z, char *err, size_t errlen)
         njobs++;
     }
     z->ncompiled = njobs;
+    if (reason_lines > UNIT_DIAGNOSTIC_LIMIT)
+        say(z, "native: ...ほか %d 個\n", reason_lines - UNIT_DIAGNOSTIC_LIMIT);
 
     if (njobs) {
-        int par = 0, stage, j;
+        int par = 0, stage, j, warnings = 0;
         uint64_t v;
         if ((s = sim_cfg_get(&z->cfg, "native_jobs"))) {
             if (sim_parse_uint(s, 64, &v) || v == 0) {
@@ -1276,12 +1358,8 @@ static int build(nat *z, char *err, size_t errlen)
             sim_cc_write_times(jobs, (size_t)njobs, z->dir, "native", say_line, z);
         }
         njobs = z->ncompiled;
-        for (i = 0; i < nunits; i++) {
-            if (units[i].compile && unit_write_sig(z, &cache, &units[i])) {
-                snprintf(err, errlen, "native: %s を書けません", units[i].sig);
-                goto out;
-            }
-        }
+        for (i = 0; i < nunits; i++)
+            if (units[i].compile) unit_write_sig(z, &cache, &units[i], &warnings);
     }
 
     for (i = 0; i < z->nsrcs; i++) {
@@ -1904,6 +1982,11 @@ static void b_print_info(sim_backend *b, FILE *out)
     fprintf(out, "  止まった場所を調べる道具: %s（native_symbolizer）\n", z->symbolizer ? z->symbolizer : "");
     fprintf(out, "  今回コンパイルしたもの: %d 個、使い回したもの: %d 個、DLL: %s\n",
             z->ncompiled, z->nreused, z->linked ? "作り直した" : "前回のまま");
+    fprintf(out, "  native compile reasons NO_SIG=%d NO_OBJ=%d UNREADABLE=%d CHANGED=%d CANDIDATES=%d BAD_SIG=%d RW=%d DECL=%d\n",
+            z->compile_reasons[UNIT_NO_SIG], z->compile_reasons[UNIT_NO_OBJ],
+            z->compile_reasons[UNIT_UNREADABLE], z->compile_reasons[UNIT_CHANGED],
+            z->compile_reasons[UNIT_CANDIDATES], z->compile_reasons[UNIT_BAD_SIG],
+            z->compile_reasons[UNIT_RW], z->compile_reasons[UNIT_DECL]);
     fprintf(out, "  DLL: %s\n", z->dll ? z->dll : "");
     fprintf(out, "  番地を再現する範囲: 0x%X〜0x%X\n", WIN_LO, WIN_HI - 1);
     fprintf(out, "  書き直し: int を 16 ビットに %d か所、__asm を空に %d か所（ソース %d 個）\n",
