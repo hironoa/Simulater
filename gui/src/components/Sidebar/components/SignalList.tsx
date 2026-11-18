@@ -1,4 +1,4 @@
-import { displaySignalName } from "../../../utils/displaySignalName";
+import { displaySignalName, listedSignals } from "../../../utils/displaySignalName";
 import { useCompareView } from "../../../hooks/useCompareView";
 import { CompareBadge } from "./CompareStatus";
 import React, { useMemo } from "react";
@@ -16,7 +16,7 @@ import { SignalSettings } from "./SignalSettings";
 export function SignalItemOverlay({ sigName }: { sigName: string }) {
   // 表示名の重なりの判定に使う名前の一覧。行ごとに useCompareView() を呼ぶと、比較表示のたびに全信号のデータを
   // 行の数だけ作り直すので、ストアの名前だけを見る
-  const names = useWaveformStore(useShallow((state) => Object.keys(state.signalSettings)));
+  const names = useWaveformStore(useShallow(listedSignals));
   const {
        signalSettings, showAlias 
     } = useWaveformStore(useShallow((state) => ({
@@ -73,7 +73,7 @@ export function GroupItemOverlay({ id }: { id: string }) {
 export function SortableSignalItem({ id, sigName }: { id: string; sigName: string; key?: React.Key; }) {
   // 表示名の重なりの判定に使う名前の一覧。行ごとに useCompareView() を呼ぶと、比較表示のたびに全信号のデータを
   // 行の数だけ作り直すので、ストアの名前だけを見る
-  const names = useWaveformStore(useShallow((state) => Object.keys(state.signalSettings)));
+  const names = useWaveformStore(useShallow(listedSignals));
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id, data: { type: "Signal" } });
   const style = { transform: CSS.Transform.toString(transform), transition, opacity: isDragging ? 0.3 : 1 };
 
