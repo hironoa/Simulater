@@ -44,8 +44,11 @@
   - 直した指摘には、修正のコミットを添えて返信し、スレッドを解決済みにします（`gh api graphql` の `resolveReviewThread`）。
   - 直さない指摘には、理由を返信して解決済みにし、利用者にも報告します。
 - **Codex のレビューは、指摘なしで終わると通知が来ません**（👍 が付くだけ）。PR を出したり修正をプッシュしたりしたら、PR のコメントの `codex-review-state:v1` の `commit_sha` が最新のコミットと一致し、`status` が `completed` になるまで、自分で待ちます（60 秒おきに見る裏の処理など）。
-- **CI は動きません。** 請求の問題で、GitHub Actions の全ジョブが steps=0 のまま失敗します。失敗の通知が来たら steps=0 であることを確かめて、「対応不要」と扱います。この PC での試験（下の 6）が、CI の代わりです。
-- そのため mergeStateStatus が CLEAN にならないので、**マージは PR ごとに利用者に確認してから**行います。確認するときは、レビューの状態（`has_unresolved_findings`、未解決のスレッド）と試験の件数を添えます。
+- **CI（GitHub Actions、`.github/workflows/ci.yml`）は動きます。** PR とプッシュのたびに、2 つのジョブが走ります。
+  - `windows`: MinGW-Builds の gcc で `build.bat`（`CC=gcc`）を実行し、`tests\run_tests.bat` と `rl78\tests\run_tests.bat` を走らせ、clang でもビルドします。成果物 `sim-windows-x64` に、ビルドした `sim.exe` と同梱のファイルを置きます。
+  - `macos`: `tests/run_tests.sh` を走らせます。
+  - 失敗の通知が来たら、ジョブのログで失敗した確認の名前と件数（`checks run: N` / `実行 N 件`）を見て、その PR の変更が原因なら直します。main でも同じく落ちるものは、別の PR で直し、PR の本文にそう書きます。
+- **マージは PR ごとに利用者に確認してから**行います。確認するときは、レビューの状態（`has_unresolved_findings`、未解決のスレッド）、CI の結果、試験の件数を添えます。Codex のレビューが利用上限などで動かなかったときは、そのことも書きます。
 - マージは merge commit で行います（リポジトリの履歴に合わせる）。マージ API が 502 を返すことがあります。そのときは `gh api -X PUT repos/hironoa/Simulater/pulls/<番号>/merge -f merge_method=merge -f sha=<完全な sha>` を 60 秒おきに再試行し、`git merge-base --is-ancestor <sha> origin/main` で main に入ったことを確かめます。
 - マージしたら、確認を取らずに次を行います。
   1. PR のブランチを消し、`git ls-remote --heads origin <ブランチ>` で消えたことを確かめる。消すのはマージした PR のブランチだけ。
@@ -55,14 +58,16 @@
 ## 5. dist（ビルド済みの sim）
 
 - ソースを変える PR では、`dist/sim-windows-x64/`（`sim.exe` と同梱のファイル）を作り直します。
-  - この Windows PC で `tools\build_dist.bat` を実行して作ります。Mac のクロスビルドは置きません。
+  - 作り方は 2 つあります。Mac のクロスビルドは置きません。
+    - CI の `windows` ジョブの成果物 `sim-windows-x64` から作る（`gh run download <run> -n sim-windows-x64`）。`sim.exe` は成果物の一番上のものを使います（成果物には、リポジトリにある古い `dist/sim-windows-x64/` が入れ子で入っているので、そちらは使わない）。テキストのファイル（`sim_gui.html`、`README.md`、`sim.cfg.example`、`native_ram_clear.c`、`xlate/`、`native/`）は、成果物と改行コード以外が同じであることを確かめて、リポジトリのソースの写し（LF）を置きます。
+    - この Windows PC で `tools\build_dist.bat` を実行して作る。
   - `dist/README.md` の「ビルド元」を、もとにしたコミットと変更の内容に合わせて更新します。
   - 本体の変更とは別のコミットにします（`chore: Windows 用のビルド済み sim を作り直す（…）`）。本体をコミットしてから作り直します。
 
 ## 6. 検証
 
 - 「直った」「通った」と言う前に、実際にコマンドを走らせて出力を確かめます。
-- 全体の試験は `tests\run_tests.bat`（CC=gcc を付ける。下の 8）です。最後の `checks run: N, passed: N, failed: 0` で件数を確かめます。0 件の成功は、失敗として扱います。
+- 全体の試験は `tests\run_tests.bat`（CC=gcc を付ける。下の 8）と、Mac / Linux の `tests/run_tests.sh` です。最後の `checks run: N, passed: N, failed: 0`（`.sh` は `実行 N 件、成功 N 件、失敗 0 件`）で件数を確かめます。0 件の成功は、失敗として扱います。手元で走らせられない側は、CI の同じジョブのログで件数を確かめます。
 - 不具合を直したときは、直す前の sim で試験が失敗する（再現する）ことも、できるだけ確かめます。
 - 確かめていない部分（とくに製品のソースでの結果）は、成功と言い切らずに、そう明記します。
 
