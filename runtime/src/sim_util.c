@@ -245,6 +245,7 @@ char *sim_read_file(const char *path, size_t *len)
     if (!fp) return NULL;
     sim_buf_init(&b);
     sim_buf_reserve(&b, 0);
+    b.p[0] = 0;
     while ((n = fread(tmp, 1, sizeof tmp, fp)) > 0) sim_buf_add(&b, tmp, n);
     if (ferror(fp)) { fclose(fp); sim_buf_free(&b); return NULL; }
     fclose(fp);
