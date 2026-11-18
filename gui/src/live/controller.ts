@@ -1,3 +1,5 @@
+import { sanitizeVariants } from "./variants";
+import { useVariantsStore } from "./variantsStore";
 // ライブモードの制御。サーバ検出、SSE の取り込み、監視一覧・入力の同期、構成の保存をまとめて持つ。
 
 import toast from "react-hot-toast";
@@ -182,7 +184,7 @@ export function createLiveController(deps: LiveControllerDeps = {}) {
     persist();
     syncSignals();
     if (announce) {
-      const lines = list.map((d) => `${d.name}（${d.kind === "hold" ? "固定" : "監視"}）: ${d.message || "解決できません"}`);
+      const lines = list.map((d) => `${d.name}（${d.kind === "hold" ? "固定" : d.kind === "init" ? "初期化" : "監視"}）: ${d.message || "解決できません"}`);
       (notify.warn ?? notify.error)(`今の対象関数では使えないため、次を外しました\n${lines.join("\n")}`);
     }
   }
@@ -286,6 +288,13 @@ export function createLiveController(deps: LiveControllerDeps = {}) {
       set({ mode: "offline" });
       return false;
     }
+    try {
+      const result = await api.getVariants();
+      const doc = sanitizeVariants(result.doc);
+      const error = result.error || (result.exists && (!result.doc || typeof result.doc !== "object" || !Array.isArray((result.doc as Record<string, unknown>).variants)) ? "仕向ファイルの形式が不正です" : "");
+      useVariantsStore.setState({ doc, saved: JSON.stringify(doc), path: result.path, error, loaded: true });
+      if (!error && doc.selected) await api.setInit(doc.variants.find(v => v.name === doc.selected)!.values);
+    } catch (e) { useVariantsStore.setState({ loaded: true, error: (e as Error).message }); }
     const layout = loadLayout();
     record.setMaxSamples(layout.maxSamples);
     // 再読み込みの前に固定した文字列（保存した構成の最後の値）を、丸まって届く state.holds の表記に使う

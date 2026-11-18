@@ -5,6 +5,7 @@
 #include "sim_expr.h"
 
 typedef struct {
+    const char *variants_path; /* sim.cfg 基準で解決済みの仕向ファイル */
     int port;
     double period_ms;
     double speed;

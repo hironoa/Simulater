@@ -173,3 +173,26 @@ describe("needReset", () => {
     expect(info?.state).toMatchObject({ needReset: true, error: "NULL" });
   });
 });
+
+describe("仕向 API", () => {
+  it("GET・保存・初期化を文字列のまま送る", async () => {
+    const f = fakeFetch(() => ({ body: { ok: true } }));
+    const api = createApi("", f);
+    const values = [{ name: "a", value: "9007199254740993", mode: "once" as const }];
+    const doc = { version: 1 as const, selected: "国内", variants: [{ name: "国内", values }] };
+    await api.getVariants(); await api.saveVariants(doc); await api.setInit(values); await api.setInit([]);
+    expect(f.mock.calls.map(([u, i]) => [u, i?.method, i?.body])).toEqual([
+      ["/api/variants", undefined, undefined], ["/api/variants", "POST", JSON.stringify(doc)],
+      ["/api/init", "POST", JSON.stringify({ values })], ["/api/init", "POST", '{"values":[]}'],
+    ]);
+  });
+  it("400 の行別エラーを保持する", async () => {
+    const errors = [{ name: "bad", message: "変数なし" }];
+    const api = createApi("", fakeFetch(() => ({ status: 400, body: { errors } })));
+    await expect(api.setInit([])).rejects.toMatchObject({ status: 400, errors });
+  });
+  it("state の inits と dropped init を読む", () => {
+    const inits = [{ name: "a", value: "'A'", mode: "once" }];
+    expect(parseState({ inits, dropped: [{ name: "a", kind: "init", message: "なし" }] })).toMatchObject({ inits, dropped: [{ name: "a", kind: "init", message: "なし" }] });
+  });
+});

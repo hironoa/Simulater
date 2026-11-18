@@ -671,6 +671,9 @@ RL78 の命令は再現しない。目的は速さで、解釈実行・変換方
 | `GET /api/symbols?q=文字列&limit=200` | 名前の部分一致検索（`limit` は 1 以上の整数で、5000 を超える指定は 5000 件まで。数値でなければ 400）。`[{"name","type","size","kind":"int|uint|float|ptr|struct|array","writable":bool,"members":[...子の名前]}]`。`members` は子の**完全名**（`g_cmd.mode`、`arr[2]`。配列は最大 256 要素、入れ子の匿名メンバは全階層を省略して展開。ポインタ先の構造体は `p->m`）。部分一致の走査は深さ 8・訪問数 500000 まで。完全な式は走査上限と独立して先に解決し、`members` の各完全名を再検索できる。型・サイズ・書き込み可否は watch/write と同じ式解決から取得する（構造体・配列自体は書き込み不可）。空白は式パーサが受け付ける位置で使用可（例: `a [ 1 ] .lo`） |
 | `POST /api/control` | `{"cmd":"run"|"pause"|"step"|"reset","steps":N,"speed":倍率,"periodMs":周期,"func":"関数名"}`。不明な `cmd` や対象にできない関数（浮動小数・構造体の引数など）は 400 で、そのときは関数・引数・速度・周期を何も変えない。`steps` は 1 以上の整数、`speed` は 0（最速）か 0.1〜100、`periodMs` は 0.01〜60000 で、範囲外・数値でない値は丸めずに 400（何も変えない）。`func` で対象関数が実際に変わったときは、`cmd` の前に `reset` と同じことをする（下記）。要リセット中の `run`・`step` は他の指定も含め何も変えず 400（直前の失敗理由とリセットの案内）を返す。応答は `state` と同じ形で、解決し直せずに外した固定・監視を `dropped` に載せる（下記「関数を変えたときの固定と監視」）。`step` は周期を待たずに続けて N 回実行し、終わるまで（最大 5 秒）待って応答する。応答には `state` に加えて `"stepsDone":この要求の後に進んだステップ数,"timedOut":bool` を付ける。5 秒で終わらなければ `timedOut` が真で、残りは続けて実行する（`stepsLeft` が 0 でなく `running` が真。`pause` で止める） |
 | `POST /api/watch` | `{"names":["変数",...]}` 監視する変数の一覧を置き換える。解決できなかった名前は `{"errors":[{"name","message"}]}` で返す |
+| `GET /api/variants` | `{"path","exists":bool,"doc":JSON または null,"error"}`。ファイルなしは exists:false。壊れた JSON は exists:true, doc:null と理由を返す（HTTP 200） |
+| `POST /api/variants` | variants 配列を持つ JSON オブジェクトをサーバの固定保存先に一時ファイル経由で保存。JSON・オブジェクト・配列の違反は 400。応答は `{"ok":true,"path"}`。既定は sim.cfg 基準の sim_gui_variants.json、gui_variants 設定も同じ基準で解決 |
+| `POST /api/init` | `{"values":[{"name","value":文字列,"mode":"once"または"every"}]}` で初期化一覧を置換。空で解除。write と共通の検査を行い、1 件でも不正なら何も変えず 400 `{"errors":[{"name","message"}]}`。要リセット中も 400 |
 | `POST /api/write` | `{"name":"変数","value":数値または文字列,"hold":bool}` 要リセット中は単発・固定・解除とも 400（直前の失敗理由とリセットの案内）。次の周期の開始時に書き込む（止まっているときもすぐには書かない）。`hold` が偽なら単発（反映待ち。同じ名前に書き直すと置き換わる）、真なら毎周期書き続ける（入力の固定。同じ名前の反映待ちは捨てる）。`{"name","release":true}` で固定を解除し、その名前の反映待ちも捨てる。`value` の整数は書いた表記のまま読む（2^53 を超える整数を double に丸めない）。名前が解決できない・書き込めない、型に収まらない、`$` の値が 0 以上の整数でない、要素数を超える、改行を含む、などの値はこの時点で 400（ポインタの先のようにその時のメモリで決まるものは、書くときに `state` の `error` になる） |
 | `GET /api/stream` | Server-Sent Events。下記 |
 | `POST /api/load-csv` | 本文にテスト CSV。成功時は要リセットとエラーを解除し、初期状態に戻して先頭から再生する（入力列を毎周期書き込む。監視と応答の `names` には通常の入力列・出力列の名前を列順に一度ずつ加える。初期化専用の列は再生と入力の記録に使う）。`{"rows":N,"names":[...]}`。関数や入力列が使えなければ 400 で、以前の関数・引数・再生をそのまま残す。同じ名前（前後の空白を除いて完全一致）の入力列が複数ある CSV も、重なっている名前と列番号を示して 400（関数・再生・記録・固定・監視は変えない。`sim run` では実行できる）。`mod` ブロックが複数あれば先頭のブロックだけを再生し、応答に `"blocks":<ブロック数>,"warning":"..."` を足して知らせる |
@@ -682,8 +685,8 @@ RL78 の命令は再現しない。目的は速さで、解釈実行・変換方
 - `event: samples` — `{"step0":先頭のステップ番号,"names":[...],"rows":[[値,...],...]}`。約 50ms ごとにまとめて送る。
   値は数値、読めなければ `null`。
 - `event: state` — `{"running":bool,"step":現在のステップ,"speed":倍率,"holds":[{"name","value"}],"overrun":bool,
-  "periodMs","func","playback":bool,"error":文字列,"needReset":bool,"dropped":[{"name","kind":"hold"|"watch","message"}],
-  "pending":[{"name","value"}],"stepsLeft":N}`。変化時と 1 秒ごと。`/api/control` の応答と `/api/info` の `state` も同じ形。
+  "periodMs","func","playback":bool,"error":文字列,"needReset":bool,"dropped":[{"name","kind":"hold"|"watch"|"init","message"}],
+  "pending":[{"name","value"}],"stepsLeft":N,"inits":[{"name","value","mode"}]}`。変化時と 1 秒ごと。`/api/control` の応答と `/api/info` の `state` も同じ形。
   `holds` の `value` は固定したときに書いたセルの文字列（`"800"`、`"0x78"`、`"9007199254740993"`、`"'A'"` など。`pending` と同じ。
   数値に直さないので、2^53 を超える整数が丸まったり 16 進が 10 進になったりしない）。
   `stepsLeft` は `step` の残りのステップ数（0 でなければ `step` を実行中で、`running` も真）。
@@ -707,10 +710,26 @@ RL78 の命令は再現しない。目的は速さで、解釈実行・変換方
 - 解決し直せない固定・監視は外す。新しい関数にない `@引数`、前の関数の戻り値 `前の関数@@` など。
   固定は書き込めなくなったときも外す。関数の変更そのものは受け付ける。
 - 外したものは `state`（`/api/control` の応答と SSE の `event: state`）の `dropped` に
-  `{"name","kind":"hold"|"watch","message":理由}` で載せる。`holds` と `event: hello` の `names` は外した後の内容になる。
+  `{"name","kind":"hold"|"watch"|"init","message":理由}` で載せる。`holds` と `event: hello` の `names` は外した後の内容になる。
 - 外した固定は書かないので記録の入力列にも出ず、監視は出力列に出ない。保存した CSV に新しい関数にない列は残らず、
   `sim run` でそのまま再実行できる。
 - `/api/control` で関数を変えたときは、読み込み済みの CSV の再生もやめる（入力列は前の関数で解決しているため）。
+
+### 仕向（初期化の値）
+
+`POST /api/init` で受けた初期化の値は、テスト CSV の `#Init...` 行（3 節の `csv_init`）と同じ規則で書く。
+
+- 周期の開始時、単発・固定・CSV 再生の入力より前に並べる。同じ入力列は最後のものだけを書くので、同じ変数に入力があれば入力が勝つ。
+- `once` はステップ 0 の周期（起動直後とリセットの後）だけ、`every` は毎周期書く。途中で `once` の値を変えても次のリセットまで書かない
+  （WinAMS で `#InitWheneverCall` を初回だけ書く設定と同じにするため）。
+- 書いた値は固定と同じく記録の入力列に残す（`once` は最初の行だけ）。保存した CSV を `sim run` で再実行しても同じになる。
+- 関数の変更・リセットのときは固定と同じく解決し直し、できないものは外して `dropped` に `kind:"init"` で載せる。
+- `state` の `inits:[{"name","value","mode"}]` に今の一覧を載せる（`value` は受けたセルの文字列のまま）。
+- 初期化の一覧が空なら、今までの動きを変えない。
+
+仕向のファイル（`GET`/`POST /api/variants`）は `{"version":1,"selected":名前,"variants":[{"name","values":[{"name","value","mode"}]}]}`。
+保存先はサーバが起動時に決めた 1 か所だけで（sim.cfg の `gui_variants`、既定は sim.cfg と同じフォルダの `sim_gui_variants.json`）、
+要求からパスを受け取らない。一時ファイルに書いてから置き換える。中身の検査は `variants` が配列であることまでで、残りは GUI が読むときに捨てる。
 
 ### 記録と CSV 保存
 

@@ -17,6 +17,7 @@
 #include "sim_defines.h"
 #include "sim_expr.h"
 #include "sim_gui.h"
+#include "sim_cfg.h"
 #include "sim_platform.h"
 
 #include <limits.h>
@@ -219,6 +220,14 @@ static int cmd_gui(int argc, char **argv)
     }
     c = open_ctx();
     if (!c) return 2;
+    sim_cfg cfg;
+    char err[1024];
+    char *cfgpath = sim_cfg_locate(g_open.cfg_path, g_open.abs_path);
+    sim_cfg_init(&cfg);
+    sim_cfg_load(&cfg, cfgpath, err, sizeof err);
+    const char *path = sim_cfg_get(&cfg, "gui_variants");
+    o.variants_path = sim_cfg_path(&cfg, path ? path : "sim_gui_variants.json");
+    sim_cfg_free(&cfg); free(cfgpath);
     return sim_gui_run(c, &o);
 }
 
