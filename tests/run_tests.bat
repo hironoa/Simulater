@@ -240,7 +240,14 @@ set /a PORT=20000 + %RANDOM% %% 20000
 set "U=http://127.0.0.1:%PORT%"
 mkdir "%WORK%\gui"
 copy /y "%SIM%" "%WORK%\gui\sim_guitest.exe" >nul
-start "" /b "%WORK%\gui\sim_guitest.exe" gui --no-browser --cfg "%T%\defines\type_contract.cfg" --port %PORT% --period-ms 2 > "%WORK%\gui.log" 2>&1
+rem Same settings as tests\defines\type_contract.cfg, plus gui_variants so that the variants file is written to the
+rem work folder (relative to this cfg), not to the test sources.
+> "%WORK%\gui\gui.cfg" (
+    echo defines = %T%\defines\contracts\type_contract.h
+    echo defines_near_base = 0
+    echo gui_variants = variants.json
+)
+start "" /b "%WORK%\gui\sim_guitest.exe" gui --no-browser --cfg "%WORK%\gui\gui.cfg" --port %PORT% --period-ms 2 > "%WORK%\gui.log" 2>&1
 set TRIES=0
 :wait_up
 curl -s "%U%/api/info" > "%WORK%\info.json" 2>nul
@@ -250,6 +257,72 @@ if %TRIES% geq 20 goto up
 ping -n 2 127.0.0.1 >nul
 goto wait_up
 :up
+rem ---- variants file (GET/POST /api/variants) and init values (POST /api/init); same checks as tests/run_tests.sh
+set "G=%T%\gui"
+set "V=%WORK%\gui"
+curl -s "%U%/api/variants" > "%V%\variants.out"
+"%HAS%" /l /c:"\"exists\":false,\"doc\":null" "%V%\variants.out" >nul
+if errorlevel 1 (call :ng "variants: no file gives exists:false, doc:null") else (call :ok "variants: no file gives exists:false, doc:null")
+> "%V%\variants.json" echo {broken
+curl -s "%U%/api/variants" > "%V%\variants.out"
+"%HAS%" /l /c:"\"exists\":true,\"doc\":null" "%V%\variants.out" >nul
+if errorlevel 1 (call :ng "variants: broken file gives exists:true, doc:null") else (call :ok "variants: broken file gives exists:true, doc:null")
+"%HAS%" /l /c:"\"error\":\"\"" "%V%\variants.out" >nul
+if errorlevel 1 (call :ok "variants: broken file has a reason") else (call :ng "variants: broken file has a reason")
+call :post_code "%G%\variants_bad.json" variants_bad.out /api/variants
+if "%CODE%"=="400" (call :ok "variants: saving a non-array variants is 400") else (call :ng "variants: saving a non-array variants is 400, got %CODE%")
+call :post_code "%G%\variants.json" variants_save.out /api/variants
+if "%CODE%"=="200" (call :ok "variants: save is 200") else (call :ng "variants: save is 200, got %CODE%")
+curl -s "%U%/api/variants" > "%V%\variants.out"
+"%HAS%" /l /c:"variants.json\"" "%V%\variants.out" >nul
+if errorlevel 1 (call :ng "variants: path is relative to the cfg") else (call :ok "variants: path is relative to the cfg")
+if exist "%V%\variants.json" (call :ok "variants: saved next to the cfg") else (call :ng "variants: saved next to the cfg")
+"%HAS%" /l /c:"\"value\":\"0x20\"" "%V%\variants.out" >nul
+if errorlevel 1 (call :ng "variants: keeps the value as written") else (call :ok "variants: keeps the value as written")
+call :post_code "%G%\init_values.json" init.out /api/init
+if "%CODE%"=="200" (call :ok "init: set the list") else (call :ng "init: set the list, got %CODE%")
+call :has_info "\"initStale\":false" "init: a once change at step 0 does not set initStale"
+call :post_code "%G%\step1.json" init_step1.out /api/control
+call :post_code "%G%\init_changed.json" init_change.out /api/init
+call :has_info "\"initStale\":true" "init: a once change after running sets initStale"
+call :post_code "%G%\init_changed.json" init_repeat.out /api/init
+call :has_info "\"initStale\":true" "init: sending the same list again keeps initStale"
+call :post_code "%G%\step1.json" init_step2.out /api/control
+curl -s "%U%/api/export.csv" > "%V%\init_export.csv"
+"%HAS%" /x /c:",0x20,1" "%V%\init_export.csv" >nul
+if errorlevel 1 (call :ng "init: once is written in the first cycle only") else (call :ok "init: once is written in the first cycle only")
+"%HAS%" /x /c:",,1" "%V%\init_export.csv" >nul
+if errorlevel 1 (call :ng "init: every is written in every cycle, a once change is not applied") else (call :ok "init: every is written in every cycle, a once change is not applied")
+"%HAS%" /x /c:",0x21,1" "%V%\init_export.csv" >nul
+if errorlevel 1 (call :ok "init: the changed once value is not written before reset") else (call :ng "init: the changed once value is not written before reset")
+"%SIM%" run "%V%\init_export.csv" -o "%V%\init_replay" --quiet >nul 2>&1
+if errorlevel 1 (call :ng "init: sim run replays the record") else (call :ok "init: sim run replays the record")
+call :post_code "%G%\init_bad.json" init_bad.out /api/init
+if "%CODE%"=="400" (call :ok "init: an unknown name is 400") else (call :ng "init: an unknown name is 400, got %CODE%")
+"%HAS%" /l /c:"\"errors\":[{\"name\":\"no_such_init\",\"message\":" "%V%\init_bad.out" >nul
+if errorlevel 1 (call :ng "init: errors are per name") else (call :ok "init: errors are per name")
+call :has_info "\"inits\":[{\"name\":\"P1\",\"value\":\"0x21\",\"mode\":\"once\"},{\"name\":\"P2_bit.no0\",\"value\":\"1\",\"mode\":\"every\"}]" "init: a bad list is not applied in part"
+call :post_code "%G%\reset.json" init_reset.out /api/control
+"%HAS%" /l /c:"\"initStale\":false" "%V%\init_reset.out" >nul
+if errorlevel 1 (call :ng "init: reset clears initStale") else (call :ok "init: reset clears initStale")
+call :post_code "%G%\step1.json" init_step3.out /api/control
+curl -s "%U%/api/export.csv" > "%V%\init_export.csv"
+"%HAS%" /l /c:",0x21,1" "%V%\init_export.csv" >nul
+if errorlevel 1 (call :ng "init: the changed once value is written after reset") else (call :ok "init: the changed once value is written after reset")
+rem Change only the every value and the order; the set of once values stays the same.
+> "%V%\init_every.json" echo {"values":[{"name":"P2_bit.no0","value":"0","mode":"every"},{"name":"P1","value":"0x21","mode":"once"}]}
+call :post_code "%V%\init_every.json" init_every.out /api/init
+call :has_info "\"initStale\":false" "init: changing only every values and the order keeps initStale false"
+call :post_code "%G%\init_changed.json" init_restore.out /api/init
+call :post_code "%G%\init_hold.json" init_hold.out /api/write
+call :post_code "%G%\reset.json" init_reset.out /api/control
+call :post_code "%G%\step1.json" init_step4.out /api/control
+curl -s "%U%/api/export.csv" > "%V%\init_export.csv"
+"%HAS%" /l /c:",7,1" "%V%\init_export.csv" >nul
+if errorlevel 1 (call :ng "init: a hold on the same variable wins over the init value") else (call :ok "init: a hold on the same variable wins over the init value")
+call :post_code "%G%\init_release.json" init_release.out /api/write
+call :post_code "%G%\init_clear.json" init_clear.out /api/init
+call :post_code "%G%\reset.json" init_reset.out /api/control
 for /f "usebackq delims=" %%N in ("%T%\defines\type_contract_ro.txt") do call :const_api "%%N"
 "%HAS%" /l /c:"\"func\":\"TEST_cycle\",\"functions\":[" "%WORK%\info.json" >nul
 if errorlevel 1 (call :ng "/api/info") else (call :ok "/api/info")
@@ -1148,6 +1221,19 @@ exit /b 0
 :ng
 set /a FAIL+=1
 echo   FAIL  %~1
+exit /b 0
+
+:post_code
+rem POST file %1 to %3 and keep the response in %WORK%\gui\%2; the HTTP status code goes to CODE.
+set "CODE="
+for /f "usebackq delims=" %%C in (`curl -s -o "%WORK%\gui\%~2" -w "%%{http_code}" -X POST --data-binary "@%~1" "%U%%~3"`) do set "CODE=%%C"
+exit /b 0
+
+:has_info
+rem Check that /api/info contains the text %1 (check name %2).
+curl -s "%U%/api/info" > "%WORK%\gui\init_info.json"
+"%HAS%" /l /c:"%~1" "%WORK%\gui\init_info.json" >nul
+if errorlevel 1 (call :ng "%~2") else (call :ok "%~2")
 exit /b 0
 
 :run_cmp
