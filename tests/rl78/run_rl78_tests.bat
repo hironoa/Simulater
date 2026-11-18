@@ -322,6 +322,10 @@ if errorlevel 1 (call :ng "native: a header name uses the same #if branch as the
 if errorlevel 1 (call :ng "native: RAM written by address is read by the function") else (call :ok "native: RAM written by address is read by the function")
 "%RS%" info --cfg "%NC%" > "%NW%\info.log" 2>&1
 call :has "%NW%\info.log" "native sources=9 asm=1 files=9 off=1 compiled=0 reused=10 linked=0" "native: second open compiles nothing"
+"%RS%" run --cfg "%NC%" "%NW%\csv\native_basic.csv" -o "%NW%\out" > "%NW%\reuse.log" 2>&1
+call :has "%NW%\reuse.log" "OK 18, NG 0, NO Check 0" "native: cache reuse runs all rows"
+powershell -NoProfile -Command "if (Select-String -Quiet -LiteralPath (Join-Path $env:NW 'reuse.log') -Pattern '^native: .*\u7406\u7531: ') { exit 1 }"
+if errorlevel 1 (call :ng "native: cache reuse prints no compile reasons") else (call :ok "native: cache reuse prints no compile reasons")
 call :has "%NW%\info.log" "funcs=56 vars=24 opt=0" "native: variables and functions come from the debug information"
 call :has "%NW%\info.log" "defines auto=1" "native: header definitions are automatic"
 rem Integer-to-pointer conversions: 1 to 0xFFFF is a near address and gets 0xF0000 (native_near, on by default).
@@ -411,6 +415,7 @@ rem a header changes: only the sources that include it are compiled again (reg.h
 >> "%NW%\product\inc\reg.h" echo /* changed */
 "%RS%" info --cfg "%NC%" > "%NW%\info2.log" 2>&1
 call :has "%NW%\info2.log" "compiled=1 reused=9 linked=1" "native: a changed header recompiles only its users"
+call :has "%NW%\info2.log" "CHANGED=1" "native: a changed header reports CHANGED"
 >> "%NW%\product\inc\types.h" echo /* changed */
 "%RS%" info --cfg "%NC%" > "%NW%\info3.log" 2>&1
 call :has "%NW%\info3.log" "compiled=9 reused=1 linked=1" "native: a header used by every source recompiles them all"
@@ -421,9 +426,34 @@ rem a header of the same name appears earlier in the search order (next to the s
 copy /y "%NW%\product\inc\reg.h" "%NW%\product\src\reg.h" >nul
 "%RS%" info --cfg "%NC%" > "%NW%\info4.log" 2>&1
 call :has "%NW%\info4.log" "compiled=1 reused=9 linked=1" "native: a header that shadows another recompiles its users"
+call :has "%NW%\info4.log" "CANDIDATES=1" "native: a shadowing header reports CANDIDATES"
 del "%NW%\product\src\reg.h"
 "%RS%" info --cfg "%NC%" > "%NW%\info5.log" 2>&1
 call :has "%NW%\info5.log" "compiled=1 reused=9 linked=1" "native: removing the shadowing header recompiles again"
+
+rem Check the reason text during a run and the reason counts in info.
+>> "%NW%\product\inc\reg.h" echo /* changed again */
+"%RS%" run --cfg "%NC%" "%NW%\csv\native_basic.csv" -o "%NW%\out2" > "%NW%\reason.log" 2>&1
+"%HAS%" /b /l /c:"native: io.c " "%NW%\reason.log" > "%NW%\io_reason.log"
+call :has "%NW%\io_reason.log" "reg.h" "native: the compile reason names the changed header"
+
+set "IO_SIG="
+for /r "%NW%\driver\.simnative" %%F in (io-*.sig) do set "IO_SIG=%%F"
+if defined IO_SIG (
+    del "%IO_SIG%"
+    "%RS%" info --cfg "%NC%" > "%NW%\no_sig.log" 2>&1
+    call :has "%NW%\no_sig.log" "native compile reasons NO_SIG=1" "native: a deleted signature reports NO_SIG"
+    call :has "%NW%\no_sig.log" "compiled=1 reused=9 linked=1" "native: a deleted signature recompiles its unit"
+    powershell -NoProfile -Command "$lines = [IO.File]::ReadAllLines($env:IO_SIG); $legacy = @($lines[0]) + @($lines | Select-Object -Skip 2 | ForEach-Object { $_.Substring(17) }); [IO.File]::WriteAllText($env:IO_SIG, ($legacy -join [char]10) + [char]10, [Text.UTF8Encoding]::new($false))"
+    if errorlevel 1 call :ng "native: write a legacy signature"
+    "%RS%" info --cfg "%NC%" > "%NW%\old_sig.log" 2>&1
+    call :has "%NW%\old_sig.log" "BAD_SIG=1" "native: a legacy signature reports BAD_SIG"
+    call :has "%NW%\old_sig.log" "compiled=1 reused=9 linked=1" "native: a legacy signature recompiles its unit"
+    "%RS%" info --cfg "%NC%" > "%NW%\new_sig.log" 2>&1
+    call :has "%NW%\new_sig.log" "compiled=0 reused=10 linked=0" "native: the rewritten signature is reused"
+) else (
+    call :ng "native: io.c signature exists for invalidation tests"
+)
 copy /y "%NW%\extra\asm_impl.c" "%NW%\driver\asm_impl.c" >nul
 "%RS%" run --cfg "%NC%" "%NW%\csv\native_asmcall2.csv" -o "%NW%\out_asmcall2" > "%NW%\asmcall2.log" 2>&1
 call :has "%NW%\asmcall2.log" "OK 6, NG 0, NO Check 0" "native: native_src definition overrides the substitute"
