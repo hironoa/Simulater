@@ -1020,7 +1020,7 @@ set RC=%ERRORLEVEL%
 if "%RC%"=="0" (call :ok "build check_native_layout") else (call :ng "build check_native_layout" & type "%WORK%\native_layout_build.log")
 "%WORK%\check_native_layout.exe" > "%WORK%\native_layout.log" 2>&1
 set RC=%ERRORLEVEL%
-if "%RC%"=="0" (call :ok "native layout matching cases") else (call :ng "native layout matching cases" & type "%WORK%\native_layout.log")
+if "%RC%"=="0" (call :ok "native layout matching and DLL state cases") else (call :ng "native layout matching and DLL state cases" & type "%WORK%\native_layout.log")
 "%HAS%" /l /c:"cases, 0 failed" "%WORK%\native_layout.log" >nul
 if errorlevel 1 (call :ng "native layout ran its cases") else (call :ok "native layout ran its cases")
 

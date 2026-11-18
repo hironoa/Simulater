@@ -73,14 +73,14 @@ static int pair_cmp(const void *a, const void *b)
     return x->dll < y->dll ? -1 : x->dll > y->dll;
 }
 
-int native_layout_match(const native_layout_var *lm, size_t nlm, const native_layout_var *dll, size_t ndll, long *match)
+int native_layout_match(const native_layout_var *lm, size_t nlm, const native_layout_var *dll, size_t ndll, long *match, unsigned char *dll_state)
 {
     long *order = sim_xcalloc(ndll ? ndll : 1, sizeof *order);
-    unsigned char *taken = sim_xcalloc(ndll ? ndll : 1, 1);     /* 使った、またはあいまいで使えない dll の変数 */
     unsigned char *done = sim_xcalloc(nlm ? nlm : 1, 1);        /* 決まった（対応づけた、またはあいまい）lm の変数 */
     int *cnt_lm = sim_xcalloc(nlm ? nlm : 1, sizeof *cnt_lm), *cnt_dll = sim_xcalloc(ndll ? ndll : 1, sizeof *cnt_dll);
     pair_t *pairs = NULL;
     size_t npairs = 0, cap = 0, i, g, e, k;
+    memset(dll_state, NATIVE_LAYOUT_DLL_UNUSED, ndll);
     for (i = 0; i < ndll; i++) order[i] = (long)i;
     g_sort_base = dll;
     qsort(order, ndll, sizeof *order, index_cmp);
@@ -116,24 +116,24 @@ int native_layout_match(const native_layout_var *lm, size_t nlm, const native_la
     for (g = 0; g < npairs; g = e) {
         for (e = g; e < npairs && pairs[e].strength == pairs[g].strength; e++) {
             const pair_t *p = &pairs[e];
-            if (done[p->lm] || taken[p->dll]) continue;
+            if (done[p->lm] || dll_state[p->dll]) continue;
             cnt_lm[p->lm]++;
             cnt_dll[p->dll]++;
         }
         for (k = g; k < e; k++) {
             const pair_t *p = &pairs[k];
-            if (done[p->lm] || taken[p->dll]) continue;
+            if (done[p->lm] || dll_state[p->dll]) continue;
             if (cnt_lm[p->lm] == 1 && cnt_dll[p->dll] == 1)
-                match[p->lm] = dll[p->dll].product ? p->dll : NATIVE_LAYOUT_SRC;
+                match[p->lm] = p->dll;
             else
                 match[p->lm] = NATIVE_LAYOUT_AMBIGUOUS;
         }
         /* 決めた印は、同じ強さの組をすべて見てから付ける（並びに左右されないように） */
         for (k = g; k < e; k++) {
             const pair_t *p = &pairs[k];
-            if (!cnt_lm[p->lm] && !cnt_dll[p->dll]) continue;
-            if (cnt_lm[p->lm]) done[p->lm] = 1;
-            if (cnt_dll[p->dll]) taken[p->dll] = 1;
+            if (!cnt_lm[p->lm] || !cnt_dll[p->dll]) continue;
+            done[p->lm] = 1;
+            dll_state[p->dll] = match[p->lm] == p->dll ? NATIVE_LAYOUT_DLL_MATCHED : NATIVE_LAYOUT_DLL_AMBIGUOUS;
         }
         for (k = g; k < e; k++) {
             cnt_lm[pairs[k].lm] = 0;
@@ -142,7 +142,6 @@ int native_layout_match(const native_layout_var *lm, size_t nlm, const native_la
     }
     free(pairs);
     free(order);
-    free(taken);
     free(done);
     free(cnt_lm);
     free(cnt_dll);
