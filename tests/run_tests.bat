@@ -274,7 +274,8 @@ if "%CODE%"=="400" (call :ok "variants: saving a non-array variants is 400") els
 call :post_code "%G%\variants.json" variants_save.out /api/variants
 if "%CODE%"=="200" (call :ok "variants: save is 200") else (call :ng "variants: save is 200, got %CODE%")
 curl -s "%U%/api/variants" > "%V%\variants.out"
-"%HAS%" /l /c:"variants.json\"" "%V%\variants.out" >nul
+rem The JSON escapes the backslashes of the path, and the pattern keeps an even number of quotes for cmd.
+"%HAS%" /l /c:"gui\\variants.json" "%V%\variants.out" >nul
 if errorlevel 1 (call :ng "variants: path is relative to the cfg") else (call :ok "variants: path is relative to the cfg")
 if exist "%V%\variants.json" (call :ok "variants: saved next to the cfg") else (call :ng "variants: saved next to the cfg")
 "%HAS%" /l /c:"\"value\":\"0x20\"" "%V%\variants.out" >nul
