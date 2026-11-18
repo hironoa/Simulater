@@ -94,6 +94,17 @@ describe("ライブのレーン", () => {
     lane.series[1].yMin = -2; lane.series[1].yMax = 3;
     expect(liveLaneRange(record, lane, 1, 3)).toEqual({ lo: -2, hi: 5 });
   });
+  it("縦軸の同期の設定（重ね表示の syncRange、並べる表示の syncGroup）をレーンに渡す", () => {
+    const state = setup();
+    const unsynced = { ...group(["b", "a"], "overlap"), syncRange: false };
+    expect(buildLiveLanes({ ...state, signalGroups: [unsynced] }, ["a", "b"], 600)[0].syncRange).toBe(false);
+    expect(buildLiveLanes(state, ["a", "b"], 600)[0].syncRange).toBe(true);
+    const lanes = buildLiveLanes({ ...state, signalGroups: [group(["b", "a"])] }, ["a", "b", "c"], 600);
+    expect(lanes.map(l => l.syncKey)).toEqual(["b,a", "b,a", null]);
+    expect(lanes[0].rangeSeries?.map(s => s.sig)).toEqual(["b", "a"]);
+    const noSync = buildLiveLanes({ ...state, signalGroups: [{ ...group(["b", "a"]), syncRange: false }] }, ["a", "b"], 600);
+    expect(noSync.map(l => [l.syncKey, l.rangeSeries])).toEqual([[null, undefined], [null, undefined]]);
+  });
   it("raw 表示では固定の物理範囲を系列の変換に合わせる", () => {
     const state = setup();
     state.signalSettings.a = { ...setting(), yAuto: false, yMin: -15, yMax: 5 };

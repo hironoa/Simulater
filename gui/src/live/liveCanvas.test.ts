@@ -163,6 +163,64 @@ describe("drawLive", () => {
     expect(calls.some(c => c.startsWith("fillText(b,"))).toBe(true);
   });
 
+  // 系列ごとの線の y の範囲（clip の後の moveTo / lineTo から stroke まで）
+  const lineSpans = (calls: string[]) => {
+    const spans: { min: number; max: number }[] = [];
+    let cur: number[] | null = null;
+    for (const c of calls) {
+      if (c === "clip()") cur = [];
+      else if (cur && /^(moveTo|lineTo)\(/.test(c)) cur.push(Number(c.slice(c.indexOf(",") + 1, -1)));
+      else if (cur && c === "stroke()") { spans.push({ min: Math.min(...cur), max: Math.max(...cur) }); cur = null; }
+    }
+    return spans;
+  };
+  const twoScales = () => {
+    const r = new LiveRecord();
+    r.append(0, ["a", "b"], [[0, 0], [1, 1000]]);
+    return r;
+  };
+  const overlapAB = (syncRange: boolean) => ({ ...lane("a"), series: [...lane("a").series, ...lane("b").series], syncRange });
+
+  it("同期しない重ね表示は、系列ごとの範囲でレーンの高さいっぱいに描く", () => {
+    const { ctx, calls } = fake();
+    drawLive(ctx, 600, 200, 1, twoScales(), [overlapAB(false)], 2, 1, style);
+    const [a, b] = lineSpans(calls);
+    expect(a.max - a.min).toBeGreaterThan(80);
+    expect(b.max - b.min).toBeGreaterThan(80);
+  });
+
+  it("同期しない重ね表示で、片方の固定範囲がもう片方を切らない", () => {
+    const { ctx, calls } = fake();
+    const l = overlapAB(false);
+    l.series[0] = { ...l.series[0], yMin: 0, yMax: 1 };
+    drawLive(ctx, 600, 200, 1, twoScales(), [l], 2, 1, style);
+    const b = lineSpans(calls)[1];
+    expect(b.min).toBeGreaterThanOrEqual(10);
+    expect(b.max).toBeLessThanOrEqual(110);
+    expect(b.max - b.min).toBeGreaterThan(80);
+  });
+
+  it("同期する重ね表示は、全系列に共通の範囲で描く", () => {
+    const { ctx, calls } = fake();
+    drawLive(ctx, 600, 200, 1, twoScales(), [overlapAB(true)], 2, 1, style);
+    const [a, b] = lineSpans(calls);
+    expect(a.max - a.min).toBeLessThan(1);
+    expect(b.max - b.min).toBeGreaterThan(80);
+  });
+
+  it("同じ syncGroup の並べたレーンは同じ範囲、syncGroup のないレーンは自分の範囲", () => {
+    const group = [lane("a").series[0], lane("b").series[0]];
+    const synced = (sig: string) => ({ ...lane(sig), syncKey: "a,b", rangeSeries: group });
+    const { ctx, calls } = fake();
+    drawLive(ctx, 600, 200, 1, twoScales(), [synced("a"), synced("b")], 2, 1, style);
+    const [a, b] = lineSpans(calls);
+    expect(a.max - a.min).toBeLessThan(1);
+    expect(b.max - b.min).toBeGreaterThan(80);
+    const own = fake();
+    drawLive(own.ctx, 600, 200, 1, twoScales(), [lane("a"), lane("b")], 2, 1, style);
+    expect(lineSpans(own.calls)[0].max - lineSpans(own.calls)[0].min).toBeGreaterThan(80);
+  });
+
   it("記録が空でも落ちない", () => {
     const { ctx } = fake();
     expect(drawLive(ctx, 600, 200, 1, new LiveRecord(), [lane("a")], 100, 5, style)).toEqual({ points: 0, xMin: 0, xMax: 495 });

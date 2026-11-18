@@ -25,13 +25,33 @@ export interface LiveCanvasLane {
   top: number;
   height: number;
   series: LiveCanvasSeries[];
+  /**
+   * 重ね表示で縦軸をそろえるか（グループの syncRange）。偽なら系列ごとに自分の範囲で描き、目盛りは先頭の系列の範囲で描く。
+   * 省略時は真（共通の範囲）。止まっているときの表示（chartOptionsBuilder）と同じ規則。
+   */
+  syncRange?: boolean;
+  /**
+   * 重ねずに並べるグループで縦軸をそろえるとき（syncGroup）の、範囲を求める系列とそのまとまりの名前。
+   * 同じ syncKey のレーンは、1 フレームで 1 回だけ求めた同じ範囲を使う。
+   */
+  syncKey?: string | null;
+  rangeSeries?: LiveCanvasSeries[];
 }
 
-/** 固定範囲がある場合はその和、なければ窓内の全系列の範囲。 */
+/** 1 系列だけの範囲（固定範囲があればそれ、なければ窓の中の値）。 */
+export function liveSeriesRange(record: LiveRecord, s: LiveCanvasSeries, start: number, end: number) {
+  return laneRange(record.column(s.sig), start, end, s.conv, s.yMin, s.yMax);
+}
+
+/**
+ * レーンに共通の範囲。固定範囲の系列がある場合はその和、なければ窓内の全系列の範囲。
+ * syncGroup のレーンは、そのまとまりの全系列（rangeSeries）から求める。
+ */
 export function liveLaneRange(record: LiveRecord, lane: LiveCanvasLane, start: number, end: number) {
-  const fixed = lane.series.filter(s => s.yMin !== null || s.yMax !== null);
+  const all = lane.rangeSeries ?? lane.series;
+  const fixed = all.filter(s => s.yMin !== null || s.yMax !== null);
   let lo = Infinity, hi = -Infinity;
-  for (const s of fixed.length ? fixed : lane.series) {
+  for (const s of fixed.length ? fixed : all) {
     const range = laneRange(record.column(s.sig), start, end, s.conv, s.yMin, s.yMax);
     if (range) { lo = Math.min(lo, range.lo); hi = Math.max(hi, range.hi); }
   }
@@ -223,12 +243,25 @@ export function drawLive(
   const xTicks = niceTicks(xMin, xMax, Math.max(2, Math.floor(plotW / 110)));
   let points = 0;
 
+  // syncGroup の範囲は、まとまりごとに 1 フレームで 1 回だけ求める
+  const groupRanges = new Map<string, { lo: number; hi: number } | null>();
+
   lanes.forEach((lane, li) => {
     const top = lane.top, bottom = lane.top + lane.height;
-    const range = liveLaneRange(record, lane, start, end);
+    const perSeries = lane.syncRange === false && lane.series.length > 1;
+    let range: { lo: number; hi: number } | null;
+    if (perSeries) range = liveSeriesRange(record, lane.series[0], start, end);
+    else if (lane.syncKey) {
+      if (!groupRanges.has(lane.syncKey)) groupRanges.set(lane.syncKey, liveLaneRange(record, lane, start, end));
+      range = groupRanges.get(lane.syncKey)!;
+    } else range = liveLaneRange(record, lane, start, end);
+    const toY = (r: { lo: number; hi: number } | null) => {
+      const lo = r ? r.lo : 0, hi = r ? r.hi : 1;
+      const span = hi > lo ? hi - lo : 1;
+      return (p: number) => bottom - ((p - lo) / span) * lane.height;
+    };
+    const yPhys = toY(range);
     const lo = range ? range.lo : 0, hi = range ? range.hi : 1;
-    const ySpan = hi > lo ? hi - lo : 1;
-    const yPhys = (p: number) => bottom - ((p - lo) / ySpan) * lane.height;
 
     // 枠と目盛り線
     ctx.strokeStyle = style.splitColor;
@@ -282,11 +315,13 @@ export function drawLive(
     }
 
     // 波形
-    for (const series of lane.series) {
+    for (const [k, series] of lane.series.entries()) {
       const col = record.column(series.sig);
-      if (!col || !range || count === 0) continue;
+      const own = perSeries && k > 0 ? liveSeriesRange(record, series, start, end) : range;
+      if (!col || !own || count === 0) continue;
       const { lsb, offset } = series.conv;
-      const yOf = (raw: number) => yPhys(raw * lsb + offset);
+      const ySeries = own === range ? yPhys : toY(own);
+      const yOf = (raw: number) => ySeries(raw * lsb + offset);
       ctx.save();
       ctx.beginPath();
       ctx.rect(plotL, top, plotW, lane.height);
