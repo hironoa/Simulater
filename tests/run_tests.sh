@@ -713,6 +713,14 @@ data: {"periodMs":2,"func":"TEST_cycle","names":["g_eng.state","TEST_cycle_cnt",
     curl -s "$U/api/export.csv" | tr -d '\r' | sed -n '3p' > "$WORK/after_reset2.txt"
     check "reset は未消化の単発書き込みを捨てる" sh -c "! grep -q '800' '$WORK/after_reset2.txt'"
 
+    post watch_none.json init_watch_clear.out /api/watch > /dev/null
+    CODE=$(curl -s -o "$WORK/init_watch.out" -w '%{http_code}' -X POST --data-binary "@$T/gui/play_init_watch.csv" "$U/api/load-csv")
+    check "初期化専用列を除き通常列の重複を除いた名前を返す" sh -c '[ "$1" = 200 ] && grep -Fqx "$2" "$3"' sh "$CODE" '{"rows":1,"names":["P2_bit.no0","g_eng.state"]}' "$WORK/init_watch.out"
+    curl -s -N --max-time 1 "$U/api/stream" > "$WORK/init_watch.sse" 2>/dev/null
+    check "初期化専用列を監視せず通常列を一度だけ監視する" contains "$WORK/init_watch.sse" 'event: hello
+data: {"periodMs":2,"func":"TEST_cycle","names":["P2_bit.no0","g_eng.state"]}'
+    post watch.json init_watch_restore.out /api/watch > /dev/null
+
     CODE=$(curl -s -o "$WORK/load.out" -w '%{http_code}' -X POST --data-binary "@$T/gui/play.csv" "$U/api/load-csv")
     check "/api/load-csv が 200" test "$CODE" = 200
     check "/api/load-csv の応答" contains "$WORK/load.out" '{"rows":4,"names":["AMSTB_adc_read@AMIN_adc[0]","P2_bit.no0","g_eng.state","TEST_cycle_cnt"]}'
