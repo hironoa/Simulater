@@ -1,4 +1,5 @@
 import { useLiveStore } from "../live/liveStore";
+import { listedSignals } from "../utils/displaySignalName";
 import { saveLayout } from "../live/persist";
 import { create } from "zustand";
 import {
@@ -585,7 +586,8 @@ export const useWaveformStore = create<WaveformStore>((set, get) => ({
         }
 
         for (let sig in doc) {
-          if (sig === "groups" || sig === "inactive") continue;
+          // viewState は表示の状態で、信号ではない（信号の設定を作ると、左の一覧や名前の重なりに混ざる）
+          if (sig === "groups" || sig === "inactive" || sig === "viewState") continue;
           if (sig === "layoutMode") {
             const val = String(doc[sig]);
             if (["uniform", "optimized", "manual"].includes(val)) {
@@ -707,11 +709,11 @@ export const useWaveformStore = create<WaveformStore>((set, get) => ({
       });
     }
 
-    let unassignedSignals = [
-      ...(get().chartData?.seriesMap
-        ? Object.keys(get().chartData!.seriesMap)
-        : []),
-    ];
+    // 並べ直す対象は今のデータの信号。ライブの実行中はデータ（chartData）がないので、左に並んでいる信号を使う
+    // （空にすると、実行中に yaml を読んだだけで左の一覧とグループが空になる）
+    let unassignedSignals = get().chartData?.seriesMap
+      ? Object.keys(get().chartData!.seriesMap)
+      : listedSignals(get());
 
     // Preserve yaml order for unassigned signals
     let yamlSignalOrder: string[] = [];
@@ -720,7 +722,7 @@ export const useWaveformStore = create<WaveformStore>((set, get) => ({
         const doc = yaml.load(text) as Record<string, unknown>;
         if (doc) {
           for (let sig in doc) {
-            if (sig !== "groups" && sig !== "layoutMode" && sig !== "inactive") {
+            if (sig !== "groups" && sig !== "layoutMode" && sig !== "inactive" && sig !== "viewState") {
               yamlSignalOrder.push(sig);
             }
           }

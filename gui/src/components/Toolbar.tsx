@@ -1,4 +1,4 @@
-import { displaySignalName } from "../utils/displaySignalName";
+import { displaySignalName, listedSignals } from "../utils/displaySignalName";
 import React, { useRef, useState, useEffect } from "react";
 import { useWaveformStore } from "../store/useWaveformStore";
 import { useShallow } from "zustand/react/shallow";
@@ -494,7 +494,7 @@ export function Toolbar() {
           </span>
           <div className="w-px h-3 bg-slate-600 mr-3 flex-shrink-0"></div>
           <span title={hoveredSignal || undefined} className="text-xs font-mono text-cyan-400 truncate flex-1 text-left opacity-90 transition-opacity min-h-[16px] min-w-0">
-            {hoveredSignal ? displaySignalName(hoveredSignal, Object.keys(useWaveformStore.getState().signalSettings)) : ""}
+            {hoveredSignal ? displaySignalName(hoveredSignal, listedSignals(useWaveformStore.getState())) : ""}
           </span>
         </div>
       ) : (
