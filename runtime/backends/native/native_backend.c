@@ -59,6 +59,13 @@
 #include <unistd.h>
 #endif
 
+/* exec = native は Windows でだけ動く。ほかの OS では native_backend_open がすぐに戻るので、
+ * Windows でだけ呼ぶ関数が「使われていない」と警告される。ほかの OS ではこの警告だけを止める
+ * （Windows のビルドでは今までどおり警告するので、本当に使われていない関数はそこで見つかる）。 */
+#if !defined(_WIN32) && (defined(__GNUC__) || defined(__clang__))
+#pragma GCC diagnostic ignored "-Wunused-function"
+#endif
+
 #define WIN_LO 0xF0000u          /* 番地を再現する範囲 */
 #define WIN_HI 0x100000u
 #define HEAP_SIZE 0x100000u      /* $ptr 用の領域 */
@@ -2830,10 +2837,14 @@ static const char *exec_of(const sim_open_opts *o, sim_cfg *cfg)
 sim_backend *native_backend_open(const sim_open_opts *o, int *handled, char *err, size_t errlen)
 {
     nat *z = sim_xcalloc(1, sizeof *z);
+#ifdef _WIN32
+    /* Windows 以外ではすぐに戻るので、そこでしか使わない変数は Windows だけで宣言する（未使用の警告を出さない） */
     sim_backend *b;
     const char *s;
+    int i;
+#endif
     char cerr[1024];
-    int i, rc;
+    int rc;
 
     *handled = 0;
     sim_cfg_init(&z->cfg);
