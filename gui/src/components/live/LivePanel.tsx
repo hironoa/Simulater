@@ -1,10 +1,11 @@
 import React, { useState } from "react";
 import { ChevronDown, ChevronRight, PanelRightClose, PanelRightOpen } from "lucide-react";
+import { VariantsPanel } from "./VariantsPanel";
 import { InputPanel } from "./InputPanel";
 import { VariableMonitor } from "./VariableMonitor";
 import { cn } from "../../utils/helpers";
 
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
+function Section({ title, children, keepMounted = false }: { title: string; children: React.ReactNode; keepMounted?: boolean }) {
   const [open, setOpen] = useState(true);
   return (
     <div className="border-b border-gray-200 dark:border-slate-700">
@@ -12,7 +13,7 @@ function Section({ title, children }: { title: string; children: React.ReactNode
         onClick={() => setOpen(!open)}>
         {open ? <ChevronDown size={13} /> : <ChevronRight size={13} />}{title}
       </button>
-      {open && <div className="p-2">{children}</div>}
+      {(open || keepMounted) && <div className="p-2" hidden={!open}>{children}</div>}
     </div>
   );
 }
@@ -28,8 +29,9 @@ export function LivePanel() {
         onClick={() => { setOpen(!open); setTimeout(() => window.dispatchEvent(new Event("resize")), 0); }}>
         {open ? <span className="flex items-center gap-1 text-xs"><PanelRightClose size={14} /> 入力・監視</span> : <PanelRightOpen size={14} />}
       </button>
-      {open && (
-        <div className="flex-1 overflow-auto">
+      {(
+        <div className="flex-1 overflow-auto" hidden={!open}>
+          <Section title="仕向" keepMounted><VariantsPanel /></Section>
           <Section title="入力パネル"><InputPanel /></Section>
           <Section title="変数モニタ"><VariableMonitor /></Section>
         </div>

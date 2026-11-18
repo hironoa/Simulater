@@ -1,11 +1,15 @@
+import type { InitValue, VariantsDoc, VariantsResult } from "./variants";
 // `sim gui` の HTTP API クライアント（docs/DESIGN.md「5. GUI モード」）。
 
 export interface SimState {
   running: boolean;
   /** 失敗後、ターゲットを初期状態に戻すまで実行・書き込みを拒否する */
   needReset: boolean;
+  /** 実行後に once の一覧が変わり、リセットでの反映待ち */
+  initStale: boolean;
   step: number;
   speed: number;
+  inits?: InitValue[];
   holds: { name: string; value: number | string }[];
   overrun: boolean;
   /** 次の周期の開始時に書く単発書き込み（反映待ち）。名前ごとに 1 個 */
@@ -23,7 +27,7 @@ export interface PendingWrite {
 /** 関数の変更などで解決し直せずにサーバが外した固定・監視（直近の `/api/control`・`/api/load-csv` の分）。 */
 export interface DroppedItem {
   name: string;
-  kind: "hold" | "watch";
+  kind: "hold" | "watch" | "init";
   message: string;
 }
 
@@ -41,7 +45,7 @@ export function parseDropped(v: unknown): DroppedItem[] | undefined {
   if (!Array.isArray(v)) return undefined;
   return v.flatMap((d) => {
     if (!isObject(d) || typeof d.name !== "string" || !d.name) return [];
-    if (d.kind !== "hold" && d.kind !== "watch") return [];
+    if (d.kind !== "hold" && d.kind !== "watch" && d.kind !== "init") return [];
     return [{ name: d.name, kind: d.kind, message: typeof d.message === "string" ? d.message : "" }];
   });
 }
@@ -67,6 +71,7 @@ export function parsePending(v: unknown): PendingWrite[] | undefined {
 export function parseState(msg: unknown): StateMessage | null {
   if (!isObject(msg)) return null;
   const out: StateMessage = { needReset: msg.needReset === true };
+  if (typeof msg.initStale === "boolean") out.initStale = msg.initStale;
   if (typeof msg.running === "boolean") out.running = msg.running;
   if (typeof msg.step === "number") out.step = msg.step;
   if (typeof msg.speed === "number") out.speed = msg.speed;
@@ -79,6 +84,7 @@ export function parseState(msg: unknown): StateMessage | null {
       value: typeof h.value === "number" || typeof h.value === "string" ? h.value : String(h.value),
     }));
   }
+  if (Array.isArray(msg.inits)) out.inits = msg.inits.filter((v): v is InitValue => isObject(v) && typeof v.name === "string" && typeof v.value === "string" && (v.mode === "once" || v.mode === "every"));
   if (typeof msg.error === "string") out.error = msg.error;
   const dropped = parseDropped(msg.dropped);
   if (dropped) out.dropped = dropped;
@@ -92,7 +98,7 @@ export function parseControlResponse(res: unknown): StateMessage | null {
   if (!isObject(res)) return null;
   if (isObject(res.state)) return parseState(res.state);
   // state の項目が 1 つもなければ state ではない（`{"ok":true}` など）
-  const keys = ["running", "step", "speed", "holds", "overrun", "periodMs", "func", "dropped", "pending", "error", "needReset"];
+  const keys = ["running", "step", "speed", "holds", "overrun", "periodMs", "func", "dropped", "pending", "error", "needReset", "initStale", "inits"];
   return keys.some((k) => k in res) ? parseState(res) : null;
 }
 
@@ -152,7 +158,7 @@ export function parseLoadCsvResult(res: unknown): LoadCsvResult {
 }
 
 export class ApiError extends Error {
-  constructor(message: string, readonly status: number) {
+  constructor(message: string, readonly status: number, readonly errors: { name: string; message: string }[] = []) {
     super(message);
     this.name = "ApiError";
   }
@@ -179,7 +185,10 @@ export function createApi(base = "", fetchImpl: FetchLike = (input, init) => fet
 
   async function json<T>(path: string, init?: RequestInit): Promise<T> {
     const res = await fetchImpl(url(path), init);
-    if (!res.ok) throw new ApiError(await readError(res), res.status);
+    if (!res.ok) {
+      const detail = await res.clone().json().catch(() => ({}));
+      throw new ApiError(await readError(res), res.status, Array.isArray(detail.errors) ? detail.errors : []);
+    }
     const text = await res.text();
     return (text ? JSON.parse(text) : {}) as T;
   }
@@ -192,6 +201,9 @@ export function createApi(base = "", fetchImpl: FetchLike = (input, init) => fet
     });
 
   return {
+    getVariants: () => json<VariantsResult>("/api/variants"),
+    saveVariants: (doc: VariantsDoc) => post<{ ok: boolean; path: string }>("/api/variants", doc),
+    setInit: (values: InitValue[]) => post<{ ok: boolean }>("/api/init", { values }),
     info: (signal?: AbortSignal) => json<SimInfo>("/api/info", { signal }),
     symbols: (q: string, limit = 200, signal?: AbortSignal) =>
       json<SymbolEntry[]>(`/api/symbols?q=${encodeURIComponent(q)}&limit=${limit}`, { signal }),

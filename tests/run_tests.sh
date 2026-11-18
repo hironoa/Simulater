@@ -614,7 +614,8 @@ if ! command -v curl > /dev/null 2>&1; then
 else
     PORT=$((20000 + $$ % 20000))
     mkdir -p "$WORK/nohtml"
-    "$SIM" gui --no-browser --cfg "$T/defines/type_contract.cfg" --port "$PORT" --period-ms 2 --html-dir "$WORK/nohtml" > "$WORK/gui.log" 2>&1 &
+    printf 'defines = %s/defines/contracts/type_contract.h\ndefines_near_base = 0\ngui_variants = variants.json\n' "$T" > "$WORK/gui.cfg"
+    "$SIM" gui --no-browser --cfg "$WORK/gui.cfg" --port "$PORT" --period-ms 2 --html-dir "$WORK/nohtml" > "$WORK/gui.log" 2>&1 &
     GUI_PID=$!
     U="http://127.0.0.1:$PORT"
     i=0
@@ -624,6 +625,64 @@ else
     done
     if ! kill -0 "$GUI_PID" 2>/dev/null; then cat "$WORK/gui.log"; fi
     post() { curl -s -o "$WORK/$2" -w '%{http_code}' -X POST -H 'Content-Type: application/json' --data-binary "@$T/gui/$1" "$U$3"; }
+
+    # 仕向ファイルは sim.cfg と同じ作業用フォルダへ保存する（ソースのテスト資料を変更しない）。
+    curl -s "$U/api/variants" > "$WORK/variants.out"
+    check "仕向ファイルなしは exists:false, doc:null" contains "$WORK/variants.out" '"exists":false,"doc":null'
+    printf '{broken' > "$WORK/variants.json"
+    curl -s "$U/api/variants" > "$WORK/variants.out"
+    check "壊れた仕向ファイルは exists:true, doc:null" contains "$WORK/variants.out" '"exists":true,"doc":null'
+    check "壊れた仕向ファイルの理由" lacks "$WORK/variants.out" '"error":""'
+    CODE=$(post variants_bad.json variants_bad.out /api/variants)
+    check "variants が配列でない保存は 400" test "$CODE" = 400
+    CODE=$(post variants.json variants_save.out /api/variants)
+    check "仕向ファイル保存は 200" test "$CODE" = 200
+    curl -s "$U/api/variants" > "$WORK/variants.out"
+    check "仕向の保存先は cfg からの相対" contains "$WORK/variants.out" "$WORK/variants.json"
+    check "保存した仕向を読み直す" contains "$WORK/variants.out" '"selected":"国内"'
+    check "仕向の値の表記を保つ" contains "$WORK/variants.out" '"value":"0x20"'
+
+    CODE=$(post init_values.json init.out /api/init)
+    check "初期化一覧を設定" test "$CODE" = 200
+    curl -s "$U/api/info" > "$WORK/init_info"
+    check "ステップ 0 の once 変更は initStale が偽" contains "$WORK/init_info" '"initStale":false'
+    post step1.json init_step1.out /api/control > /dev/null
+    post init_changed.json init_change.out /api/init > /dev/null
+    curl -s "$U/api/info" > "$WORK/init_info"
+    check "実行後の once 変更は initStale が真" contains "$WORK/init_info" '"initStale":true'
+    post init_changed.json init_repeat.out /api/init > /dev/null
+    curl -s "$U/api/info" > "$WORK/init_info"
+    check "同じ一覧の再送でも initStale は真のまま" contains "$WORK/init_info" '"initStale":true'
+    post step1.json init_step2.out /api/control > /dev/null
+    curl -s "$U/api/export.csv" > "$WORK/init_export.csv"
+    tr -d '\r' < "$WORK/init_export.csv" | tail -n 2 > "$WORK/init_rows"
+    printf ',0x20,1\n,,1\n' > "$WORK/init_expected"
+    check "once は最初の周期だけ、every は毎周期、途中の once 変更は適用しない" cmp -s "$WORK/init_rows" "$WORK/init_expected"
+    check "初期化記録を sim run で再実行" sh -c "\"$SIM\" run \"$WORK/init_export.csv\" -o \"$WORK/init_replay\" --quiet > /dev/null 2>&1"
+    CODE=$(post init_bad.json init_bad.out /api/init)
+    check "不正な初期化名は 400" test "$CODE" = 400
+    check "初期化のエラーは名前ごと" contains "$WORK/init_bad.out" '"errors":[{"name":"no_such_init","message":'
+    curl -s "$U/api/info" > "$WORK/init_info"
+    check "不正な初期化の一覧を部分適用しない" contains "$WORK/init_info" '"inits":[{"name":"P1","value":"0x21","mode":"once"},{"name":"P2_bit.no0","value":"1","mode":"every"}]'
+    post reset.json init_reset.out /api/control > /dev/null
+    check "リセットで initStale は偽" contains "$WORK/init_reset.out" '"initStale":false'
+    post step1.json init_step3.out /api/control > /dev/null
+    curl -s "$U/api/export.csv" > "$WORK/init_export.csv"
+    check "リセットすると変更した once が反映" contains "$WORK/init_export.csv" ',0x21,1'
+    # once の組を変えず順番と every だけを変える。
+    printf '%s' '{"values":[{"name":"P2_bit.no0","value":"0","mode":"every"},{"name":"P1","value":"0x21","mode":"once"}]}' > "$WORK/init_every.json"
+    curl -s -X POST -H 'Content-Type: application/json' --data-binary "@$WORK/init_every.json" "$U/api/init" > "$WORK/init_every.out"
+    curl -s "$U/api/info" > "$WORK/init_info"
+    check "every だけの変更と並べ替えは initStale が偽のまま" contains "$WORK/init_info" '"initStale":false'
+    post init_changed.json init_restore.out /api/init > /dev/null
+    post init_hold.json init_hold.out /api/write > /dev/null
+    post reset.json init_reset.out /api/control > /dev/null
+    post step1.json init_step4.out /api/control > /dev/null
+    curl -s "$U/api/export.csv" > "$WORK/init_export.csv"
+    check "同じ変数の固定が初期化より優先" contains "$WORK/init_export.csv" ',7,1'
+    post init_release.json init_release.out /api/write > /dev/null
+    post init_clear.json init_clear.out /api/init > /dev/null
+    post reset.json init_reset.out /api/control > /dev/null
 
     while read -r const_name; do
         curl -s -G --data-urlencode "q=$const_name" "$U/api/symbols" > "$WORK/const_symbol.json"

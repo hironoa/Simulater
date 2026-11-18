@@ -82,6 +82,10 @@ const get = (n) => (isArg(n) ? argValues.get(n) ?? 0 : values[leafIndex.get(n)])
 const put = (n, v) => { if (isArg(n)) argValues.set(n, v); else values[leafIndex.get(n)] = v; };
 
 // ---- 実行状態 ----
+let variantsDoc = null;
+let inits = [];
+let initStale = false;
+const oncePairs = rows => JSON.stringify(rows.filter(row => row.mode === "once").map(row => JSON.stringify([row.name, row.value])).sort());
 let running = false;
 let step = 0; // 次に実行するステップ番号（記録上は 0 始まり）
 let speed = 1;
@@ -146,6 +150,7 @@ function writeVar(name, value) {
 }
 
 function runOneStep() {
+  for (const row of inits) if (row.mode === "every" || step === 0) writeVar(row.name, row.value);
   // 周期の開始時に書く: 単発（反映待ち）→ 固定 → CSV 再生 の順（同じ名前は後のものが残る）
   for (const [n, v] of pending) if (resolvable(n)) writeVar(n, v);
   pending.clear();
@@ -202,7 +207,7 @@ function send(res, event, data) {
 }
 const broadcast = (event, data) => { for (const c of clients) send(c, event, data); };
 const stateMsg = () => ({
-  running, step, speed, holds: [...holds].map(([name, value]) => ({ name, value: holdJson(value) })), overrun,
+  inits, initStale, running, step, speed, holds: [...holds].map(([name, value]) => ({ name, value: holdJson(value) })), overrun,
   periodMs, func, playback: !!csvPlay, needReset: false, error: "", dropped,
   pending: [...pending].map(([name, value]) => ({ name, value })),
 });
@@ -238,7 +243,7 @@ function setWatch(names) {
 }
 
 function resetTarget() {
-  flushSamples(); resetValues(); argValues = new Map(); step = 0; record = []; pending.clear(); prevButton = 0; rebase(); markValues();
+  flushSamples(); resetValues(); argValues = new Map(); step = 0; initStale = false; record = []; pending.clear(); prevButton = 0; rebase(); markValues();
 }
 
 /** 対象関数を変える: リセットして記録を区切り、新しい関数で解決できない固定・監視を外す。 */
@@ -247,6 +252,11 @@ function changeFunc(name) {
   csvPlay = null;
   resetTarget();
   for (const n of watch) if (!resolvable(n)) dropped.push({ name: n, kind: "watch", message: unresolvedMessage(n) });
+  inits = inits.filter(row => {
+    if (resolvable(row.name)) return true;
+    dropped.push({ name: row.name, kind: "init", message: unresolvedMessage(row.name) });
+    return false;
+  });
   for (const n of [...holds.keys()]) {
     if (resolvable(n)) continue;
     dropped.push({ name: n, kind: "hold", message: unresolvedMessage(n) });
@@ -402,6 +412,28 @@ const server = http.createServer(async (req, res) => {
         .map((name) => ({ name, message: byName.has(name) ? "構造体・配列は要素を指定してください" : unresolvedMessage(name) }));
       setWatch(names.filter(resolvable));
       return json(res, 200, { errors });
+    }
+    if (url.pathname === "/api/variants" && req.method === "GET") return json(res, 200, { path: "(メモリ)/sim_gui_variants.json", exists: variantsDoc !== null, doc: variantsDoc, error: "" });
+    if (url.pathname === "/api/variants" && req.method === "POST") {
+      const body = JSON.parse(await readBody(req));
+      if (!body || typeof body !== "object" || Array.isArray(body) || !Array.isArray(body.variants)) return json(res, 400, { error: "variants 配列が必要です" });
+      variantsDoc = body;
+      return json(res, 200, { ok: true, path: "(メモリ)/sim_gui_variants.json" });
+    }
+    if (url.pathname === "/api/init" && req.method === "POST") {
+      const body = JSON.parse(await readBody(req));
+      if (!Array.isArray(body?.values)) return json(res, 400, { error: "values 配列が必要です" });
+      const errors = body.values.flatMap(row => {
+        const name = row?.name ?? "";
+        if (!resolvable(name) || !symOf(name)?.writable) return [{ name, message: unresolvedMessage(name) }];
+        if (typeof row.value !== "string" || parseCell(row.value) === null || !["once", "every"].includes(row.mode)) return [{ name, message: "値または書き方が不正です" }];
+        return [];
+      });
+      if (errors.length) return json(res, 400, { errors });
+      if (step !== 0 && oncePairs(inits) !== oncePairs(body.values)) initStale = true;
+      inits = body.values;
+      broadcastState();
+      return json(res, 200, { ok: true });
     }
     if (req.method === "POST" && url.pathname === "/api/write") {
       const body = JSON.parse((await readBody(req)).toString("utf8") || "{}");

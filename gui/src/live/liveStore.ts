@@ -31,7 +31,7 @@ export const initialLiveState: LiveStoreState = {
   mode: "detecting",
   info: null,
   connected: false,
-  sim: { needReset: false, running: false, step: 0, speed: 1, holds: [], overrun: false, pending: [], error: "", periodMs: 5, func: "" },
+  sim: { initStale: false, needReset: false, running: false, step: 0, speed: 1, holds: [], overrun: false, pending: [], error: "", periodMs: 5, func: "" },
   serverWatch: [],
   watchErrors: {},
   inputs: DEFAULT_LAYOUT.inputs,

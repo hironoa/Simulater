@@ -5,6 +5,10 @@
 #include "sim_platform.h"
 
 #include <math.h>
+#include <errno.h>
+#ifdef _WIN32
+#include <windows.h>
+#endif
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -48,6 +52,11 @@ typedef struct {
     uint64_t watch_ver;
     hold_t *holds;
     int nholds;
+    hold_t *inits;
+    int *init_every;
+    int ninits;
+    int init_stale;          /* 実行後に once の一覧が変わり、リセット待ち */
+    const char *variants_path;
     pend_t *pend;
     int npend;
     /* 関数の変更などで解決し直せずに外した固定・監視（直近の /api/control・/api/load-csv の分）。
@@ -214,9 +223,14 @@ static int apply_inputs_locked(char **in, int *nin)
 {
     char err[1024];
     int i, j, failed = 0, npv = G.play_active ? G.play.nin : 0;
-    int n = 0, cap = G.npend + G.nholds + (G.play_active ? G.play.nin : 0) + 1;
+    int n = 0, cap = G.ninits + G.npend + G.nholds + (G.play_active ? G.play.nin : 0) + 1;
     step_in_t *v = sim_xcalloc((size_t)cap, sizeof *v);
     sim_cellval *pv = sim_xcalloc((size_t)(G.play_active ? G.play.nin : 0) + 1, sizeof *pv);
+    for (i = 0; i < G.ninits; i++) {
+        hold_t *h = &G.inits[i];
+        if ((!G.init_every[i] && G.step != 0) || !sim_cellval_present(&h->val)) continue;
+        v[n].col = h->col; v[n].seq = n; v[n].ref = h->ref; v[n].val = &h->val; v[n].text = h->text; n++;
+    }
     for (i = 0; i < G.npend; i++) {
         pend_t *p = &G.pend[i];
         if (!sim_cellval_present(&p->val)) continue;
@@ -489,6 +503,15 @@ static void json_state(sim_buf *b)
     sim_buf_printf(b, "{\"running\":%s,\"step\":%llu,\"speed\":", G.running || G.budget ? "true" : "false",
                    (unsigned long long)G.step);
     sim_buf_json_num(b, G.speed);
+    sim_buf_printf(b, ",\"initStale\":%s", G.init_stale ? "true" : "false");
+    sim_buf_adds(b, ",\"inits\":[");
+    for (int i = 0; i < G.ninits; i++) {
+        if (i) sim_buf_addc(b, ',');
+        sim_buf_adds(b, "{\"name\":"); sim_buf_json_str(b, G.inits[i].name);
+        sim_buf_adds(b, ",\"value\":"); sim_buf_json_str(b, G.inits[i].text);
+        sim_buf_printf(b, ",\"mode\":\"%s\"}", G.init_every[i] ? "every" : "once");
+    }
+    sim_buf_addc(b, ']');
     sim_buf_adds(b, ",\"holds\":");
     json_holds(b);
     sim_buf_printf(b, ",\"overrun\":%s,\"periodMs\":", G.overrun ? "true" : "false");
@@ -1007,6 +1030,135 @@ static int is_int_literal(const char *s, size_t n)
     return 1;
 }
 
+/* /api/write と /api/init の共通検査。失敗時は所有物を残さない。 */
+static int prepare_input(const char *name, const char *text, sim_ref **ref, sim_cellval *cv, char *err, size_t len)
+{
+    *ref = sim_ref_parse(G.c, name, err, len);
+    if (!*ref) return -1;
+    if (!sim_ref_writable(*ref)) snprintf(err, len, "'%s' には書き込めません", name);
+    else if (strchr(text, '\r') || strchr(text, '\n')) snprintf(err, len, "値に改行は使えません");
+    else {
+        if (sim_parse_cell(text, strlen(text), cv, err, len)) { sim_ref_free(*ref); return -1; }
+        if (!sim_ref_check_value(*ref, cv, err, len)) return 0;
+        sim_cellval_free(cv);
+    }
+    sim_ref_free(*ref);
+    return -1;
+}
+
+/* once の name/value を重複数も含めて比較する。並び順と every は無視する。 */
+static int same_once(const hold_t *items, const int *every, int n)
+{
+    int old_n = 0, new_n = 0, same = 1;
+    int *matched = sim_xcalloc(n + 1, sizeof *matched);
+    for (int i = 0; i < n; i++) if (!every[i]) new_n++;
+    for (int i = 0; i < G.ninits; i++) {
+        if (G.init_every[i]) continue;
+        old_n++;
+        int j;
+        for (j = 0; j < n; j++) {
+            if (!every[j] && !matched[j] && !strcmp(G.inits[i].name, items[j].name) &&
+                !strcmp(G.inits[i].text, items[j].text)) { matched[j] = 1; break; }
+        }
+        if (j == n) same = 0;
+    }
+    free(matched);
+    return same && old_n == new_n;
+}
+
+static void api_init(sim_sock sock, req_t *r)
+{
+    sj_value *doc = parse_body(sock, r), *arr, *it;
+    hold_t *items;
+    int *every, n = 0;
+    sim_buf errors;
+    char err[1024];
+    if (!doc) return;
+    arr = sj_get(doc, "values");
+    if (!arr || arr->type != SJ_ARR) { send_error(sock, 400, "values は配列にしてください"); sj_free(doc); return; }
+    items = sim_xcalloc(arr->nchild + 1, sizeof *items);
+    every = sim_xcalloc(arr->nchild + 1, sizeof *every);
+    sim_buf_init(&errors);
+    sim_mutex_lock(G.mu);
+    for (it = arr->child; it; it = it->next) {
+        const char *name = sj_get_str(it, "name", ""), *text = sj_get_str(it, "value", NULL);
+        const char *mode = sj_get_str(it, "mode", "");
+        err[0] = 0;
+        if (G.need_reset) snprintf(err, sizeof err, "リセットが必要です");
+        else if (!*name || !text || (strcmp(mode, "once") && strcmp(mode, "every"))) snprintf(err, sizeof err, "name・value・mode が不正です");
+        else if (!prepare_input(name, text, &items[n].ref, &items[n].val, err, sizeof err)) {
+            items[n].name = sim_xstrdup(name); items[n].text = sim_xstrdup(text);
+            every[n++] = !strcmp(mode, "every");
+            continue;
+        }
+        if (errors.len) sim_buf_addc(&errors, ',');
+        sim_buf_adds(&errors, "{\"name\":"); sim_buf_json_str(&errors, name);
+        sim_buf_adds(&errors, ",\"message\":"); sim_buf_json_str(&errors, err); sim_buf_addc(&errors, '}');
+    }
+    if (!errors.len && !G.need_reset) {
+        if (G.step != 0 && !same_once(items, every, n)) G.init_stale = 1;
+        for (int i = 0; i < G.ninits; i++) free_hold(&G.inits[i]);
+        free(G.inits); free(G.init_every);
+        G.inits = items; G.init_every = every; G.ninits = n;
+        for (int i = 0; i < n; i++) items[i].col = col_index(&G.in_cols, &G.nin_cols, items[i].name);
+        state_changed();
+    } else {
+        for (int i = 0; i < n; i++) free_hold(&items[i]);
+        free(items); free(every);
+    }
+    sim_mutex_unlock(G.mu);
+    if (errors.len) {
+        sim_buf out; sim_buf_init(&out); sim_buf_adds(&out, "{\"errors\":[");
+        sim_buf_add(&out, errors.p, errors.len); sim_buf_adds(&out, "]}"); send_json(sock, 400, &out); sim_buf_free(&out);
+    } else if (G.need_reset) send_error(sock, 400, "リセットが必要です");
+    else send_resp(sock, 200, "application/json", "{\"ok\":true}", 11, NULL);
+    sim_buf_free(&errors); sj_free(doc);
+}
+
+static void api_variants(sim_sock sock, req_t *r)
+{
+    sim_buf out;
+    char err[1024] = "", *text = NULL;
+    size_t len = 0;
+    sj_value *doc = NULL;
+    int exists = 0;
+    sim_buf_init(&out);
+    sim_mutex_lock(G.mu);
+    if (!strcmp(r->method, "POST")) {
+        doc = sj_parse(r->body, r->body_len, err, sizeof err);
+        if (!doc || doc->type != SJ_OBJ || !sj_get(doc, "variants") || sj_get(doc, "variants")->type != SJ_ARR) {
+            sj_free(doc); sim_mutex_unlock(G.mu); send_error(sock, 400, "variants 配列を持つ JSON オブジェクトが必要です"); return;
+        }
+        char *tmp = sim_xmalloc(strlen(G.variants_path) + 40);
+        sprintf(tmp, "%s.tmp", G.variants_path);
+        int rc = sim_write_file(tmp, r->body, r->body_len);
+        if (!rc) {
+#ifdef _WIN32
+            wchar_t *from = sim_win_wide(tmp), *to = sim_win_wide(G.variants_path);
+            rc = (!from || !to || !MoveFileExW(from, to, MOVEFILE_REPLACE_EXISTING)) ? -1 : 0;
+            free(from); free(to);
+#else
+            rc = rename(tmp, G.variants_path);
+#endif
+        }
+        if (rc) { sim_remove_file(tmp); free(tmp); sj_free(doc); sim_mutex_unlock(G.mu); send_error(sock, 500, "仕向ファイルを保存できません"); return; }
+        free(tmp);
+        sim_buf_adds(&out, "{\"ok\":true,\"path\":"); sim_buf_json_str(&out, G.variants_path); sim_buf_addc(&out, '}');
+    } else {
+        errno = 0;
+        text = sim_read_file(G.variants_path, &len);
+        exists = text != NULL || errno != ENOENT;
+        if (text) doc = sj_parse(text, len, err, sizeof err);
+        else if (exists) snprintf(err, sizeof err, "仕向ファイルを読めません");
+        sim_buf_adds(&out, "{\"path\":"); sim_buf_json_str(&out, G.variants_path);
+        sim_buf_printf(&out, ",\"exists\":%s,\"doc\":", exists ? "true" : "false");
+        if (doc) sim_buf_add(&out, text, len); else sim_buf_adds(&out, "null");
+        sim_buf_adds(&out, ",\"error\":"); sim_buf_json_str(&out, err); sim_buf_addc(&out, '}');
+    }
+    sim_mutex_unlock(G.mu);
+    send_json(sock, 200, &out); sim_buf_free(&out); sj_free(doc); free(text);
+}
+
 /* 書き込みは止まっているときもすぐにはメモリへ反映しない。単発は反映待ち（名前ごとに最後の 1 個）、固定は固定の一覧に
  * 入れ、次のステップの開始時に apply_inputs_locked が入力列の順に書いて記録する（sim run が CSV の 1 行を処理するのと
  * 同じ規則なので、記録と保存した CSV の再実行が一致する）。値の検証はここで行い、だめなら 400 */
@@ -1065,40 +1217,8 @@ static void api_write(sim_sock s, req_t *r)
     }
     else if (val->num == floor(val->num) && fabs(val->num) < 9e18) snprintf(num, sizeof num, "%lld", (long long)val->num);
     else snprintf(num, sizeof num, "%.17g", val->num);
-    ref = sim_ref_parse(G.c, name, err, sizeof err);
-    if (!ref) { sim_mutex_unlock(G.mu); send_error(s, 400, err); sj_free(v); return; }
-    if (!sim_ref_writable(ref)) {
-        sim_ref_free(ref);
-        sim_mutex_unlock(G.mu);
-        snprintf(err, sizeof err, "'%s' には書き込めません", name);
-        send_error(s, 400, err);
-        sj_free(v);
-        return;
-    }
-    if (strchr(text, '\r') || strchr(text, '\n')) {
-        /* 記録を CSV に保存すると行が割れて再実行できないので受け付けない */
-        sim_ref_free(ref);
-        sim_mutex_unlock(G.mu);
-        send_error(s, 400, "値に改行は使えません");
-        sj_free(v);
-        return;
-    }
-    if (sim_parse_cell(text, strlen(text), &cv, err, sizeof err)) {
-        sim_ref_free(ref);
-        sim_mutex_unlock(G.mu);
-        send_error(s, 400, err);
-        sj_free(v);
-        return;
-    }
-    if (sim_ref_check_value(ref, &cv, err, sizeof err)) {
-        /* 型に収まらない値、'$' の値、要素数の超過など。ポインタの先のようにその時のメモリで決まるものは
-         * ステップで書くときにエラー（state の error）になる */
-        sim_ref_free(ref);
-        sim_cellval_free(&cv);
-        sim_mutex_unlock(G.mu);
-        send_error(s, 400, err);
-        sj_free(v);
-        return;
+    if (prepare_input(name, text, &ref, &cv, err, sizeof err)) {
+        sim_mutex_unlock(G.mu); send_error(s, 400, err); sj_free(v); return;
     }
     if (hold) {
         hold_t *h = NULL;
@@ -1179,6 +1299,24 @@ static void reresolve_locked(void)
         G.holds[n++] = G.holds[i];
     }
     G.nholds = n;
+    for (i = n = 0; i < G.ninits; i++) {
+        sim_ref *r = sim_ref_parse(G.c, G.inits[i].name, err, sizeof err);
+        if (r && !sim_ref_writable(r)) {
+            snprintf(err, sizeof err, "'%s' には書き込めません", G.inits[i].name);
+            sim_ref_free(r);
+            r = NULL;
+        }
+        if (!r) {
+            add_dropped(G.inits[i].name, "init", err);
+            free_hold(&G.inits[i]);
+            continue;
+        }
+        sim_ref_free(G.inits[i].ref);
+        G.inits[i].ref = r;
+        G.init_every[n] = G.init_every[i];
+        G.inits[n++] = G.inits[i];
+    }
+    G.ninits = n;
     G.watch_ver++;
     state_changed();
     values_changed();
@@ -1251,6 +1389,7 @@ static void rebuild_cols_locked(void)
                 G.in_cols[G.nin_cols++] = sim_xstrdup(G.play.names[i]);
             } else G.play_col_ids[i] = col_index(&G.in_cols, &G.nin_cols, G.play.names[i]);
         }
+    for (i = 0; i < G.ninits; i++) G.inits[i].col = col_index(&G.in_cols, &G.nin_cols, G.inits[i].name);
     for (i = 0; i < G.nholds; i++) G.holds[i].col = col_index(&G.in_cols, &G.nin_cols, G.holds[i].name);
     for (i = 0; i < G.nwatch; i++) G.watch[i].col = col_index(&G.out_cols, &G.nout_cols, G.watch[i].name);
 }
@@ -1268,6 +1407,7 @@ static void reset_locked(void)
     }
     sim_ctx_clear_args(G.c);
     G.step = 0;
+    G.init_stale = 0;
     G.overrun = 0;
     G.budget = 0;
     G.play_pos = 0;
@@ -1753,6 +1893,8 @@ static void handle_conn(void *arg)
     else if (strcmp(r.method, "GET") == 0 && strcmp(r.path, "/api/export.csv") == 0) api_export(s);
     else if (strcmp(r.method, "POST") == 0 && strcmp(r.path, "/api/control") == 0) api_control(s, &r);
     else if (strcmp(r.method, "POST") == 0 && strcmp(r.path, "/api/watch") == 0) api_watch(s, &r);
+    else if ((!strcmp(r.method, "GET") || !strcmp(r.method, "POST")) && !strcmp(r.path, "/api/variants")) api_variants(s, &r);
+    else if (!strcmp(r.method, "POST") && !strcmp(r.path, "/api/init")) api_init(s, &r);
     else if (strcmp(r.method, "POST") == 0 && strcmp(r.path, "/api/write") == 0) api_write(s, &r);
     else if (strcmp(r.method, "POST") == 0 && strcmp(r.path, "/api/load-csv") == 0) api_load_csv(s, &r);
     else if (strncmp(r.path, "/api/", 5) == 0) {
@@ -1772,6 +1914,7 @@ int sim_gui_run(sim_ctx *c, const sim_gui_opts *o)
     sim_sock ls;
     memset(&G, 0, sizeof G);
     G.c = c;
+    G.variants_path = o->variants_path ? o->variants_path : "sim_gui_variants.json";
     G.b = sim_ctx_backend(c);
     G.mu = sim_mutex_new();
     G.cv = sim_cond_new();

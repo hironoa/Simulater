@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { dispatchStreamEvent, type EventSourceLike, type StreamHandlers } from "./stream";
-import { createApi } from "./api";
+import { ApiError, createApi, type SimApi } from "./api";
 import { createLiveController } from "./controller";
+import { useVariantsStore } from "./variantsStore";
 import { LiveRecord } from "./liveRecord";
 import { initialLiveState, useLiveStore } from "./liveStore";
 import { useWaveformStore, LIVE_FILE_NAME } from "../store/useWaveformStore";
@@ -97,6 +98,7 @@ describe("ライブ制御（SSE の取り込み）", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     useLiveStore.setState({ ...initialLiveState });
+    useVariantsStore.setState({ errors: {} });
     useWaveformStore.setState({ chartData: null, signalSettings: {}, unassignedSignals: [], signalGroups: [], cursors: [], fileName: null });
     posted = [];
     record = new LiveRecord();
@@ -115,7 +117,7 @@ describe("ライブ制御（SSE の取り込み）", () => {
   });
   afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
 
-  function makeController() {
+  function makeController(apiOverrides: Partial<SimApi> = {}) {
     const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (init?.method === "POST") posted.push({ url, body: url.endsWith("/api/load-csv") ? init.body : JSON.parse(String(init.body)) });
@@ -132,13 +134,83 @@ describe("ライブ制御（SSE の取り込み）", () => {
       return new Response("{}");
     });
     return createLiveController({
-      api: createApi("", fetchImpl as unknown as typeof fetch),
+      api: { ...createApi("", fetchImpl as unknown as typeof fetch), ...apiOverrides },
       record,
       protocol: "http:",
       createEventSource: (u) => new FakeEventSource(u),
       notify,
     });
   }
+
+  describe("起動時の仕向の同期", () => {
+    const values = [{ name: "a", value: "0x20", mode: "every" as const }];
+    it.each([
+      { name: "選択なし", exists: true, doc: { selected: "", variants: [{ name: "国内", values }] }, error: "", expected: [] },
+      { name: "選択あり", exists: true, doc: { selected: "国内", variants: [{ name: "国内", values }] }, error: "", expected: values },
+      { name: "ファイルなし", exists: false, doc: null, error: "", expected: [] },
+      { name: "壊れたファイル", exists: true, doc: null, error: "JSON を読めません", expected: [] },
+    ])("$name のとき画面の選択に合わせて setInit を送る", async ({ exists, doc, error, expected }) => {
+      const setInit = vi.fn().mockResolvedValue({ ok: true });
+      const live = makeController({ getVariants: vi.fn().mockResolvedValue({ path: "variants.json", exists, doc, error }), setInit });
+      try {
+        expect(await live.start()).toBe(true);
+        expect(setInit).toHaveBeenCalledExactlyOnceWith(expected);
+      } finally { live.stop(); }
+    });
+
+    it.each([
+      { status: 400, expected: { "": "初期化できません", a: "変数がありません" } },
+      { status: 404, expected: {} },
+    ])("起動時の $status を反映エラーとして判定する", async ({ status, expected }) => {
+      useVariantsStore.setState({ errors: { "": "前回の失敗" } });
+      const live = makeController({
+        getVariants: vi.fn().mockResolvedValue({ path: "variants.json", exists: true, doc: null, error: "ファイル破損" }),
+        setInit: vi.fn().mockRejectedValue(new ApiError("初期化できません", status, [{ name: "a", message: "変数がありません" }])),
+      });
+      try {
+        expect(await live.start()).toBe(true);
+        expect(useVariantsStore.getState().errors).toEqual(expected);
+        expect(useVariantsStore.getState().error).toBe("ファイル破損");
+      } finally { live.stop(); }
+    });
+
+    it("API 以外の反映エラーも保持する", async () => {
+      const live = makeController({ setInit: vi.fn().mockRejectedValue(new Error("通信失敗")) });
+      try {
+        expect(await live.start()).toBe(true);
+        expect(useVariantsStore.getState().errors).toEqual({ "": "通信失敗" });
+      } finally { live.stop(); }
+    });
+
+    it("仕向の取得が例外で失敗しても setInit([]) を送る", async () => {
+      const setInit = vi.fn().mockResolvedValue({ ok: true });
+      const live = makeController({ getVariants: vi.fn().mockRejectedValue(new Error("接続失敗")), setInit });
+      try {
+        expect(await live.start()).toBe(true);
+        expect(setInit).toHaveBeenCalledExactlyOnceWith([]);
+      } finally { live.stop(); }
+    });
+
+    it("仕向の取得と setInit が両方失敗してもライブモードを開始する", async () => {
+      const setInit = vi.fn().mockRejectedValue(new Error("404"));
+      const live = makeController({ getVariants: vi.fn().mockRejectedValue(new Error("接続失敗")), setInit });
+      try {
+        expect(await live.start()).toBe(true);
+        expect(setInit).toHaveBeenCalledExactlyOnceWith([]);
+        expect(useLiveStore.getState().mode).toBe("live");
+      } finally { live.stop(); }
+    });
+  });
+
+  it("再読み込み時の initStale と SSE のリセットを反映する", async () => {
+    const live = makeController({ info: vi.fn().mockResolvedValue({ ...info, state: { ...info.state, initStale: true } }) });
+    try {
+      expect(await live.start()).toBe(true);
+      expect(useLiveStore.getState().sim.initStale).toBe(true);
+      FakeEventSource.last!.emit("state", { step: 0, initStale: false });
+      expect(useLiveStore.getState().sim.initStale).toBe(false);
+    } finally { live.stop(); }
+  });
 
   it("起動するとライブモードになり、監視一覧を送り、ストリームを張る", async () => {
     const live = makeController();
@@ -608,6 +680,7 @@ describe("ライブ制御（SSE の取り込み）", () => {
       // 再読み込み: サーバは固定を持ったまま、値は丸まった数値で返す
       info.state = { running: false, step: 0, speed: 1, holds: [{ name: "g_u64", value: 9007199254740992 }] as never[], overrun: false };
       useLiveStore.setState({ ...initialLiveState });
+    useVariantsStore.setState({ errors: {} });
       const live = makeController();
       await live.start();
       expect(useLiveStore.getState().inputs[0]).toMatchObject({ name: "g_u64", value: BIG_HEX, hold: true });
