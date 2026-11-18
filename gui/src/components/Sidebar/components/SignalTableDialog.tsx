@@ -4,6 +4,7 @@ import { AlertCircle, ClipboardPaste, Copy, Pencil, Search, Table2, X } from "lu
 import toast from "react-hot-toast";
 import { useWaveformStore } from "../../../store/useWaveformStore";
 import { SignalSetting } from "../../../types";
+import { displaySignalName } from "../../../utils/displaySignalName";
 import { cn, evaluateExpression, parseLSB, parseOffset } from "../../../utils/helpers";
 import { StateRow, mappingToRows, parseStates, rowsToMapping, serializeStates, stateRowErrors } from "../../../utils/stateNames";
 import { StateNameEditor, StateSummary } from "./StateNameEditor";
@@ -307,6 +308,8 @@ export function SignalTableDialog({ onClose }: { onClose: () => void }) {
   };
   const popoverErrors = statePopover ? stateRowErrors(statePopover.rows) : [];
   const copySources = statePopover ? rows.filter(row => row.name !== statePopover.name && Object.keys(parseStates(row.states) ?? {}).length > 0) : [];
+  const visibleNames = visibleRows.map(row => row.name);
+  const copySourceNames = copySources.map(row => row.name);
 
   const renderCell = (row: Draft, column: Column, first = false) => {
     const { key } = column;
@@ -399,7 +402,7 @@ export function SignalTableDialog({ onClose }: { onClose: () => void }) {
             <tbody>
               {visibleRows.map(row => <tr key={row.name} className={cn(selected.has(row.name) ? "bg-blue-50/60 dark:bg-slate-700/60" : "bg-white dark:bg-slate-800", "hover:bg-blue-50 dark:hover:bg-slate-700")}>
                 <td className={cn(cellClass, "px-2 text-center")}><input type="checkbox" aria-label={`${row.name} を選択`} checked={selected.has(row.name)} onChange={() => setSelected(current => { const next = new Set(current); if (next.has(row.name)) next.delete(row.name); else next.add(row.name); return next; })} /></td>
-                <td className={cn(cellClass, "px-2 font-semibold max-w-[160px] truncate")} style={{ color: row.color }} title={row.name}>{row.name}</td>
+                <td className={cn(cellClass, "px-2 font-semibold max-w-[160px] truncate")} style={{ color: row.color }} title={row.name}>{displaySignalName(row.name, visibleNames)}</td>
                 {renderCell(row, allColumns[0])}
                 {sections.filter(section => columnSet === "all" || columnSet === section.key).flatMap(section => section.columns.map((column, index) => renderCell(row, column, index === 0)))}
               </tr>)}
@@ -420,7 +423,7 @@ export function SignalTableDialog({ onClose }: { onClose: () => void }) {
         <div role="dialog" aria-label={`${statePopover.name} の状態名`} className="fixed w-[340px] max-h-[80vh] overflow-y-auto bg-white dark:bg-slate-800 border border-gray-300 dark:border-slate-600 rounded shadow-xl text-left"
           style={{ top: statePopover.top, bottom: statePopover.bottom, left: statePopover.left }}>
           <div className="flex items-center px-2.5 py-1.5 border-b border-gray-200 dark:border-slate-700">
-            <span className="text-[11px] font-bold truncate">{statePopover.name} の状態名</span>
+            <span className="text-[11px] font-bold truncate" title={statePopover.name}>{displaySignalName(statePopover.name, visibleNames)} の状態名</span>
             <button aria-label="閉じる" onClick={() => setStatePopover(null)} className="ml-auto text-gray-400 hover:text-gray-600 dark:hover:text-gray-200"><X size={12} /></button>
           </div>
           <div className="px-2.5 pt-2 flex items-center gap-1 text-[10px] text-gray-500 dark:text-gray-400">
@@ -431,7 +434,7 @@ export function SignalTableDialog({ onClose }: { onClose: () => void }) {
                 if (source) setStatePopover({ ...statePopover, rows: mappingToRows(parseStates(source.states) ?? {}) });
               }}>
               <option value="">{copySources.length ? "選択…" : "コピーできる信号がありません"}</option>
-              {copySources.map(row => <option key={row.name} value={row.name}>{row.name}</option>)}
+              {copySources.map(row => <option key={row.name} value={row.name} title={row.name}>{displaySignalName(row.name, copySourceNames)}</option>)}
             </select>
           </div>
           <div className="px-2.5 py-2">

@@ -173,7 +173,7 @@ export function SortableSignalItem({ id, sigName }: { id: string; sigName: strin
       </div>
 
       {setting.expanded && (
-        <SignalSettings sigName={sigName} setting={setting} groupAutoRange={groupAutoRange} />
+        <SignalSettings sigName={sigName} names={names} setting={setting} groupAutoRange={groupAutoRange} />
       )}
     </li>
   );

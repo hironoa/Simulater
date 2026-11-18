@@ -4,6 +4,7 @@ import { ChevronDown, ChevronRight, RotateCcw } from "lucide-react";
 import { evaluateExpression, formatPhysical, toPhysical } from "../../../utils/helpers";
 import { SignalSetting, SignalSettingsSections } from "../../../types";
 import { useShallow } from "zustand/react/shallow";
+import { displaySignalName } from "../../../utils/displaySignalName";
 import { StateNameEditor, StateSummary } from "./StateNameEditor";
 import { StateRow, mappingToRows, rowsToMapping, sameMapping, stateRowErrors } from "../../../utils/stateNames";
 
@@ -27,8 +28,9 @@ function Section({ sectionKey, title, summary, children }: {
   );
 }
 
-export function SignalSettings({ sigName, setting, groupAutoRange }: {
+export function SignalSettings({ sigName, names, setting, groupAutoRange }: {
   sigName: string;
+  names: readonly string[];
   setting: SignalSetting;
   groupAutoRange: { min: number; max: number; breakStart?: number; breakEnd?: number };
 }) {
@@ -163,7 +165,7 @@ export function SignalSettings({ sigName, setting, groupAutoRange }: {
       <Section sectionKey="display" title="表示" summary={
         <span className="flex items-center gap-1 max-w-[170px]">
           <span className="inline-block w-2 h-2 rounded-sm shrink-0" style={{ background: localColor }} />
-          <span className="truncate">{setting.alias || sigName} / {setting.lineWidth ?? 1.5} / {({ solid: "実線", dashed: "破線", dotted: "点線" })[setting.lineType || "solid"]}</span>
+          <span className="truncate" title={sigName}>{setting.alias || displaySignalName(sigName, names)} / {setting.lineWidth ?? 1.5} / {({ solid: "実線", dashed: "破線", dotted: "点線" })[setting.lineType || "solid"]}</span>
         </span>
       }>
       <div className="sec-body grid grid-cols-2 gap-x-3 gap-y-2 pb-2.5">

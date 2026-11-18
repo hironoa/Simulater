@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { ChevronRight, ChevronDown, Search } from "lucide-react";
 import { liveController } from "../../live/controller";
 import { memberPath, type SymbolEntry } from "../../live/api";
+import { displaySignalName } from "../../utils/displaySignalName";
 import { cn } from "../../utils/helpers";
 
 export interface SymbolAction {
@@ -28,10 +29,11 @@ export async function resolveMembers(parent: SymbolEntry, api = liveController()
   }));
 }
 
-export function SymbolRow({ entry, depth, actions }: { entry: ResolvedSymbol; depth: number; actions: SymbolAction[]; key?: React.Key }) {
+export function SymbolRow({ entry, depth, actions, names }: { entry: ResolvedSymbol; depth: number; actions: SymbolAction[]; names?: readonly string[]; key?: React.Key }) {
   const [open, setOpen] = useState(false);
   const [children, setChildren] = useState<ResolvedSymbol[] | null>(null);
   const aggregate = isAggregate(entry);
+  const childNames = children?.map((child) => child.name);
   const toggle = async () => {
     if (!aggregate) return;
     if (!open && !children) setChildren(await resolveMembers(entry));
@@ -46,7 +48,7 @@ export function SymbolRow({ entry, depth, actions }: { entry: ResolvedSymbol; de
         </button>
         <span className="font-mono text-xs truncate flex-1 cursor-default" title={entry.resolutionError ? `${entry.name}: 解決できません` : `${entry.name}  ${entry.type}  (${entry.kind}, ${entry.size} バイト)${entry.writable ? "" : "  書き込み不可"}`}
           onDoubleClick={toggle}>
-          {entry.name}
+          {displaySignalName(entry.name, names)}
         </span>
         <span className={cn("text-[10px]", entry.resolutionError ? "text-red-500" : "text-gray-400 truncate max-w-[70px]")}>{entry.resolutionError ? "解決できません" : entry.type || entry.kind}</span>
         {(!aggregate || entry.kind === "ptr") && actions.map((a) => {
@@ -60,7 +62,7 @@ export function SymbolRow({ entry, depth, actions }: { entry: ResolvedSymbol; de
           );
         })}
       </div>
-      {open && children?.map((c) => <SymbolRow key={c.name} entry={c} depth={depth + 1} actions={actions} />)}
+      {open && children?.map((c) => <SymbolRow key={c.name} entry={c} depth={depth + 1} actions={actions} names={childNames} />)}
     </>
   );
 }
@@ -71,6 +73,7 @@ export function SymbolSearch({ actions, placeholder }: { actions: SymbolAction[]
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const reqId = useRef(0);
+  const names = hits.map((hit) => hit.name);
 
   useEffect(() => {
     const query = q.trim();
@@ -101,7 +104,7 @@ export function SymbolSearch({ actions, placeholder }: { actions: SymbolAction[]
         <div className="max-h-48 overflow-auto rounded border border-gray-200 dark:border-slate-700 bg-white dark:bg-slate-900">
           {busy && hits.length === 0 && <div className="px-2 py-1 text-xs text-gray-400">検索中…</div>}
           {error && <div className="px-2 py-1 text-xs text-red-500">検索できません: {error}</div>}
-          {hits.map((h) => <SymbolRow key={h.name} entry={h} depth={0} actions={actions} />)}
+          {hits.map((h) => <SymbolRow key={h.name} entry={h} depth={0} actions={actions} names={names} />)}
         </div>
       )}
       {!busy && !error && q.trim() && hits.length === 0 && (
