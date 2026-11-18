@@ -1,3 +1,5 @@
+import { useLiveStore } from "../live/liveStore";
+import { saveLayout } from "../live/persist";
 import { create } from "zustand";
 import {
   AppState,
@@ -83,7 +85,7 @@ interface WaveformStore extends AppState {
   appendSamples: (step0: number, names: readonly string[], rows: readonly (readonly unknown[])[]) => AppendResult;
   /** 記録の全区間を chartData に載せ、従来の Viewer で操作できるようにする。 */
   commitLiveRecord: (options?: { windowSize?: number; record?: LiveRecord }) => void;
-  /** 監視変数の信号設定を用意し、波形に出すか（checked）をそろえる。 */
+  /** 監視変数の信号設定を用意する。既存の checked は保持する。 */
   ensureLiveSignals: (names: readonly string[], plotted: ReadonlySet<string>) => void;
 
   // Data Handling
@@ -469,9 +471,6 @@ export const useWaveformStore = create<WaveformStore>((set, get) => ({
           yBreakStart: null,
           yBreakEnd: null,
         };
-        changed = true;
-      } else if (settings[name].checked !== checked) {
-        settings[name] = { ...settings[name], checked };
         changed = true;
       }
     }
@@ -1489,4 +1488,15 @@ useWaveformStore.subscribe((state, previous) => {
     : { diffs: [], summary: {}, totalValueDurationMs: 0 };
   useWaveformStore.setState({ diffs: result.diffs, diffSummary: result.summary,
     totalValueDurationMs: result.totalValueDurationMs, focusedDiffIndex: -1 });
+});
+
+// 左のチェック（個別・一括・グループ・yaml）を保存用の監視設定にも反映する。
+useWaveformStore.subscribe((state, prev) => {
+  if (state.signalSettings === prev.signalSettings) return;
+  const live = useLiveStore.getState();
+  const watch = live.watch.map(w => state.signalSettings[w.name] && w.plot !== state.signalSettings[w.name].checked
+    ? { ...w, plot: state.signalSettings[w.name].checked } : w);
+  if (!watch.some((w, i) => w !== live.watch[i])) return;
+  useLiveStore.setState({ watch });
+  saveLayout({ inputs: live.inputs, watch, windowSize: live.windowSize, maxSamples: live.maxSamples });
 });

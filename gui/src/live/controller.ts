@@ -83,7 +83,16 @@ export function createLiveController(deps: LiveControllerDeps = {}) {
 
   function syncSignals() {
     const s = store.getState();
-    waveform.getState().ensureLiveSignals(watchedNames(), new Set(s.watch.filter((w) => w.plot).map((w) => w.name)));
+    const watchNames = new Set(s.watch.map(w => w.name));
+    const plotted = new Set([
+      ...s.watch.filter(w => w.plot).map(w => w.name),
+      ...s.inputs.filter(i => i.monitor !== false && !watchNames.has(i.name)).map(i => i.name),
+    ]);
+    waveform.getState().ensureLiveSignals(watchedNames(), plotted);
+    const current = store.getState();
+    const settings = waveform.getState().signalSettings;
+    set({ watch: current.watch.map(w => ({ ...w, plot: settings[w.name]?.checked ?? w.plot })) });
+    persist();
   }
 
   async function syncWatch() {
@@ -403,7 +412,11 @@ export function createLiveController(deps: LiveControllerDeps = {}) {
   function updateWatch(name: string, patch: Partial<WatchItem>) {
     set({ watch: store.getState().watch.map((w) => (w.name === name ? { ...w, ...patch } : w)) });
     persist();
-    if ("plot" in patch) syncSignals();
+    if (patch.plot !== undefined) {
+      syncSignals();
+      const state = waveform.getState();
+      if (state.signalSettings[name]?.checked !== patch.plot) state.toggleSignalCheck(name);
+    }
   }
 
   // ---- 入力 ----

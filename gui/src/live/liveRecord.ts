@@ -36,6 +36,13 @@ export class LiveRecord {
     this.stepBuf = new Float64Array(this.cap);
   }
 
+  private nameListeners = new Set<() => void>();
+  subscribeNames = (listener: () => void) => {
+    this.nameListeners.add(listener);
+    return () => { this.nameListeners.delete(listener); };
+  };
+  getNames = () => this.names;
+
   get length() { return this.len; }
   get names(): readonly string[] { return this.order; }
   get firstStep(): number | null { return this.len ? this.stepBuf[0] : null; }
@@ -45,6 +52,7 @@ export class LiveRecord {
     this.cols.clear();
     this.order = [];
     this.len = 0;
+    this.nameListeners.forEach(listener => listener());
     this.droppedTotal = 0;
     this.revision++;
   }
@@ -62,7 +70,8 @@ export class LiveRecord {
       col = new Float64Array(this.cap);
       col.fill(NaN, 0, this.len);
       this.cols.set(name, col);
-      this.order.push(name);
+      this.order = [...this.order, name];
+      this.nameListeners.forEach(listener => listener());
     }
     return col;
   }

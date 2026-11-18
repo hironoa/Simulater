@@ -1,3 +1,4 @@
+import { activeDisplaySignals } from "../utils/displayBlocks";
 import { displaySignalName } from "../utils/displaySignalName";
 import { useCompareView } from "../hooks/useCompareView";
 import { compareSample, compareInactive, compareDisplaySteps } from "../utils/compareView";
@@ -627,7 +628,7 @@ export function Chart() {
   const containerHeight = containerSize.height;
 
   const activeSignals = useMemo(() => {
-    return view.signals.filter((sig) => view.settings[sig]?.checked && view.visible(sig));
+    return activeDisplaySignals(view.signals, view.settings, view.visible);
   }, [view]);
 
   // Handle click for cursor addition

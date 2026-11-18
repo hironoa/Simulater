@@ -1,11 +1,11 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { useWaveformStore } from "../../store/useWaveformStore";
 import { useLiveStore } from "../../live/liveStore";
 import { liveRecord } from "../../live/liveRecord";
 import { drawLive } from "../../live/liveCanvas";
-import { getDisplayConversion } from "../../utils/helpers";
-import { displaySignalName } from "../../utils/displaySignalName";
+import { buildLiveLanes } from "../../live/liveLayout";
+import { useCompareView } from "../../hooks/useCompareView";
 
 /** 描画の上限（fps）。samples は約 50ms ごとに届く。描画は記録が変わったときだけ行う。 */
 const MAX_FPS = 30;
@@ -20,14 +20,17 @@ export function LiveChart() {
   const ref = useRef<HTMLCanvasElement>(null);
   const lastRev = useRef(-1);
   const [stats, setStats] = useState<LiveDrawStats>({ fps: 0, lastDrawMs: 0, points: 0 });
-  const { watch, windowSize, periodMs } = useLiveStore(useShallow((s) => ({
-    watch: s.watch, windowSize: s.windowSize, periodMs: s.sim.periodMs,
+  const { windowSize, periodMs } = useLiveStore(useShallow((s) => ({
+    windowSize: s.windowSize, periodMs: s.sim.periodMs,
   })));
-  const { settings, theme, lsb, offset, mode, showAlias } = useWaveformStore(useShallow((s) => ({
-    settings: s.signalSettings, theme: s.theme, lsb: s.lsbMapping, offset: s.offsetMapping,
-    mode: s.valueDisplayMode, showAlias: s.showAlias,
+  const state = useWaveformStore(useShallow(s => ({
+    signalSettings: s.signalSettings, theme: s.theme, lsbMapping: s.lsbMapping, offsetMapping: s.offsetMapping,
+    valueDisplayMode: s.valueDisplayMode, showAlias: s.showAlias, signalGroups: s.signalGroups,
+    unassignedSignals: s.unassignedSignals, unassignedGroupConfig: s.unassignedGroupConfig, layoutMode: s.layoutMode,
   })));
-  const plotted = useMemo(() => watch.filter((w) => w.plot).map((w) => w.name), [watch]);
+  const { theme } = state;
+  const view = useCompareView();
+  const names = useSyncExternalStore(liveRecord.subscribeNames, liveRecord.getNames);
   const [size, setSize] = useState({ w: 0, h: 0 });
 
   useEffect(() => {
@@ -40,23 +43,7 @@ export function LiveChart() {
   }, []);
 
   // レーン構成
-  const layout = useMemo(() => {
-    const n = Math.max(1, plotted.length);
-    const top = 10, bottom = 28, gap = 14;
-    const h = Math.max(1, size.h - top - bottom);
-    const lane = Math.max(20, (h - gap * (n - 1)) / n);
-    return plotted.map((sig, i) => ({
-      sig,
-      top: top + i * (lane + gap),
-      height: lane,
-      color: settings[sig]?.color ?? "#3b82f6",
-      label: (showAlias && settings[sig]?.alias) || displaySignalName(sig, plotted),
-      conv: getDisplayConversion(sig, lsb, offset, mode),
-      yMin: settings[sig] && !settings[sig].yAuto ? settings[sig].yMin : null,
-      yMax: settings[sig] && !settings[sig].yAuto ? settings[sig].yMax : null,
-      lineWidth: settings[sig]?.lineWidth ?? 1.5,
-    }));
-  }, [plotted, size.h, settings, showAlias, lsb, offset, mode]);
+  const layout = useMemo(() => buildLiveLanes(state, names, size.h, view.visible), [state, names, size.h, view]);
 
   const layoutRef = useRef(layout);
   layoutRef.current = layout;
@@ -123,9 +110,9 @@ export function LiveChart() {
   return (
     <div className="relative w-full h-full">
       <canvas ref={ref} className="block w-full h-full rounded bg-white dark:bg-slate-900" />
-      {plotted.length === 0 && (
+      {layout.length === 0 && (
         <div className="absolute inset-0 flex items-center justify-center text-sm text-gray-400 pointer-events-none">
-          変数モニタで「波形」に印を付けた変数がここに流れます
+          左の信号設定でチェックした信号が、実行中ここに流れます
         </div>
       )}
       <div className="absolute top-1 right-2 text-[10px] font-mono text-gray-400 pointer-events-none" title="ライブ描画の実測（1 秒ごと）">

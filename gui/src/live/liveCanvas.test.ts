@@ -130,7 +130,7 @@ describe("drawLive", () => {
     return { ctx, calls };
   };
   const style = { axisColor: "#000", splitColor: "#ccc", left: 150, right: 20 };
-  const lane = (sig: string) => ({ sig, top: 10, height: 100, color: "#f00", label: sig, conv: id, yMin: null, yMax: null, lineWidth: 1.5 });
+  const lane = (sig: string) => ({ top: 10, height: 100, series: [{ sig, color: "#f00", label: sig, conv: id, yMin: null, yMax: null, lineWidth: 1.5 }] });
 
   it("直近 n 点を描き、横軸は窓の幅で固定する", () => {
     const r = new LiveRecord();
@@ -150,6 +150,17 @@ describe("drawLive", () => {
     const d = drawLive(ctx, 600, 200, 1, r, [lane("a"), lane("zz")], 100, 1, style);
     expect(d.xMax).toBe(99);
     expect(d.points).toBe(2);
+  });
+
+  it("重ね表示では同じレーンに全系列の線と色付きラベルを描く", () => {
+    const r = new LiveRecord();
+    r.append(0, ["a", "b"], [[1, 10], [2, 20]]);
+    const { ctx, calls } = fake();
+    const overlap = { ...lane("a"), series: [...lane("a").series, ...lane("b").series] };
+    expect(drawLive(ctx, 600, 200, 1, r, [overlap], 2, 1, style).points).toBe(4);
+    expect(calls.filter(c => c === "clip()")).toHaveLength(2);
+    expect(calls.some(c => c.startsWith("fillText(a,"))).toBe(true);
+    expect(calls.some(c => c.startsWith("fillText(b,"))).toBe(true);
   });
 
   it("記録が空でも落ちない", () => {
