@@ -274,9 +274,10 @@ if "%CODE%"=="400" (call :ok "variants: saving a non-array variants is 400") els
 call :post_code "%G%\variants.json" variants_save.out /api/variants
 if "%CODE%"=="200" (call :ok "variants: save is 200") else (call :ng "variants: save is 200, got %CODE%")
 curl -s "%U%/api/variants" > "%V%\variants.out"
-rem The JSON escapes the backslashes of the path, and the pattern keeps an even number of quotes for cmd.
-"%HAS%" /l /c:"gui\\variants.json" "%V%\variants.out" >nul
-if errorlevel 1 (call :ng "variants: path is relative to the cfg") else (call :ok "variants: path is relative to the cfg")
+rem sim joins the cfg folder and the file name with "/"; the JSON escapes the backslashes of the folder.
+rem Keep an even number of quotes in the pattern, or cmd reads the rest of the line as quoted.
+"%HAS%" /l /c:"gui/variants.json" /c:"gui\\variants.json" "%V%\variants.out" >nul
+if errorlevel 1 (call :ng "variants: path is relative to the cfg" & type "%V%\variants.out") else (call :ok "variants: path is relative to the cfg")
 if exist "%V%\variants.json" (call :ok "variants: saved next to the cfg") else (call :ng "variants: saved next to the cfg")
 "%HAS%" /l /c:"\"value\":\"0x20\"" "%V%\variants.out" >nul
 if errorlevel 1 (call :ng "variants: keeps the value as written") else (call :ok "variants: keeps the value as written")
