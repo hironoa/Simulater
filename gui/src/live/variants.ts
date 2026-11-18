@@ -4,9 +4,6 @@ export interface InitValue { name: string; value: string; mode: "once" | "every"
 export interface Variant { name: string; values: InitValue[] }
 export interface VariantsDoc { version: 1; selected: string; variants: Variant[] }
 export interface VariantsResult { path: string; exists: boolean; doc: unknown; error: string }
-export function onceSignature(variant: Variant | undefined): string {
-  return JSON.stringify((variant?.values ?? []).filter(v => v.mode === "once").map(v => JSON.stringify([v.name, v.value])).sort());
-}
 
 const object = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
 export function sanitizeVariants(raw: unknown): VariantsDoc {

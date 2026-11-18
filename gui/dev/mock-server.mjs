@@ -84,6 +84,8 @@ const put = (n, v) => { if (isArg(n)) argValues.set(n, v); else values[leafIndex
 // ---- 実行状態 ----
 let variantsDoc = null;
 let inits = [];
+let initStale = false;
+const oncePairs = rows => JSON.stringify(rows.filter(row => row.mode === "once").map(row => JSON.stringify([row.name, row.value])).sort());
 let running = false;
 let step = 0; // 次に実行するステップ番号（記録上は 0 始まり）
 let speed = 1;
@@ -205,7 +207,7 @@ function send(res, event, data) {
 }
 const broadcast = (event, data) => { for (const c of clients) send(c, event, data); };
 const stateMsg = () => ({
-  inits, running, step, speed, holds: [...holds].map(([name, value]) => ({ name, value: holdJson(value) })), overrun,
+  inits, initStale, running, step, speed, holds: [...holds].map(([name, value]) => ({ name, value: holdJson(value) })), overrun,
   periodMs, func, playback: !!csvPlay, needReset: false, error: "", dropped,
   pending: [...pending].map(([name, value]) => ({ name, value })),
 });
@@ -241,7 +243,7 @@ function setWatch(names) {
 }
 
 function resetTarget() {
-  flushSamples(); resetValues(); argValues = new Map(); step = 0; record = []; pending.clear(); prevButton = 0; rebase(); markValues();
+  flushSamples(); resetValues(); argValues = new Map(); step = 0; initStale = false; record = []; pending.clear(); prevButton = 0; rebase(); markValues();
 }
 
 /** 対象関数を変える: リセットして記録を区切り、新しい関数で解決できない固定・監視を外す。 */
@@ -428,6 +430,7 @@ const server = http.createServer(async (req, res) => {
         return [];
       });
       if (errors.length) return json(res, 400, { errors });
+      if (step !== 0 && oncePairs(inits) !== oncePairs(body.values)) initStale = true;
       inits = body.values;
       broadcastState();
       return json(res, 200, { ok: true });

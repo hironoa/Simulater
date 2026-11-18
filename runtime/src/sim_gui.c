@@ -55,6 +55,7 @@ typedef struct {
     hold_t *inits;
     int *init_every;
     int ninits;
+    int init_stale;          /* 実行後に once の一覧が変わり、リセット待ち */
     const char *variants_path;
     pend_t *pend;
     int npend;
@@ -502,6 +503,7 @@ static void json_state(sim_buf *b)
     sim_buf_printf(b, "{\"running\":%s,\"step\":%llu,\"speed\":", G.running || G.budget ? "true" : "false",
                    (unsigned long long)G.step);
     sim_buf_json_num(b, G.speed);
+    sim_buf_printf(b, ",\"initStale\":%s", G.init_stale ? "true" : "false");
     sim_buf_adds(b, ",\"inits\":[");
     for (int i = 0; i < G.ninits; i++) {
         if (i) sim_buf_addc(b, ',');
@@ -1044,6 +1046,26 @@ static int prepare_input(const char *name, const char *text, sim_ref **ref, sim_
     return -1;
 }
 
+/* once の name/value を重複数も含めて比較する。並び順と every は無視する。 */
+static int same_once(const hold_t *items, const int *every, int n)
+{
+    int old_n = 0, new_n = 0, same = 1;
+    int *matched = sim_xcalloc(n + 1, sizeof *matched);
+    for (int i = 0; i < n; i++) if (!every[i]) new_n++;
+    for (int i = 0; i < G.ninits; i++) {
+        if (G.init_every[i]) continue;
+        old_n++;
+        int j;
+        for (j = 0; j < n; j++) {
+            if (!every[j] && !matched[j] && !strcmp(G.inits[i].name, items[j].name) &&
+                !strcmp(G.inits[i].text, items[j].text)) { matched[j] = 1; break; }
+        }
+        if (j == n) same = 0;
+    }
+    free(matched);
+    return same && old_n == new_n;
+}
+
 static void api_init(sim_sock sock, req_t *r)
 {
     sj_value *doc = parse_body(sock, r), *arr, *it;
@@ -1074,6 +1096,7 @@ static void api_init(sim_sock sock, req_t *r)
         sim_buf_adds(&errors, ",\"message\":"); sim_buf_json_str(&errors, err); sim_buf_addc(&errors, '}');
     }
     if (!errors.len && !G.need_reset) {
+        if (G.step != 0 && !same_once(items, every, n)) G.init_stale = 1;
         for (int i = 0; i < G.ninits; i++) free_hold(&G.inits[i]);
         free(G.inits); free(G.init_every);
         G.inits = items; G.init_every = every; G.ninits = n;
@@ -1384,6 +1407,7 @@ static void reset_locked(void)
     }
     sim_ctx_clear_args(G.c);
     G.step = 0;
+    G.init_stale = 0;
     G.overrun = 0;
     G.budget = 0;
     G.play_pos = 0;

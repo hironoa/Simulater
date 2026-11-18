@@ -1,9 +1,8 @@
 import { useRef, useState } from "react";
 import { liveController } from "../../live/controller";
 import { useLiveStore } from "../../live/liveStore";
-import { ApiError } from "../../live/api";
-import { decodeVariantsCsv, onceSignature, parseInitFromCsv, type VariantsDoc, type InitValue } from "../../live/variants";
-import { useVariantsStore } from "../../live/variantsStore";
+import { decodeVariantsCsv, parseInitFromCsv, type VariantsDoc, type InitValue } from "../../live/variants";
+import { setVariantsApplyError, useVariantsStore } from "../../live/variantsStore";
 import { SymbolSearch } from "./SymbolSearch";
 
 const field = "px-1.5 py-0.5 text-xs rounded border border-gray-300 dark:border-slate-600 bg-white dark:bg-slate-900";
@@ -11,21 +10,18 @@ const button = "text-xs px-2 py-0.5 rounded border border-gray-300 dark:border-s
 const primaryButton = "text-xs px-2 py-0.5 rounded bg-blue-500 text-white hover:bg-blue-600 disabled:opacity-50";
 
 export function VariantsPanel() {
-  const { doc, saved, path, error, loaded } = useVariantsStore();
-  const [errors, setErrors] = useState<Record<string, string>>({});
-  const [resetNeeded, setResetNeeded] = useState(false);
+  const { doc, saved, path, error, loaded, errors } = useVariantsStore();
+  const resetNeeded = useLiveStore(s => s.sim.initStale);
+  const setErrors = (errors: Record<string, string>) => useVariantsStore.setState({ errors });
   const [busy, setBusy] = useState(false);
   const file = useRef<HTMLInputElement>(null);
   const current = doc.variants.find(v => v.name === doc.selected);
   const api = liveController().api;
   async function apply(next: VariantsDoc) {
-    const nextVariant = next.variants.find(v => v.name === next.selected);
-    const onceChanged = onceSignature(current) !== onceSignature(nextVariant);
     useVariantsStore.setState({ doc: next });
-    setResetNeeded(needed => needed || onceChanged);
     setBusy(true);
     try { await api.setInit(next.variants.find(v => v.name === next.selected)?.values ?? []); setErrors({}); }
-    catch (e) { setErrors(e instanceof ApiError && e.errors.length ? Object.fromEntries(e.errors.map(r => [r.name, r.message])) : { "": (e as Error).message }); }
+    catch (e) { setVariantsApplyError(e); }
     finally { setBusy(false); }
   }
   const update = (values: InitValue[]) => apply({ ...doc, variants: doc.variants.map(v => v.name === doc.selected ? { ...v, values } : v) });
@@ -58,7 +54,7 @@ export function VariantsPanel() {
       </tr>)}</tbody></table>
     </>}
     {errors[""] && <p role="alert" className="text-red-500">{errors[""]}</p>}
-    {resetNeeded && <button className={primaryButton} disabled={busy || Object.keys(errors).length > 0} onClick={async () => { try { await liveController().control({ cmd: "reset" }); if (!useLiveStore.getState().sim.needReset && useLiveStore.getState().sim.step === 0) setResetNeeded(false); } catch (e) { setErrors({ "": (e as Error).message }); } }}>リセットして反映</button>}
+    {resetNeeded && <button className={primaryButton} disabled={busy || Object.keys(errors).length > 0} onClick={async () => { try { await liveController().control({ cmd: "reset" }); } catch (e) { setErrors({ "": (e as Error).message }); } }}>リセットして反映</button>}
     <input ref={file} type="file" accept=".csv" hidden onChange={async e => {
       const picked = e.target.files?.[0]; e.target.value = ""; if (!picked) return;
       try {

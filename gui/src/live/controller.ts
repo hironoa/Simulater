@@ -1,10 +1,10 @@
 import { sanitizeVariants, type InitValue } from "./variants";
-import { useVariantsStore } from "./variantsStore";
+import { setVariantsApplyError, useVariantsStore } from "./variantsStore";
 // ライブモードの制御。サーバ検出、SSE の取り込み、監視一覧・入力の同期、構成の保存をまとめて持つ。
 
 import toast from "react-hot-toast";
 import { LIVE_FILE_NAME, useWaveformStore } from "../store/useWaveformStore";
-import { createApi, detectServer, type ControlRequest, type DroppedItem, type SimApi, type StateMessage } from "./api";
+import { ApiError, createApi, detectServer, type ControlRequest, type DroppedItem, type SimApi, type StateMessage } from "./api";
 import { dropPending, inputValue, restoreHoldText, upsertPending, type InputValue } from "./inputValue";
 import { liveRecord, type LiveRecord } from "./liveRecord";
 import { useLiveStore, type LiveStoreState } from "./liveStore";
@@ -297,7 +297,9 @@ export function createLiveController(deps: LiveControllerDeps = {}) {
       if (!error) initValues = doc.variants.find(v => v.name === doc.selected)?.values ?? [];
     } catch (e) { useVariantsStore.setState({ loaded: true, error: (e as Error).message }); }
     // 選択なし・取得失敗でも、サーバに残った仕向の初期化を解除する。
-    try { await api.setInit(initValues); } catch { /* /api/init のない旧サーバでも開始する */ }
+    useVariantsStore.setState({ errors: {} });
+    try { await api.setInit(initValues); }
+    catch (e) { if (!(e instanceof ApiError && e.status === 404)) setVariantsApplyError(e); }
     const layout = loadLayout();
     record.setMaxSamples(layout.maxSamples);
     // 再読み込みの前に固定した文字列（保存した構成の最後の値）を、丸まって届く state.holds の表記に使う
@@ -322,6 +324,7 @@ export function createLiveController(deps: LiveControllerDeps = {}) {
         pending: info.state.pending ?? [],
         error: info.state.error ?? "",
         needReset: info.state.needReset ?? false,
+        initStale: info.state.initStale ?? false,
         periodMs: info.periodMs,
         func: info.func,
       },

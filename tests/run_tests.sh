@@ -644,8 +644,15 @@ else
 
     CODE=$(post init_values.json init.out /api/init)
     check "初期化一覧を設定" test "$CODE" = 200
+    curl -s "$U/api/info" > "$WORK/init_info"
+    check "ステップ 0 の once 変更は initStale が偽" contains "$WORK/init_info" '"initStale":false'
     post step1.json init_step1.out /api/control > /dev/null
     post init_changed.json init_change.out /api/init > /dev/null
+    curl -s "$U/api/info" > "$WORK/init_info"
+    check "実行後の once 変更は initStale が真" contains "$WORK/init_info" '"initStale":true'
+    post init_changed.json init_repeat.out /api/init > /dev/null
+    curl -s "$U/api/info" > "$WORK/init_info"
+    check "同じ一覧の再送でも initStale は真のまま" contains "$WORK/init_info" '"initStale":true'
     post step1.json init_step2.out /api/control > /dev/null
     curl -s "$U/api/export.csv" > "$WORK/init_export.csv"
     tr -d '\r' < "$WORK/init_export.csv" | tail -n 2 > "$WORK/init_rows"
@@ -658,9 +665,16 @@ else
     curl -s "$U/api/info" > "$WORK/init_info"
     check "不正な初期化の一覧を部分適用しない" contains "$WORK/init_info" '"inits":[{"name":"P1","value":"0x21","mode":"once"},{"name":"P2_bit.no0","value":"1","mode":"every"}]'
     post reset.json init_reset.out /api/control > /dev/null
+    check "リセットで initStale は偽" contains "$WORK/init_reset.out" '"initStale":false'
     post step1.json init_step3.out /api/control > /dev/null
     curl -s "$U/api/export.csv" > "$WORK/init_export.csv"
     check "リセットすると変更した once が反映" contains "$WORK/init_export.csv" ',0x21,1'
+    # once の組を変えず順番と every だけを変える。
+    printf '%s' '{"values":[{"name":"P2_bit.no0","value":"0","mode":"every"},{"name":"P1","value":"0x21","mode":"once"}]}' > "$WORK/init_every.json"
+    curl -s -X POST -H 'Content-Type: application/json' --data-binary "@$WORK/init_every.json" "$U/api/init" > "$WORK/init_every.out"
+    curl -s "$U/api/info" > "$WORK/init_info"
+    check "every だけの変更と並べ替えは initStale が偽のまま" contains "$WORK/init_info" '"initStale":false'
+    post init_changed.json init_restore.out /api/init > /dev/null
     post init_hold.json init_hold.out /api/write > /dev/null
     post reset.json init_reset.out /api/control > /dev/null
     post step1.json init_step4.out /api/control > /dev/null

@@ -685,7 +685,7 @@ RL78 の命令は再現しない。目的は速さで、解釈実行・変換方
 - `event: samples` — `{"step0":先頭のステップ番号,"names":[...],"rows":[[値,...],...]}`。約 50ms ごとにまとめて送る。
   値は数値、読めなければ `null`。
 - `event: state` — `{"running":bool,"step":現在のステップ,"speed":倍率,"holds":[{"name","value"}],"overrun":bool,
-  "periodMs","func","playback":bool,"error":文字列,"needReset":bool,"dropped":[{"name","kind":"hold"|"watch"|"init","message"}],
+  "periodMs","func","playback":bool,"error":文字列,"needReset":bool,"initStale":bool,"dropped":[{"name","kind":"hold"|"watch"|"init","message"}],
   "pending":[{"name","value"}],"stepsLeft":N,"inits":[{"name","value","mode"}]}`。変化時と 1 秒ごと。`/api/control` の応答と `/api/info` の `state` も同じ形。
   `holds` の `value` は固定したときに書いたセルの文字列（`"800"`、`"0x78"`、`"9007199254740993"`、`"'A'"` など。`pending` と同じ。
   数値に直さないので、2^53 を超える整数が丸まったり 16 進が 10 進になったりしない）。
@@ -725,7 +725,10 @@ RL78 の命令は再現しない。目的は速さで、解釈実行・変換方
 - 書いた値は固定と同じく記録の入力列に残す（`once` は最初の行だけ）。保存した CSV を `sim run` で再実行しても同じになる。
 - 関数の変更・リセットのときは固定と同じく解決し直し、できないものは外して `dropped` に `kind:"init"` で載せる。
 - `state` の `inits:[{"name","value","mode"}]` に今の一覧を載せる（`value` は受けたセルの文字列のまま）。
+- `state.initStale` は、ステップが 0 でないときに `once` の name・value の組が変わると真になる（順序は無視）。同じ一覧の再送や `every` だけの変更では変えず、リセットで偽に戻す。ステップ 0 での変更では立てない。GUI は真の間「リセットして反映」を表示し、ブラウザの再読み込み後も維持する。
 - 初期化の一覧が空なら、今までの動きを変えない。
+
+起動時の `/api/init` の失敗は、404（未対応の旧 sim）だけ無視する。それ以外は全体と名前ごとの反映エラーを仕向パネルに表示し、ファイル読み込みエラーとは分ける。
 
 仕向のファイル（`GET`/`POST /api/variants`）は `{"version":1,"selected":名前,"variants":[{"name","values":[{"name","value","mode"}]}]}`。
 保存先はサーバが起動時に決めた 1 か所だけで（sim.cfg の `gui_variants`、既定は sim.cfg と同じフォルダの `sim_gui_variants.json`）、

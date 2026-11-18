@@ -1,38 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { decodeVariantsCsv, onceSignature, parseInitFromCsv, sanitizeVariants, type Variant } from "./variants";
-
-describe("onceSignature", () => {
-  const before: Variant = { name: "国内", values: [
-    { name: "a", value: "1", mode: "once" },
-    { name: "b", value: "2", mode: "once" },
-    { name: "c", value: "3", mode: "every" },
-  ] };
-  it("once の削除を検出する", () => {
-    expect(onceSignature({ ...before, values: before.values.filter(v => v.name !== "a") })).not.toBe(onceSignature(before));
-  });
-  it("選択なしへの切替を検出する", () => {
-    expect(onceSignature(undefined)).not.toBe(onceSignature(before));
-  });
-  it("once のない仕向への切替を検出する", () => {
-    expect(onceSignature({ name: "海外", values: before.values.filter(v => v.mode === "every") })).not.toBe(onceSignature(before));
-  });
-  it("every だけの変更では変わらない", () => {
-    expect(onceSignature({ ...before, values: before.values.map(v => v.mode === "every" ? { ...v, value: "4" } : v) })).toBe(onceSignature(before));
-  });
-  it("並び順だけの変更では変わらず、元の配列も変更しない", () => {
-    const reversed = { ...before, values: [...before.values].reverse() };
-    expect(onceSignature(reversed)).toBe(onceSignature(before));
-    expect(reversed.values.map(v => v.name)).toEqual(["c", "b", "a"]);
-  });
-  it("両方空なら変わらない", () => {
-    expect(onceSignature({ name: "海外", values: [] })).toBe(onceSignature(undefined));
-  });
-  it("once の名前または値の変更を検出する", () => {
-    for (const row of [{ name: "d", value: "1" }, { name: "a", value: "9" }]) {
-      expect(onceSignature({ ...before, values: before.values.map(v => v.name === "a" ? { ...v, ...row } : v) })).not.toBe(onceSignature(before));
-    }
-  });
-});
+import { decodeVariantsCsv, parseInitFromCsv, sanitizeVariants } from "./variants";
 
 describe("sanitizeVariants", () => {
   it("壊れた文書を空にする", () => {
