@@ -1,0 +1,5 @@
+modi,TEST_cycle,GUI init watch,1,2
+#InitWheneverCall,P1,P2_bit.no0
+0,0,0
+#COMMENT,P2_bit.no0,g_eng.state,P2_bit.no0
+,1,0,1

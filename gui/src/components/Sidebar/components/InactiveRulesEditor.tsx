@@ -9,6 +9,7 @@ import { Settings } from "lucide-react";
 import { useWaveformStore } from "../../../store/useWaveformStore";
 import { InactiveCondition, InactiveRule } from "../../../types";
 import { computeInactive, INACTIVE_COLOR } from "../../../utils/inactiveRanges";
+import { displaySignalName } from "../../../utils/displaySignalName";
 
 const fieldClass =
   "min-w-0 rounded border border-gray-300 dark:border-slate-600 bg-white dark:bg-slate-800 px-1 py-0.5";
@@ -124,6 +125,9 @@ function RuleCard({
   const states = useWaveformStore((s) => s.modeMapping[rule.signal]);
   const settings = useWaveformStore((s) => s.signalSettings);
   const showAlias = useWaveformStore((s) => s.showAlias);
+  const names = Object.keys(chartData?.seriesMap ?? {});
+  const missing = rule.signal && !chartData?.seriesMap[rule.signal];
+  if (missing) names.unshift(rule.signal);
   const [newValue, setNewValue] = useState("");
   const addValue = () => {
     if (numberOK(newValue)) {
@@ -143,12 +147,10 @@ function RuleCard({
           onChange={(e) => update({ signal: e.target.value })}
         >
           <option value="">条件信号を選択</option>
-          {rule.signal && !chartData?.seriesMap[rule.signal] && (
-            <option value={rule.signal}>{rule.signal}（未読込）</option>
-          )}
-          {Object.keys(chartData?.seriesMap ?? {}).map((sig) => (
-            <option key={sig} value={sig}>
-              {showAlias ? settings[sig]?.alias || sig : sig}
+          {names.map((sig) => (
+            <option key={sig} value={sig} title={sig}>
+              {(!(missing && sig === rule.signal) && showAlias && settings[sig]?.alias) || displaySignalName(sig, names)}
+              {missing && sig === rule.signal ? "（未読込）" : ""}
             </option>
           ))}
         </select>
