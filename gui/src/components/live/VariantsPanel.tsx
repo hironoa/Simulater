@@ -2,7 +2,7 @@ import { useRef, useState } from "react";
 import { liveController } from "../../live/controller";
 import { useLiveStore } from "../../live/liveStore";
 import { ApiError } from "../../live/api";
-import { decodeVariantsCsv, parseInitFromCsv, type VariantsDoc, type InitValue } from "../../live/variants";
+import { decodeVariantsCsv, onceSignature, parseInitFromCsv, type VariantsDoc, type InitValue } from "../../live/variants";
 import { useVariantsStore } from "../../live/variantsStore";
 import { SymbolSearch } from "./SymbolSearch";
 
@@ -18,20 +18,21 @@ export function VariantsPanel() {
   const file = useRef<HTMLInputElement>(null);
   const current = doc.variants.find(v => v.name === doc.selected);
   const api = liveController().api;
-  async function apply(next: VariantsDoc, onceChanged = true) {
+  async function apply(next: VariantsDoc) {
+    const nextVariant = next.variants.find(v => v.name === next.selected);
+    const onceChanged = onceSignature(current) !== onceSignature(nextVariant);
     useVariantsStore.setState({ doc: next });
-    const hasOnce = next.variants.find(v => v.name === next.selected)?.values.some(v => v.mode === "once") ?? false;
-    setResetNeeded(needed => hasOnce && (needed || onceChanged));
+    setResetNeeded(needed => needed || onceChanged);
     setBusy(true);
     try { await api.setInit(next.variants.find(v => v.name === next.selected)?.values ?? []); setErrors({}); }
     catch (e) { setErrors(e instanceof ApiError && e.errors.length ? Object.fromEntries(e.errors.map(r => [r.name, r.message])) : { "": (e as Error).message }); }
     finally { setBusy(false); }
   }
-  const update = (values: InitValue[]) => apply({ ...doc, variants: doc.variants.map(v => v.name === doc.selected ? { ...v, values } : v) }, JSON.stringify(current?.values.filter(v => v.mode === "once")) !== JSON.stringify(values.filter(v => v.mode === "once")));
+  const update = (values: InitValue[]) => apply({ ...doc, variants: doc.variants.map(v => v.name === doc.selected ? { ...v, values } : v) });
   const rename = (adding: boolean) => {
     const name = window.prompt(adding ? "仕向の名前" : "新しい名前", adding ? "" : doc.selected)?.trim();
     if (!name || doc.variants.some(v => v.name === name)) return;
-    void apply({ ...doc, selected: name, variants: adding ? [...doc.variants, { name, values: [] }] : doc.variants.map(v => v.name === doc.selected ? { ...v, name } : v) }, adding);
+    void apply({ ...doc, selected: name, variants: adding ? [...doc.variants, { name, values: [] }] : doc.variants.map(v => v.name === doc.selected ? { ...v, name } : v) });
   };
   return <div className="text-xs flex flex-col gap-2">
     {error && <p role="alert" className="text-red-500">{error}（自動保存しません）</p>}
@@ -57,7 +58,7 @@ export function VariantsPanel() {
       </tr>)}</tbody></table>
     </>}
     {errors[""] && <p role="alert" className="text-red-500">{errors[""]}</p>}
-    {resetNeeded && current?.values.some(v => v.mode === "once") && <button className={primaryButton} disabled={busy || Object.keys(errors).length > 0} onClick={async () => { try { await liveController().control({ cmd: "reset" }); if (!useLiveStore.getState().sim.needReset && useLiveStore.getState().sim.step === 0) setResetNeeded(false); } catch (e) { setErrors({ "": (e as Error).message }); } }}>リセットして反映</button>}
+    {resetNeeded && <button className={primaryButton} disabled={busy || Object.keys(errors).length > 0} onClick={async () => { try { await liveController().control({ cmd: "reset" }); if (!useLiveStore.getState().sim.needReset && useLiveStore.getState().sim.step === 0) setResetNeeded(false); } catch (e) { setErrors({ "": (e as Error).message }); } }}>リセットして反映</button>}
     <input ref={file} type="file" accept=".csv" hidden onChange={async e => {
       const picked = e.target.files?.[0]; e.target.value = ""; if (!picked) return;
       try {
