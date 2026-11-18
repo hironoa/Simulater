@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { dispatchStreamEvent, type EventSourceLike, type StreamHandlers } from "./stream";
-import { createApi } from "./api";
+import { createApi, type SimApi } from "./api";
 import { createLiveController } from "./controller";
 import { LiveRecord } from "./liveRecord";
 import { initialLiveState, useLiveStore } from "./liveStore";
@@ -115,7 +115,7 @@ describe("ライブ制御（SSE の取り込み）", () => {
   });
   afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
 
-  function makeController() {
+  function makeController(apiOverrides: Partial<SimApi> = {}) {
     const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (init?.method === "POST") posted.push({ url, body: url.endsWith("/api/load-csv") ? init.body : JSON.parse(String(init.body)) });
@@ -132,13 +132,49 @@ describe("ライブ制御（SSE の取り込み）", () => {
       return new Response("{}");
     });
     return createLiveController({
-      api: createApi("", fetchImpl as unknown as typeof fetch),
+      api: { ...createApi("", fetchImpl as unknown as typeof fetch), ...apiOverrides },
       record,
       protocol: "http:",
       createEventSource: (u) => new FakeEventSource(u),
       notify,
     });
   }
+
+  describe("起動時の仕向の同期", () => {
+    const values = [{ name: "a", value: "0x20", mode: "every" as const }];
+    it.each([
+      { name: "選択なし", exists: true, doc: { selected: "", variants: [{ name: "国内", values }] }, error: "", expected: [] },
+      { name: "選択あり", exists: true, doc: { selected: "国内", variants: [{ name: "国内", values }] }, error: "", expected: values },
+      { name: "ファイルなし", exists: false, doc: null, error: "", expected: [] },
+      { name: "壊れたファイル", exists: true, doc: null, error: "JSON を読めません", expected: [] },
+    ])("$name のとき画面の選択に合わせて setInit を送る", async ({ exists, doc, error, expected }) => {
+      const setInit = vi.fn().mockResolvedValue({ ok: true });
+      const live = makeController({ getVariants: vi.fn().mockResolvedValue({ path: "variants.json", exists, doc, error }), setInit });
+      try {
+        expect(await live.start()).toBe(true);
+        expect(setInit).toHaveBeenCalledExactlyOnceWith(expected);
+      } finally { live.stop(); }
+    });
+
+    it("仕向の取得が例外で失敗しても setInit([]) を送る", async () => {
+      const setInit = vi.fn().mockResolvedValue({ ok: true });
+      const live = makeController({ getVariants: vi.fn().mockRejectedValue(new Error("接続失敗")), setInit });
+      try {
+        expect(await live.start()).toBe(true);
+        expect(setInit).toHaveBeenCalledExactlyOnceWith([]);
+      } finally { live.stop(); }
+    });
+
+    it("仕向の取得と setInit が両方失敗してもライブモードを開始する", async () => {
+      const setInit = vi.fn().mockRejectedValue(new Error("404"));
+      const live = makeController({ getVariants: vi.fn().mockRejectedValue(new Error("接続失敗")), setInit });
+      try {
+        expect(await live.start()).toBe(true);
+        expect(setInit).toHaveBeenCalledExactlyOnceWith([]);
+        expect(useLiveStore.getState().mode).toBe("live");
+      } finally { live.stop(); }
+    });
+  });
 
   it("起動するとライブモードになり、監視一覧を送り、ストリームを張る", async () => {
     const live = makeController();

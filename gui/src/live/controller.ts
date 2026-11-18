@@ -1,4 +1,4 @@
-import { sanitizeVariants } from "./variants";
+import { sanitizeVariants, type InitValue } from "./variants";
 import { useVariantsStore } from "./variantsStore";
 // ライブモードの制御。サーバ検出、SSE の取り込み、監視一覧・入力の同期、構成の保存をまとめて持つ。
 
@@ -288,13 +288,16 @@ export function createLiveController(deps: LiveControllerDeps = {}) {
       set({ mode: "offline" });
       return false;
     }
+    let initValues: InitValue[] = [];
     try {
       const result = await api.getVariants();
       const doc = sanitizeVariants(result.doc);
       const error = result.error || (result.exists && (!result.doc || typeof result.doc !== "object" || !Array.isArray((result.doc as Record<string, unknown>).variants)) ? "仕向ファイルの形式が不正です" : "");
       useVariantsStore.setState({ doc, saved: JSON.stringify(doc), path: result.path, error, loaded: true });
-      if (!error && doc.selected) await api.setInit(doc.variants.find(v => v.name === doc.selected)!.values);
+      if (!error) initValues = doc.variants.find(v => v.name === doc.selected)?.values ?? [];
     } catch (e) { useVariantsStore.setState({ loaded: true, error: (e as Error).message }); }
+    // 選択なし・取得失敗でも、サーバに残った仕向の初期化を解除する。
+    try { await api.setInit(initValues); } catch { /* /api/init のない旧サーバでも開始する */ }
     const layout = loadLayout();
     record.setMaxSamples(layout.maxSamples);
     // 再読み込みの前に固定した文字列（保存した構成の最後の値）を、丸まって届く state.holds の表記に使う
