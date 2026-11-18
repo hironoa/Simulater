@@ -18,11 +18,11 @@
 
 | 項目 | 内容 |
 | --- | --- |
-| ビルド元 | `3d80cde`（長い波形を、見えている範囲を画面の幅ほどに絞った点だけで描き、`getOption()` の結果を使い回し、ズームバーの背景は全期間を絞った見えない系列から描く GUI の変更を、`d607b12`（PR #51 までの main）に足したもの） |
+| ビルド元 | `dc4b1b4`（ライブモードで仕向ごとの初期化の値を選んで入れる sim の `/api/init`・`/api/variants` と GUI の仕向のパネルを、`0e8d470`（PR #52 までの main）に足したもの。PR #53） |
 | ビルドした日 | 2026-11-18 |
-| ビルド方法 | Windows 11 の上で `tools\build_dist.bat`（MinGW-w64 の gcc 16.2.0、x86_64、UCRT。`build.bat` の `CC=gcc` と同じ設定） |
+| ビルド方法 | GitHub Actions の `windows` ジョブ（run 44322112291、windows-2025、MinGW-Builds の gcc 15.2.0、x86_64、posix-seh、UCRT。`build.bat` の `CC=gcc`）の成果物 `sim-windows-x64` から `sim.exe` を取った。テキストのファイル（`sim_gui.html`、`README.md`、`sim.cfg.example`、`native_ram_clear.c`、`xlate/`、`native/`）は、成果物と改行コード以外が同じであることを確かめて、リポジトリのソースの写し（LF）を置いた |
 | 依存する DLL | Windows 標準のものだけ（KERNEL32、SHELL32、WS2_32、UCRT）。MinGW の DLL は要らない |
-| 確認 | ビルドした Windows の PC で実行した。ビルド元のソースは `tests\run_tests.bat` 893 件と、GUI の `npm test` 174 件が成功。6 万点・20 万点の波形で、表示・拡大・カーソルの値・A/B 比較・ズームバーの背景を画面で確かめた。コア（`rl78`）は変えていないので、コア単体の試験は今回は実行していない。このフォルダの `sim.exe` そのものでは、起動して版を表示できることだけを確かめた |
+| 確認 | CI の同じジョブで、ビルド元のソースの `tests\run_tests.bat` 894 件と、コア単体の試験（`rl78\tests\run_tests.bat`）、clang でのビルドが成功。Mac の上では `tests/run_tests.sh` 1176 件（失敗 1 件は Mac の clang の警告で、Windows には関係しない）と GUI の `npm test` 196 件が成功し、モックのサーバで仕向のパネルを画面で確かめた。`sim.exe` そのものは Windows で実行していない（`/api/init`・`/api/variants` の文字列が入っていることと、Windows 標準の DLL だけを使うことを確かめた） |
 
 普段の配布物は CI（GitHub Actions の `windows` ジョブの成果物 `sim-windows-x64`）が作ります。
 このフォルダは、CI を使えなかったときの代わりに置いたものです。ソースを変えても自動では作り直されないので、
