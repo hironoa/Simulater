@@ -20,6 +20,101 @@ import { Camera } from "lucide-react";
 import toast from "react-hot-toast";
 import { copyChartAndTableToClipboard } from "../utils/exportImage";
 import { computeInactive, inactiveLabel, InactiveResult } from "../utils/inactiveRanges";
+import { decimateRange, overviewValues } from "../utils/decimate";
+
+/**
+ * ECharts は渡した点の数に比例して重くなる（15 信号 × 60,000 点で、ホバー 1 回の描き直しに 3 秒前後）。
+ * カテゴリ軸と同じ長さの折れ線は、見えている範囲を画面の幅ほどに絞った点（[番号, 値]）だけを渡し、
+ * 拡大・スクロールのたびに作り直す。全点は fullSeries に持ち、ホバーの値はそちらから読む。
+ * この点数より少なければ、従来どおり全点を渡す。
+ */
+const DECIMATE_MIN_POINTS = 8000;
+
+type FullSeries = Map<number, (number | null)[]>;
+
+function isPlainValues(data: unknown[]): boolean {
+  for (const v of data) {
+    if (v === null || v === undefined) continue;
+    return typeof v === "number";
+  }
+  return true;
+}
+
+/** 絞る対象の系列（番号 → 全点）。option.series の data はまだ全点のまま。 */
+function collectFullSeries(option: any): FullSeries {
+  const full: FullSeries = new Map();
+  const count = option?.xAxis?.[0]?.data?.length ?? 0;
+  if (count < DECIMATE_MIN_POINTS) return full;
+  (option.series ?? []).forEach((series: any, i: number) => {
+    if (series?.type === "line" && Array.isArray(series.data) && series.data.length === count && isPlainValues(series.data)) {
+      full.set(i, series.data);
+    }
+  });
+  return full;
+}
+
+const DATA_SHADOW_TYPES = ["line", "bar", "scatter", "candlestick"];
+
+/**
+ * ズームバーの背景（データシャドウ）は、ECharts が x 軸 0 の最初の系列の元データから描く。その系列を表示範囲に
+ * 絞ると背景まで表示範囲の波形になるので、全期間を絞った見えない系列を先頭に足して、背景はそれから描かせる。
+ * 系列の番号が 1 つずれるので、番号で系列を指す visualMap と、絞る対象の番号も 1 つずらす。
+ */
+function addZoomShadowSeries(option: any, full: FullSeries, buckets: number): FullSeries {
+  const source = option.series.findIndex((s: any) => (s.xAxisIndex ?? 0) === 0 && DATA_SHADOW_TYPES.includes(s.type));
+  const data = source >= 0 ? full.get(source) : undefined;
+  if (!data) return full;
+  option.series.unshift({
+    name: "_zoom_shadow",
+    type: "line",
+    xAxisIndex: 0,
+    yAxisIndex: option.series[source].yAxisIndex,
+    data: overviewValues(data, buckets),
+    silent: true,
+    animation: false,
+    symbol: "none",
+    showSymbol: false,
+    lineStyle: { width: 0, opacity: 0 },
+    itemStyle: { opacity: 0 },
+    tooltip: { show: false },
+    emphasis: { disabled: true },
+  });
+  for (const vm of option.visualMap ?? []) {
+    if (typeof vm.seriesIndex === "number") vm.seriesIndex += 1;
+  }
+  return new Map([...full].map(([i, values]) => [i + 1, values]));
+}
+
+function decimateBuckets(chart: echarts.ECharts) {
+  return Math.max(200, Math.round(chart.getWidth()));
+}
+
+/**
+ * getOption() は設定全体（各 x 軸の目盛りの文字を含む）を毎回複製するので、長い記録ではホバーのたびに
+ * 数十〜百 ms かかる。設定か表示範囲が変わるまで、同じ結果を返す。
+ * 結果は読むだけにすること（画像出力の一時的な書き換えは、表示の処理が読む項目に触れない）。
+ */
+function cacheGetOption(chart: echarts.ECharts) {
+  const c = chart as any;
+  const get = c.getOption.bind(chart);
+  let cached: unknown = null;
+  const clear = () => { cached = null; };
+  for (const name of ["setOption", "dispatchAction", "resize", "clear"]) {
+    const call = c[name].bind(chart);
+    c[name] = (...args: unknown[]) => { cached = null; return call(...args); };
+  }
+  // 内側・スライダーの操作による拡大は dispatchAction を通らないので、イベントで捨てる
+  chart.on("datazoom", clear);
+  c.getOption = () => (cached ??= get());
+}
+
+/** いま見えているカテゴリの範囲 [start, end)。 */
+function visibleCategoryRange(chart: echarts.ECharts, count: number): [number, number] {
+  const axis = (chart as any).getModel?.()?.getComponent?.("xAxis", 0)?.axis;
+  const extent = axis?.scale?.getExtent?.() as number[] | undefined;
+  if (!extent || !extent.every(Number.isFinite)) return [0, count];
+  return [Math.max(0, Math.floor(extent[0])), Math.min(count, Math.ceil(extent[1]) + 1)];
+}
 
 export type LabelInfo = { id: string, orgX: number, orgY: number, targetY: number, y: number, text: string, color: string, isDark: boolean, dashed?: boolean, dot?: boolean, alwaysShow?: boolean, noDot?: boolean, fixedY?: boolean };
 
@@ -419,7 +514,29 @@ export function Chart() {
   }, [contextMenu]);
   const chartRef = useRef<HTMLDivElement>(null);
   const chartInstance = useRef<echarts.ECharts | null>(null);
+  const fullSeriesRef = useRef<FullSeries>(new Map());
+  const drawnRangeRef = useRef("");
+  const decimateFrameRef = useRef(0);
   const prevAutoTriggerRef = useRef<number>(0);
+
+  /** 見えている範囲が変わっていたら、絞った点を作り直して系列の data だけを差し替える。 */
+  const refreshDecimation = useCallback((chart: echarts.ECharts) => {
+    const full = fullSeriesRef.current;
+    if (!full.size || chart.isDisposed()) return;
+    const count = full.values().next().value!.length;
+    const [start, end] = visibleCategoryRange(chart, count);
+    const buckets = decimateBuckets(chart);
+    const key = `${start}:${end}:${buckets}`;
+    if (key === drawnRangeRef.current) return;
+    drawnRangeRef.current = key;
+    const last = Math.max(...full.keys());
+    const series: any[] = [];
+    for (let i = 0; i <= last; i++) {
+      const data = full.get(i);
+      series.push(data ? { data: decimateRange(data, start, end, buckets) } : {});
+    }
+    chart.setOption({ series });
+  }, []);
   const lastZoomRef = useRef<{
     start: number;
     end: number;
@@ -565,6 +682,7 @@ export function Chart() {
 
     if (!chartInstance.current) {
       chartInstance.current = echarts.init(chartRef.current, theme);
+      cacheGetOption(chartInstance.current);
 
       // Canvas のレーン名・凡例にもネイティブの title で完全名を出す。
       chartInstance.current.on("mouseover", (event: any) => {
@@ -724,7 +842,8 @@ export function Chart() {
                    option.series.forEach((series: any, seriesIdx: number) => {
                      if (series.name && series.name.endsWith('_mouse_tracker')) {
                         if (hasCompareLabels(series.name.slice(0, -"_mouse_tracker".length))) return;
-                        const data = series.data;
+                        // 描画用に絞った系列は [番号, 値] なので、値は全点から読む
+                        const data = fullSeriesRef.current.get(seriesIdx) ?? series.data;
                         if (!data || data.length <= index) return;
                         const physVal = data[index];
                         if (physVal !== undefined && physVal !== null) {
@@ -781,6 +900,13 @@ export function Chart() {
       });
 
       chartInstance.current.on('datazoom', () => {
+        // 拡大・スクロール中は 16 ms に 1 回だけ点を絞り直す（requestAnimationFrame は裏のタブで止まるので使わない）
+        if (!decimateFrameRef.current) {
+          decimateFrameRef.current = window.setTimeout(() => {
+            decimateFrameRef.current = 0;
+            if (chartInstance.current) refreshDecimation(chartInstance.current);
+          }, 16);
+        }
         const op = chartInstance.current?.getOption() as any;
         if (op && op.dataZoom && op.dataZoom.length > 0) {
           const z = op.dataZoom[0];
@@ -911,10 +1037,22 @@ export function Chart() {
     );
 
     setTimeout(() => {
+      if (myChart.isDisposed()) return;
       myChart.resize();
+      // 長い記録は、まず全体を絞った点で入れ、見えている範囲に合わせて絞り直す
+      let full = collectFullSeries(option);
+      drawnRangeRef.current = "";
+      if (full.size) {
+        const buckets = decimateBuckets(myChart);
+        for (const [i, data] of full) (option.series[i] as any).data = decimateRange(data, 0, data.length, buckets);
+        full = addZoomShadowSeries(option, full, buckets);
+        drawnRangeRef.current = `0:${full.values().next().value!.length}:${buckets}`;
+      }
+      fullSeriesRef.current = full;
       myChart.setOption(option as echarts.EChartsOption, true);
       // Read the latest request, including navigation after this callback was scheduled.
       applyRequestedCompareZoom(myChart);
+      refreshDecimation(myChart);
       const hoverOverlay = document.getElementById("hover-overlay-container");
       if (hoverOverlay && (compareEnabled || hadComparison.current)) hoverOverlay.innerHTML = "";
       hadComparison.current = compareEnabled;
