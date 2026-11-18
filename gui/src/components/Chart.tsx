@@ -20,7 +20,7 @@ import { Camera } from "lucide-react";
 import toast from "react-hot-toast";
 import { copyChartAndTableToClipboard } from "../utils/exportImage";
 import { computeInactive, inactiveLabel, InactiveResult } from "../utils/inactiveRanges";
-import { decimateRange } from "../utils/decimate";
+import { decimateRange, overviewValues } from "../utils/decimate";
 
 /**
  * ECharts は渡した点の数に比例して重くなる（15 信号 × 60,000 点で、ホバー 1 回の描き直しに 3 秒前後）。
@@ -51,6 +51,38 @@ function collectFullSeries(option: any): FullSeries {
     }
   });
   return full;
+}
+
+const DATA_SHADOW_TYPES = ["line", "bar", "scatter", "candlestick"];
+
+/**
+ * ズームバーの背景（データシャドウ）は、ECharts が x 軸 0 の最初の系列の元データから描く。その系列を表示範囲に
+ * 絞ると背景まで表示範囲の波形になるので、全期間を絞った見えない系列を先頭に足して、背景はそれから描かせる。
+ * 系列の番号が 1 つずれるので、番号で系列を指す visualMap と、絞る対象の番号も 1 つずらす。
+ */
+function addZoomShadowSeries(option: any, full: FullSeries, buckets: number): FullSeries {
+  const source = option.series.findIndex((s: any) => (s.xAxisIndex ?? 0) === 0 && DATA_SHADOW_TYPES.includes(s.type));
+  const data = source >= 0 ? full.get(source) : undefined;
+  if (!data) return full;
+  option.series.unshift({
+    name: "_zoom_shadow",
+    type: "line",
+    xAxisIndex: 0,
+    yAxisIndex: option.series[source].yAxisIndex,
+    data: overviewValues(data, buckets),
+    silent: true,
+    animation: false,
+    symbol: "none",
+    showSymbol: false,
+    lineStyle: { width: 0, opacity: 0 },
+    itemStyle: { opacity: 0 },
+    tooltip: { show: false },
+    emphasis: { disabled: true },
+  });
+  for (const vm of option.visualMap ?? []) {
+    if (typeof vm.seriesIndex === "number") vm.seriesIndex += 1;
+  }
+  return new Map([...full].map(([i, values]) => [i + 1, values]));
 }
 
 function decimateBuckets(chart: echarts.ECharts) {
@@ -1008,14 +1040,15 @@ export function Chart() {
       if (myChart.isDisposed()) return;
       myChart.resize();
       // 長い記録は、まず全体を絞った点で入れ、見えている範囲に合わせて絞り直す
-      const full = collectFullSeries(option);
-      fullSeriesRef.current = full;
+      let full = collectFullSeries(option);
       drawnRangeRef.current = "";
       if (full.size) {
         const buckets = decimateBuckets(myChart);
         for (const [i, data] of full) (option.series[i] as any).data = decimateRange(data, 0, data.length, buckets);
+        full = addZoomShadowSeries(option, full, buckets);
         drawnRangeRef.current = `0:${full.values().next().value!.length}:${buckets}`;
       }
+      fullSeriesRef.current = full;
       myChart.setOption(option as echarts.EChartsOption, true);
       // Read the latest request, including navigation after this callback was scheduled.
       applyRequestedCompareZoom(myChart);

@@ -1,5 +1,23 @@
 import { describe, expect, it } from "vitest";
-import { decimateRange } from "./decimate";
+import { decimateRange, overviewValues } from "./decimate";
+
+describe("overviewValues", () => {
+  it("returns min and max per bucket in index order, covering the whole data", () => {
+    const values = new Array<number | null>(100_000).fill(0);
+    values[10] = 5;
+    values[99_990] = -3;
+    const out = overviewValues(values, 100);
+    expect(out).toHaveLength(200);
+    expect(out.slice(0, 2)).toEqual([0, 5]);
+    expect(out.slice(-2)).toEqual([0, -3]);
+  });
+
+  it("keeps gaps and short data", () => {
+    expect(overviewValues([null, null, 1, 2], 2)).toEqual([null, null, 1, 2]);
+    expect(overviewValues([3], 10)).toEqual([3, 3]);
+    expect(overviewValues([], 10)).toEqual([]);
+  });
+});
 
 const indices = (points: [number, number | null][]) => points.map(([i]) => i);
 

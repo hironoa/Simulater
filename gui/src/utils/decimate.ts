@@ -11,6 +11,33 @@
  */
 export type DecimatedPoint = [number, number | null];
 
+/**
+ * ズームバーの背景（データシャドウ）用に、全期間を等間隔の区間に分け、区間ごとに最小と最大を番号の順に並べた値を返す。
+ * ECharts はデータシャドウを値の番号順に等間隔で並べて描くので、[番号, 値] ではなく値だけにする。
+ * 区間がすべて値なしなら null を 2 つ入れる。
+ */
+export function overviewValues(values: ArrayLike<number | null>, buckets: number): (number | null)[] {
+  const n = values.length;
+  const out: (number | null)[] = [];
+  if (!n) return out;
+  const b = Math.max(1, Math.min(n, Math.floor(buckets)));
+  for (let k = 0; k < b; k++) {
+    const s = Math.floor((k * n) / b);
+    const e = Math.floor(((k + 1) * n) / b);
+    let min = -1, max = -1;
+    for (let i = s; i < e; i++) {
+      const v = values[i];
+      if (v == null) continue;
+      if (min < 0 || v < (values[min] as number)) min = i;
+      if (max < 0 || v > (values[max] as number)) max = i;
+    }
+    if (min < 0) out.push(null, null);
+    else if (min <= max) out.push(values[min], values[max]);
+    else out.push(values[max], values[min]);
+  }
+  return out;
+}
+
 export function decimateRange(
   values: ArrayLike<number | null>,
   start: number,
