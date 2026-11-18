@@ -1,3 +1,4 @@
+import { buildDisplayBlocks, layoutBlocks } from "./displayBlocks";
 import { displaySignalName } from "./displaySignalName";
 import * as echarts from "echarts";
 import { addCompareRendering, CompareRendering } from "./compareRendering";
@@ -87,105 +88,9 @@ export function buildChartOptions(
   );
 
   // === Layout & Config Calculation ===
-  type DisplayBlock =
-    | {
-        type: "group_overlap";
-        name: string;
-        signals: string[];
-        syncRange: boolean;
-        sig?: never;
-        syncGroup?: never;
-      }
-    | {
-        type: "single";
-        sig: string;
-        syncGroup: string[] | null;
-        signals?: never;
-        name?: never;
-        syncRange?: never;
-      };
-
-  let displayBlocks: DisplayBlock[] = [];
-  signalGroups.forEach((group) => {
-    const groupActiveSigs = group.signals.filter((s) =>
-      activeSignals.includes(s),
-    );
-    if (groupActiveSigs.length === 0) return;
-    if (group.layout === "overlap") {
-      displayBlocks.push({
-        type: "group_overlap",
-        name: group.name,
-        signals: groupActiveSigs,
-        syncRange: group.syncRange,
-      });
-    } else {
-      groupActiveSigs.forEach((sig) => {
-        displayBlocks.push({
-          type: "single",
-          sig: sig,
-          syncGroup: group.syncRange ? groupActiveSigs : null,
-        });
-      });
-    }
-  });
-
-  const unassignedActiveSigs = unassignedSignals.filter((s) =>
-    activeSignals.includes(s),
-  );
-  if (unassignedActiveSigs.length > 0) {
-    if (unassignedGroupConfig.layout === "overlap") {
-      displayBlocks.push({
-        type: "group_overlap",
-        name: "未分類",
-        signals: unassignedActiveSigs,
-        syncRange: unassignedGroupConfig.syncRange,
-      });
-    } else {
-      unassignedActiveSigs.forEach((sig) => {
-        displayBlocks.push({
-          type: "single",
-          sig: sig,
-          syncGroup: unassignedGroupConfig.syncRange
-            ? unassignedActiveSigs
-            : null,
-        });
-      });
-    }
-  }
-
-  const N = displayBlocks.length;
-  // Fixed pixel top margin equivalent to ensure labels are not cut off
+  const displayBlocks = buildDisplayBlocks(activeSignals, signalGroups, unassignedSignals, unassignedGroupConfig);
   const fixedTopMarginPx = 35;
-  const topMargin =
-    containerHeight > 0 ? (fixedTopMarginPx / containerHeight) * 100 : 4;
-  const bottomMargin = 8;
-  const availableHeight = 100 - topMargin - bottomMargin;
-  const maxSpacing = 2.0;
-  const spacing =
-    N > 1 ? Math.min(maxSpacing, (availableHeight * 0.25) / (N - 1)) : 0;
-
-  let totalWeight = 0;
-  const blockWeights = displayBlocks.map((block) => {
-    if (layoutMode === "uniform") {
-      totalWeight += 1;
-      return 1;
-    }
-
-    let userWeight = 1;
-    if (block.type === "group_overlap") {
-      userWeight =
-        block.signals.reduce(
-          (sum: number, s: string) => sum + (signalSettings[s].weight ?? 1),
-          0,
-        ) / block.signals.length || 1;
-    } else {
-      userWeight = signalSettings[block.sig].weight ?? 1;
-    }
-    totalWeight += userWeight;
-    return userWeight;
-  });
-
-  let currentTop = topMargin;
+  const blockLayout = layoutBlocks(displayBlocks, signalSettings, layoutMode, containerHeight);
   let gridGroups: { top: number; height: number }[] = [];
   let sigToGridIndex: Record<string, number> = {};
   let syncRangeCache: Record<
@@ -194,12 +99,7 @@ export function buildChartOptions(
   > = {};
 
   displayBlocks.forEach((block, idx) => {
-    const gTop = currentTop;
-    const w = blockWeights[idx];
-    const gHeight =
-      totalWeight > 0
-        ? (availableHeight - spacing * (N - 1)) * (w / totalWeight)
-        : 0;
+    const { top: gTop, height: gHeight } = blockLayout[idx];
     gridGroups.push({ top: gTop, height: gHeight });
 
     if (block.type === "group_overlap") {
@@ -354,7 +254,6 @@ export function buildChartOptions(
         overlapGroupTitle: null,
       };
     }
-    currentTop += gHeight + spacing;
   });
 
   const FONT_SANS =

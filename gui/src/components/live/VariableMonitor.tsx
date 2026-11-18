@@ -16,9 +16,10 @@ export function VariableMonitor() {
     watch: s.watch, values: s.values, errors: s.watchErrors, serverWatch: s.serverWatch,
   })));
   const colors = useWaveformStore(useShallow((s) => Object.fromEntries(watch.map((w) => [w.name, s.signalSettings[w.name]?.color ?? "#999"]))));
+  const settings = useWaveformStore(s => s.signalSettings);
   const names = watch.map(w => w.name);
   const watched = new Set(serverWatch);
-  const allPlot = watch.length > 0 && watch.every((w) => w.plot);
+  const allPlot = watch.length > 0 && watch.every((w) => settings[w.name]?.checked ?? false);
 
   return (
     <div className="flex flex-col gap-1.5">
@@ -46,7 +47,7 @@ export function VariableMonitor() {
                 <tr key={w.name} className="border-b border-gray-100 dark:border-slate-800 hover:bg-gray-50 dark:hover:bg-slate-800/60">
                   <td className="py-0.5 w-10">
                     <label className="flex items-center gap-1">
-                      <input type="checkbox" checked={w.plot} onChange={(e) => live.updateWatch(w.name, { plot: e.target.checked })} />
+                      <input type="checkbox" checked={settings[w.name]?.checked ?? false} onChange={(e) => live.updateWatch(w.name, { plot: e.target.checked })} />
                       <span className="inline-block w-2.5 h-2.5 rounded-sm" style={{ background: colors[w.name] }} />
                     </label>
                   </td>

@@ -1,12 +1,14 @@
-import { useMemo } from "react";
+import { useMemo, useSyncExternalStore } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { useWaveformStore } from "../store/useWaveformStore";
+import { liveRecord } from "../live/liveRecord";
 import { colorPalette } from "../utils/helpers";
 import { hasSignalDiff, compareSignalLayout, compareDisplaySteps } from "../utils/compareView";
 import type { SignalSetting } from "../types";
 
 /** Temporary presentation settings for A-only signals; never modify B's settings. */
 export function useCompareView() {
+  const liveNames = useSyncExternalStore(liveRecord.subscribeNames, liveRecord.getNames, liveRecord.getNames);
   const state = useWaveformStore(useShallow(s => ({
     chartData: s.chartData, compareChartData: s.compareChartData, compareEnabled: s.compareEnabled,
     signalSettings: s.signalSettings, signalGroups: s.signalGroups, unassignedSignals: s.unassignedSignals,
@@ -35,8 +37,9 @@ export function useCompareView() {
         },
       };
     }
-    // Keep stored membership intact; the non-comparison view can only render B's signals.
-    const hasBSignal = (sig: string) => Object.hasOwn(state.chartData?.seriesMap ?? {}, sig);
+    // Keep stored membership intact; live columns remain available while chartData is null.
+    const liveSignals = new Set(liveNames);
+    const hasBSignal = (sig: string) => Object.hasOwn(state.chartData?.seriesMap ?? {}, sig) || liveSignals.has(sig);
     const groups = enabled ? state.signalGroups : state.signalGroups.map(group => ({
       ...group, signals: group.signals.filter(hasBSignal),
     }));
@@ -46,5 +49,5 @@ export function useCompareView() {
       unassigned: layout.unassignedSignals,
       visible: (sig: string) => !enabled || !state.showOnlyDiffSignals || hasSignalDiff(state.diffSummary[sig], state.diffFilter),
     };
-  }, [state]);
+  }, [state, liveNames]);
 }
