@@ -318,7 +318,7 @@ function parseTestCsv(buf) {
   const nul = lines.findIndex((l) => l.includes("\0"));
   if (nul >= 0) throw new Error(`${nul + 1} 行目: NUL バイトを含む行があります（UTF-16 の CSV には対応していません）`);
   const first = (l) => l.split(",")[0].trim().replace(/^"(.*)"$/, "$1").trim().toLowerCase();
-  const modAt = lines.map((l, i) => (first(l) === "mod" ? i : -1)).filter((i) => i >= 0);
+  const modAt = lines.map((l, i) => (["mod", "modi"].includes(first(l)) ? i : -1)).filter((i) => i >= 0);
   if (!modAt.length) throw new Error("mod 行がありません");
   const end = modAt[1] ?? lines.length;
   const block = lines.slice(modAt[0], end);
@@ -334,7 +334,8 @@ function parseTestCsv(buf) {
         + "読み込めません（sim run では実行できます。左から順に書きます）");
     }
   }
-  const rows = block.slice(nameAt + 1).filter((l) => l.trim() && !first(l).startsWith(";") && !first(l).startsWith("#"))
+  const rows = block.slice(nameAt + 1).filter((l, i) => l.trim() && !first(l).startsWith(";")
+      && !first(l).startsWith("#") && !first(block[nameAt + i]).startsWith("#init"))
     .map((l) => l.split(",").slice(1));
   return { func: head[1]?.trim() ?? "", names, nIn, rows, blocks: modAt.length };
 }
@@ -431,9 +432,10 @@ const server = http.createServer(async (req, res) => {
       if (csvFunc && csvFunc !== func) changeFunc(csvFunc);
       parsed.names.slice(0, parsed.nIn).forEach((n) => inputNames.add(n));
       csvPlay = { ...parsed, index: 0 };
-      setWatch([...new Set([...watch, ...parsed.names.filter(resolvable)])]);
+      const names = [...new Set(parsed.names)];
+      setWatch([...new Set([...watch, ...names.filter(resolvable)])]);
       running = true; rebase(); broadcastState();
-      const out = { rows: parsed.rows.length, names: parsed.names };
+      const out = { rows: parsed.rows.length, names };
       if (parsed.blocks > 1) {
         // 2 つ目以降の mod ブロックは再生しない。黙って一部だけ再生しないように応答で知らせる
         Object.assign(out, {

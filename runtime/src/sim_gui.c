@@ -1524,7 +1524,15 @@ static void api_load_csv(sim_sock s, req_t *r)
     G.play_cols = t.nin;
     G.play_refs = refs;
     G.play_col_ids = sim_xcalloc((size_t)t.nin + 1, sizeof *G.play_col_ids);
-    set_watch_locked((const char *const *)t.names, t.nin + t.nout, 1, NULL);
+    /* 初期化列は再生と記録に使い、監視には通常の列だけを順に加える。 */
+    int nwatch = 0;
+    const char **watch = sim_xcalloc((size_t)(t.nin + t.nout) + 1, sizeof *watch);
+    for (i = t.init_columns; i < t.nin + t.nout; i++) {
+        int j;
+        for (j = 0; j < nwatch && strcmp(watch[j], t.names[i]) != 0; j++) {}
+        if (j == nwatch) watch[nwatch++] = t.names[i];
+    }
+    set_watch_locked(watch, nwatch, 1, NULL);
     G.play_active = 1;
     reset_locked();   /* 列番号（play_col_ids）は記録の列を組み直すときに CSV の入力列の順で振る */
     G.play_pos = 0;
@@ -1532,10 +1540,11 @@ static void api_load_csv(sim_sock s, req_t *r)
     state_changed();
     sim_buf_init(&b);
     sim_buf_printf(&b, "{\"rows\":%d,\"names\":[", t.nrows);
-    for (i = 0; i < t.nin + t.nout; i++) {
+    for (i = 0; i < nwatch; i++) {
         if (i) sim_buf_addc(&b, ',');
-        sim_buf_json_str(&b, t.names[i]);
+        sim_buf_json_str(&b, watch[i]);
     }
+    free(watch);
     sim_buf_addc(&b, ']');
     /* 2 つ目以降の mod ブロックは再生しない。黙って一部だけ再生しないように応答で知らせる */
     if (t.nblocks > 1) {

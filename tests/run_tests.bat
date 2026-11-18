@@ -289,6 +289,15 @@ if errorlevel 1 (call :ng "/api/stream state") else (call :ok "/api/stream state
 curl -s -X POST --data-binary "@%T%\gui\reset.json" "%U%/api/control" > "%WORK%\reset.out"
 "%HAS%" /l /c:"\"step\":0" "%WORK%\reset.out" >nul
 if errorlevel 1 (call :ng "/api/control reset") else (call :ok "/api/control reset")
+curl -s -X POST --data-binary "@%T%\gui\watch_none.json" "%U%/api/watch" > nul
+set "CODE="
+for /f "usebackq delims=" %%C in (`curl -s -o "%WORK%\init_watch.out" -w "%%{http_code}" -X POST --data-binary "@%T%\gui\play_init_watch.csv" "%U%/api/load-csv"`) do set "CODE=%%C"
+"%HAS%" /l /c:"{\"rows\":1,\"names\":[\"P2_bit.no0\",\"g_eng.state\"]}" "%WORK%\init_watch.out" >nul
+if errorlevel 1 (call :ng "/api/load-csv returns unique names from regular columns") else if "%CODE%"=="200" (call :ok "/api/load-csv returns unique names from regular columns") else (call :ng "/api/load-csv init watch fixture: 200 expected, got %CODE%")
+curl -s -N --max-time 1 "%U%/api/stream" > "%WORK%\init_watch.sse" 2>nul
+"%HAS%" /l /c:"\"func\":\"TEST_cycle\",\"names\":[\"P2_bit.no0\",\"g_eng.state\"]}" "%WORK%\init_watch.sse" >nul
+if errorlevel 1 (call :ng "CSV playback watches only unique names from regular columns") else (call :ok "CSV playback watches only unique names from regular columns")
+curl -s -X POST --data-binary "@%T%\gui\watch.json" "%U%/api/watch" > nul
 curl -s -X POST --data-binary "@%T%\gui\play.csv" "%U%/api/load-csv" > "%WORK%\load.out"
 "%HAS%" /l /c:"\"rows\":4" "%WORK%\load.out" >nul
 if errorlevel 1 (call :ng "/api/load-csv") else (call :ok "/api/load-csv")
