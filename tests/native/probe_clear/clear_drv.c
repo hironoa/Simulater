@@ -10,9 +10,8 @@
  *   0xFC0BC g_mat2（6）、0xFC0C2 g_iarr（10）
  *   0xFC108 f_static1@cnt（2）、0xFC10A f_static2@cnt（2）、0xFC10C f_static2@keep（6）、0xFC112 f_static2@nested（1）
  *
- * このファイルの変数は、ロードモジュールにないので「DLL にあってロードモジュールにない変数」になり、
- * どの範囲をクリアしても触られない（probe.c と同じ名前の static と、同じ名前の関数の中の static も置く）。
- * クリアの対象は、製品のプロジェクト（mtpj）のソースの変数と、番地を直接書いたデータ（clear_drv.h の定義を含む）。
+ * このファイルには、ロードモジュールと対応づかず毎回クリアする変数を置く。probe.c と同じ名前でも、
+ * ファイルが異なる static は対応づかない。番地を直接書いたデータ（clear_drv.h）は範囲の中だけをクリアする。
  */
 #include "clear_drv.h"
 

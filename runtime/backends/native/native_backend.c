@@ -134,6 +134,11 @@ typedef struct {
 } layout_t;
 
 typedef struct {
+    uint8_t *pc;
+    uint32_t pc_size;
+} clear_var_t;
+
+typedef struct {
     sim_backend b;
     sim_cfg cfg;
     int quiet;
@@ -181,8 +186,9 @@ typedef struct {
     rl78_elf lay_elf;            /* ロードモジュール（対応づけを作るまで持つ） */
     rl78_symtab lay_st;
     layout_t *lay; size_t nlay;
-    int lay_vars, lay_matched, lay_unmatched, lay_size_diff, lay_dll_only, lay_skipped_src, lay_src_vars, lay_ambiguous;
-    /* 対応なし、対象外、あいまいの名前（表示用。それぞれ 50 個まで） */
+    clear_var_t *lay_always; size_t nlay_always;
+    int lay_vars, lay_matched, lay_unmatched, lay_size_diff, lay_dll_only, lay_ambiguous;
+    /* 対応なし、毎回クリア、あいまいの名前（表示用。それぞれ 50 個まで） */
     const char **lay_lm_only, **lay_dll_names, **lay_src_names, **lay_amb_names;
     int n_lm_only, n_dll_names, n_src_names, n_amb_names;
     uint64_t host_slot;          /* DLL の __sim_host_clear の番地（0 は見つからない） */
@@ -313,6 +319,7 @@ static void nat_free(nat *z)
     rl78_elf_free(&z->lay_elf);
     rl78_symtab_free(&z->lay_st);
     free(z->lay);
+    free(z->lay_always);
     free((void *)z->lay_lm_only);
     free((void *)z->lay_dll_names);
     free((void *)z->lay_src_names);
@@ -1935,30 +1942,28 @@ static void b_print_info(sim_backend *b, FILE *out)
     fprintf(out, "  最適化: native_opt = %d\n", z->opt);
     if (z->layout_path) {
         fprintf(out, "  変数の番地の対応（native_layout）: ロードモジュールの変数 %d 個のうち %d 個を対応づけ（対応なし %d 個）、"
-                     "大きさの違うもの %d 個、native_src の変数 %d 個は対象外、あいまいなもの %d 個\n",
-                z->lay_vars, z->lay_matched, z->lay_unmatched, z->lay_size_diff, z->lay_skipped_src, z->lay_ambiguous);
+                     "大きさの違うもの %d 個、毎回クリアする native_src の変数 %zu 個、あいまいなもの %d 個\n",
+                z->lay_vars, z->lay_matched, z->lay_unmatched, z->lay_size_diff, z->nlay_always, z->lay_ambiguous);
         fprintf(out, "    ロードモジュール: %s\n", z->layout_path);
-        fprintf(out, "    対応づけの対象: 製品のプロジェクト（mtpj）のソースの変数。native_src のソースの変数 %d 個はクリアしません\n",
-                z->lay_src_vars);
-        fprintf(out, "    DLL（製品のソース）にあってロードモジュールにない変数: %d 個\n", z->lay_dll_only);
+        fprintf(out, "    DLL（製品のソース）にあってロードモジュールと対応づかなかった変数: %d 個\n", z->lay_dll_only);
         if (z->w.verbose) {
             int k;
-            fprintf(out, "    ロードモジュールにあって DLL（製品のソース）にない変数（%d 個%s）:\n", z->lay_unmatched,
+            fprintf(out, "    ロードモジュールにあって DLL に対応がない変数（%d 個%s）:\n", z->lay_unmatched,
                     z->lay_unmatched > z->n_lm_only ? "。50 個まで" : "");
             for (k = 0; k < z->n_lm_only; k++) fprintf(out, "      %s\n", z->lay_lm_only[k]);
-            fprintf(out, "    DLL（製品のソース）にあってロードモジュールにない変数（%d 個%s）:\n", z->lay_dll_only,
+            fprintf(out, "    DLL（製品のソース）にあってロードモジュールと対応づかなかった変数（%d 個%s）:\n", z->lay_dll_only,
                     z->lay_dll_only > z->n_dll_names ? "。50 個まで" : "");
             for (k = 0; k < z->n_dll_names; k++) fprintf(out, "      %s\n", z->lay_dll_names[k]);
-            fprintf(out, "    ロードモジュールにあって、DLL では native_src のソースの変数なので対象外にしたもの（%d 個%s）:\n",
-                    z->lay_skipped_src, z->lay_skipped_src > z->n_src_names ? "。50 個まで" : "");
+            fprintf(out, "    毎回クリアする native_src の変数（%zu 個%s）:\n",
+                    z->nlay_always, z->nlay_always > (size_t)z->n_src_names ? "。50 個まで" : "");
             for (k = 0; k < z->n_src_names; k++) fprintf(out, "      %s\n", z->lay_src_names[k]);
             fprintf(out, "    同じ強さの相手が複数あって決められず、対応づけなかったもの（%d 個%s。候補の DLL の変数）:\n",
                     z->lay_ambiguous, z->lay_ambiguous > z->n_amb_names ? "。50 個まで" : "");
             for (k = 0; k < z->n_amb_names; k++) fprintf(out, "      %s\n", z->lay_amb_names[k]);
         }
     } else fprintf(out, "  変数の番地の対応（native_layout）: なし\n");
-    fprintf(out, "  native layout vars=%d matched=%d unmatched=%d size_diff=%d dll_only=%d skipped_src=%d ambiguous=%d\n",
-            z->lay_vars, z->lay_matched, z->lay_unmatched, z->lay_size_diff, z->lay_dll_only, z->lay_skipped_src,
+    fprintf(out, "  native layout vars=%d matched=%d unmatched=%d size_diff=%d dll_only=%d src_always=%zu ambiguous=%d\n",
+            z->lay_vars, z->lay_matched, z->lay_unmatched, z->lay_size_diff, z->lay_dll_only, z->nlay_always,
             z->lay_ambiguous);
     if (z->w.n) fprintf(out, "警告: %d 件%s\n", z->w.n, z->w.verbose ? "" : "（--verbose で表示）");
 }
@@ -2548,27 +2553,29 @@ static void layout_note(const char ***list, int *n, const char *name)
     (*list)[(*n)++] = name;
 }
 
-/* DLL の変数が、製品のプロジェクト（mtpj）に登録されたソースの変数なら 1。z->srcs の先頭 from_mtpj 個が mtpj のソースで、
- * 変数の file は read_dwarf でそのパスの文字列に置き換えてある。native_src のソース（テストドライバ、スタブ、代わりの C）は 0 */
-static int product_var(nat *z, const sim_var *v)
+/* read_dwarf が元のパスに直した file から、DLL の変数のソースを調べる。
+ * z->srcs の先頭 from_mtpj 個が製品、その後が native_src。実行時の部品や自動生成の代わりは含まない */
+enum { LAYOUT_OTHER, LAYOUT_PRODUCT, LAYOUT_SRC };
+
+static unsigned char layout_source(const nat *z, const char *file)
 {
     int j;
-    if (!v->file) return 0;
-    for (j = 0; j < z->from_mtpj && j < z->nsrcs; j++)
-        if (!strcmp(v->file, z->srcs[j])) return 1;
-    return 0;
+    if (!file) return LAYOUT_OTHER;
+    for (j = 0; j < z->nsrcs; j++)
+        if (!strcmp(file, z->srcs[j])) return j < z->from_mtpj ? LAYOUT_PRODUCT : LAYOUT_SRC;
+    return LAYOUT_OTHER;
 }
 
-/* ロードモジュールの変数と DLL の変数を対応づけ（native_layout_match）、表を作る。ロードモジュールはそのあと閉じる。
- * 対応づけの対象は、製品のプロジェクトのソースの変数だけ。native_src のソースの変数は、範囲に入っていてもクリアしない */
+/* ロードモジュールの番地との対応表と、毎回クリアする native_src の変数の一覧を作る。
+ * 一覧に入れるのは、一度も対応づけられず、あいまいな組の候補にもならなかった変数だけ */
 static void build_layout(nat *z)
 {
     size_t nd = z->st.nvars, nl = z->lay_st.nvars, i;
     native_layout_var *lv = sim_xcalloc(nl ? nl : 1, sizeof *lv), *dv = sim_xcalloc(nd ? nd : 1, sizeof *dv);
     long *match = sim_xcalloc(nl ? nl : 1, sizeof *match);
-    unsigned char *used = sim_xcalloc(nd ? nd : 1, 1);
+    unsigned char *dll_state = sim_xcalloc(nd ? nd : 1, 1), *source = sim_xcalloc(nd ? nd : 1, 1);
     const char *last_file = NULL;
-    int last_product = 0;
+    unsigned char last_source = LAYOUT_OTHER;
     for (i = 0; i < nl; i++) {
         const sim_var *v = &z->lay_st.vars[i];
         lv[i].name = v->name; lv[i].file = v->file; lv[i].func = v->func; lv[i].is_external = v->is_external;
@@ -2577,21 +2584,15 @@ static void build_layout(nat *z)
         const sim_var *v = &z->st.vars[i];
         dv[i].name = v->name; dv[i].file = v->file; dv[i].func = v->func; dv[i].is_external = v->is_external;
         /* 同じソースの変数は file の文字列を共有するので、直前の結果を使い回す */
-        if (v->file != last_file || !i) { last_file = v->file; last_product = product_var(z, v); }
-        dv[i].product = last_product;
-        if (!last_product) z->lay_src_vars++;
+        if (v->file != last_file || !i) { last_file = v->file; last_source = layout_source(z, v->file); }
+        source[i] = last_source;
     }
-    native_layout_match(lv, nl, dv, nd, match);
+    native_layout_match(lv, nl, dv, nd, match, dll_state);
     z->lay = sim_xcalloc(nl ? nl : 1, sizeof *z->lay);
     for (i = 0; i < nl; i++) {
         const sim_var *v = &z->lay_st.vars[i], *hit;
         uint32_t msize, psize;
         z->lay_vars++;
-        if (match[i] == NATIVE_LAYOUT_SRC) {
-            z->lay_skipped_src++;
-            layout_note(&z->lay_src_names, &z->n_src_names, layout_display(z, v));
-            continue;
-        }
         if (match[i] == NATIVE_LAYOUT_AMBIGUOUS) {
             z->lay_ambiguous++;
             if (z->n_amb_names < 50) {   /* 名前と、候補（名前と関数名が同じ DLL の変数）のファイル */
@@ -2605,7 +2606,7 @@ static void build_layout(nat *z)
                     if (strcmp(c->name, v->name) || !((!c->func && !v->func) || (c->func && v->func && !strcmp(c->func, v->func))))
                         continue;
                     sim_buf_printf(&b, "%s %s（%s）", nc++ ? "、" : "", c->file && *c->file ? c->file : "?",
-                                   dv[k].product ? "製品" : "native_src");
+                                   source[k] == LAYOUT_PRODUCT ? "製品" : source[k] == LAYOUT_SRC ? "native_src" : "その他");
                 }
                 sim_buf_adds(&b, "）");
                 layout_note(&z->lay_amb_names, &z->n_amb_names, ar_strdup(&z->st.ar, sim_buf_cstr(&b)));
@@ -2613,13 +2614,12 @@ static void build_layout(nat *z)
             }
             continue;
         }
-        if (match[i] < 0) {
+        if (match[i] < 0 || source[match[i]] == LAYOUT_OTHER) {
             z->lay_unmatched++;
             layout_note(&z->lay_lm_only, &z->n_lm_only, layout_display(z, v));
             continue;
         }
         hit = &z->st.vars[match[i]];
-        used[match[i]] = 1;
         z->lay_matched++;
         msize = v->type ? v->type->size : 0;
         psize = hit->type ? hit->type->size : 0;
@@ -2633,14 +2633,28 @@ static void build_layout(nat *z)
             t->hi = v->addr + msize;
             t->pc = (uint8_t *)(uintptr_t)hit->addr;
             t->pc_size = psize;
-            t->writable = r && r->writable;
+            t->writable = r && r->writable && !hit->is_const;
             t->name = layout_display(z, hit);
         }
     }
+    if (z->from_extra) z->lay_always = sim_xcalloc(nd ? nd : 1, sizeof *z->lay_always);
     for (i = 0; i < nd; i++) {
-        if (used[i] || !dv[i].product) continue;
-        z->lay_dll_only++;
-        layout_note(&z->lay_dll_names, &z->n_dll_names, layout_display(z, &z->st.vars[i]));
+        const sim_var *v = &z->st.vars[i];
+        if (source[i] == LAYOUT_PRODUCT && dll_state[i] != NATIVE_LAYOUT_DLL_MATCHED) {
+            z->lay_dll_only++;
+            layout_note(&z->lay_dll_names, &z->n_dll_names, layout_display(z, v));
+        }
+        if (source[i] == LAYOUT_SRC && dll_state[i] == NATIVE_LAYOUT_DLL_UNUSED && !v->is_const) {
+            uint32_t size = v->type ? v->type->size : 0;
+            range_t *r = size ? find_range(z, v->addr, size) : NULL;
+            if (r && r->writable) {
+                clear_var_t *t = &z->lay_always[z->nlay_always++];
+                t->pc = (uint8_t *)(uintptr_t)v->addr;
+                t->pc_size = size;
+                if (z->n_src_names < 50)
+                    layout_note(&z->lay_src_names, &z->n_src_names, layout_display(z, v));
+            }
+        }
     }
     qsort(z->lay, z->nlay, sizeof *z->lay, layout_cmp);
     for (i = 0; i < z->nlay; i++)
@@ -2648,13 +2662,14 @@ static void build_layout(nat *z)
     free(lv);
     free(dv);
     free(match);
-    free(used);
+    free(dll_state);
+    free(source);
     rl78_elf_free(&z->lay_elf);
     rl78_symtab_free(&z->lay_st);
 }
 
 /* DLL の sim_native_clear_range から呼ばれる（製品の関数の実行中に、DLL を呼んだスレッドで動く）。
- * マイコンの番地の範囲 [first, end)（inclusive なら [first, end]）にある変数と、確保したメモリを 0 にする。
+ * マイコンの番地の範囲 [first, end)（inclusive なら [first, end]）にある変数と確保したメモリ、および毎回クリアする変数を 0 にする。
  * 警告の 1 回を除いて、ロックを取る処理（printf、malloc）を行わない */
 
 static void host_clear(unsigned long long first, unsigned long long end, int inclusive)
@@ -2680,6 +2695,11 @@ static void host_clear(unsigned long long first, unsigned long long end, int inc
             fprintf(stderr, "native: sim_native_clear_range が呼ばれましたが、native_layout がないので、C の変数はクリアできません\n");
         }
     } else {
+        for (i = 0; i < z->nlay_always; i++) {
+            const clear_var_t *t = &z->lay_always[i];
+            memset(t->pc, 0, t->pc_size);
+            z->clear_vars++;
+        }
         /* max_hi が first を超える最初の項目から、lo が end に届くまで */
         lo = 0;
         hi = z->nlay;

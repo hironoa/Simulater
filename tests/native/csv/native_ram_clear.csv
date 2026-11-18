@@ -19,15 +19,15 @@ mod,TEST_clear_static,end not included: f_static2@nested is kept,4,4
 mod,TEST_clear_static_incl,end included: f_static2@nested is cleared,4,4
 #COMMENT,probe.c/f_static1@cnt,probe.c/f_static2@cnt,probe.c/f_static2@keep.ib,probe.c/f_static2@nested,probe.c/f_static1@cnt,probe.c/f_static2@cnt,probe.c/f_static2@keep.ib,probe.c/f_static2@nested
 ,1,2,3,4,1,0,0,0
-mod,TEST_clear_all,whole RAM: variables that are not in the load module are kept,6,6
+mod,TEST_clear_all,whole RAM: unmatched driver variables are cleared,6,6
 #COMMENT,drv_counter,clear_drv.c/s_file_ui,clear_drv.c/f_static2@cnt,probe.c/s_file_ui,probe.c/f_static2@cnt,g_ui,drv_counter,clear_drv.c/s_file_ui,clear_drv.c/f_static2@cnt,probe.c/s_file_ui,probe.c/f_static2@cnt,g_ui
-,5,6,7,8,9,10,5,6,7,0,0,0
-mod,TEST_clear_bad,first after end: nothing is cleared,2,2
-#COMMENT,g_bss_ui,0xFC040:1,g_bss_ui,0xFC040:1
-,2,3,2,3
+,5,6,7,8,9,10,0,0,0,0,0,0
+mod,TEST_clear_bad,first after end: nothing is cleared,3,3
+#COMMENT,g_bss_ui,0xFC040:1,drv_counter,g_bss_ui,0xFC040:1,drv_counter
+,2,3,7,2,3,7
 mod,TEST_clear_drv,data defined by address in the test driver header,4,7
 #COMMENT,DRV_DIRECT_IN,DRV_NEAR_IN,DRV_DIRECT_OUT,drv_counter,DRV_DIRECT_IN,DRV_NEAR_IN,DRV_DIRECT_OUT,0xFE020:1,0xFE022:1,0xFE040:2,drv_counter
-,0x11,0x22,0x3344,7,0,0,0x3344,0,0,0x3344,7
+,0x11,0x22,0x3344,7,0,0,0x3344,0,0,0x3344,0
 mod,TEST_drv_direct_sum,the C code reads the same places,3,1
 #COMMENT,DRV_DIRECT_IN,DRV_NEAR_IN,DRV_DIRECT_OUT,TEST_drv_direct_sum@@
 ,1,2,0x100,259

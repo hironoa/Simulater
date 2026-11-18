@@ -354,7 +354,7 @@ if [ "$RC" -ne 0 ]; then cat "$WORK/native_coff.log"; fi
 check "build check_native_layout" "${CC:-clang}" -std=c11 -O2 -Wall -Wextra -I"$ROOT/runtime/src" -I"$ROOT/runtime/backends/native" "$T/tools/check_native_layout.c" "$ROOT/runtime/backends/native/native_layout.c" "$ROOT/runtime/src/sim_util.c" -o "$WORK/check_native_layout" -lm
 "$WORK/check_native_layout" > "$WORK/native_layout.log" 2>&1
 RC=$?
-check "native layout 対応づけのケース" test "$RC" -eq 0
+check "native layout 対応づけと DLL 側の状態のケース" test "$RC" -eq 0
 check "native layout ケース実行 (0 failed)" grep -q -E "^native layout: [1-9][0-9]* cases, 0 failed" "$WORK/native_layout.log"
 if [ "$RC" -ne 0 ]; then cat "$WORK/native_layout.log"; fi
 
