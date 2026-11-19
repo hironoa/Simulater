@@ -287,7 +287,7 @@ footer a{color:var(--ch2)}
   </a>
   <span class="ver">使い方ガイド</span>
   <nav>
-    <a href="#new">最新機能</a><a href="#features">機能一覧</a><a href="#start">はじめかた</a><a href="#toolbar">ツールバー</a><a href="#formats">ファイル形式</a><a href="#build">ビルド</a>
+    <a href="#new">最新機能</a><a href="#features">機能一覧</a><a href="#start">はじめかた</a><a href="#live">ライブモード</a><a href="#signals">信号情報と仕向</a><a href="#toolbar">ツールバー</a><a href="#formats">ファイル形式</a><a href="#build">ビルド</a>
   </nav>
 </header>
 
@@ -300,15 +300,16 @@ footer a{color:var(--ch2)}
   <div class="hero-inner">
     <div class="eyebrow">WINAMS CSV WAVEFORM VIEWER</div>
     <h1>波形の確認を、<br><span class="grad">ブラウザひとつで。</span></h1>
-    <p class="lead">WinAMS の波形 CSV を開いて、物理値に変換し、グループで並べて、カーソルで測る。インストールもサーバーも不要な、HTML ファイル 1 つで動く波形ビューアです。</p>
+    <p class="lead">WinAMS の波形 CSV を開いて、物理値に変換し、グループで並べて、カーソルで測る。インストールもサーバーも不要な、HTML ファイル 1 つで動く波形ビューアです。<code>sim gui</code> から開けば、シミュレータの変数をリアルタイムに流して操作できます。</p>
     <div class="specs">
       <div><b>1 file</b><span>単一 HTML</span></div>
       <div><b>offline</b><span>ネットワーク不要</span></div>
       <div><b>CSV · YAML · WCP</b><span>読み込み形式</span></div>
+      <div><b>live</b><span>sim gui で実行中を表示</span></div>
       <div><b>light / dark</b><span>テーマ</span></div>
     </div>
     <div class="window hero-shot">
-      <div class="bar"><i></i><i></i><i></i><span>winams_csv_viewer.html — engine_test.csv</span></div>
+      <div class="bar"><i></i><i></i><i></i><span>sim_gui.html — engine_test.csv</span></div>
       <div style="position:relative">
         <img src="docs/screenshots/readme_main_light.png" alt="波形ビューアのメイン画面。左に信号グループ、中央に波形、下に計測表">
         <button class="hot" style="left:10%;top:30%;--c:#0e8fae">1<span class="tip">信号設定とグループ</span></button>
@@ -338,16 +339,18 @@ footer a{color:var(--ch2)}
   <a href="#new"><span>01</span>最新機能</a>
   <a href="#features"><span>02</span>機能一覧</a>
   <a href="#start"><span>03</span>はじめかた</a>
-  <a href="#toolbar"><span>04</span>ツールバー</a>
-  <a href="#reload"><span>05</span>自動再読み込み</a>
-  <a href="#compare"><span>06</span>波形比較</a>
-  <a href="#sidebar"><span>07</span>信号設定</a>
-  <a href="#conversion"><span>08</span>物理値変換</a>
-  <a href="#table-edit"><span>09</span>一覧編集</a>
-  <a href="#measure"><span>10</span>計測</a>
-  <a href="#export"><span>11</span>画像と保存</a>
-  <a href="#formats"><span>12</span>ファイル形式</a>
-  <a href="#build"><span>13</span>ビルド</a>
+  <a href="#live"><span>04</span>ライブモード</a>
+  <a href="#signals"><span>05</span>信号情報と仕向</a>
+  <a href="#toolbar"><span>06</span>ツールバー</a>
+  <a href="#reload"><span>07</span>自動再読み込み</a>
+  <a href="#compare"><span>08</span>波形比較</a>
+  <a href="#sidebar"><span>09</span>信号設定</a>
+  <a href="#conversion"><span>10</span>物理値変換</a>
+  <a href="#table-edit"><span>11</span>一覧編集</a>
+  <a href="#measure"><span>12</span>計測</a>
+  <a href="#export"><span>13</span>画像と保存</a>
+  <a href="#formats"><span>14</span>ファイル形式</a>
+  <a href="#build"><span>15</span>ビルド</a>
 </aside>
 
 <main>
@@ -356,8 +359,20 @@ footer a{color:var(--ch2)}
 <section id="new">
   <span class="ch" style="--c:var(--ch3)">CH.01 — WHAT'S NEW</span>
   <h2>最新機能</h2>
-  <p class="lead2">最近追加された 5 つの機能です。変更の前後を見比べる手間、設定の手間、CSV を開き直す手間を減らし、意味のない区間を見分けやすくします。</p>
+  <p class="lead2">最近追加された機能です。シミュレータを動かしながら確かめる手間、毎回設定を読み込ませる手間、変更の前後を見比べる手間を減らします。</p>
   <div class="news">
+    <a class="panel new-card" href="#live" style="--c:var(--ch4)">
+      <div class="vis"><svg width="200" height="84" viewBox="0 0 200 84" aria-hidden="true"><path d="M4 60 C 30 20, 50 20, 76 60 S 122 100, 148 60 S 180 20, 196 40" fill="none" stroke="currentColor" stroke-width="2.4" style="color:var(--ch4)"/><circle cx="196" cy="40" r="5" fill="var(--ch4)"/></svg></div>
+      <h4>ライブモード（sim gui）</h4>
+      <p>シミュレータの変数を流しながら、入力パネルで値を書き込み、一時停止して計測できます。</p>
+      <span class="more">詳しく →</span>
+    </a>
+    <a class="panel new-card" href="#signals" style="--c:var(--ch3)">
+      <div class="vis"><svg width="210" height="84" viewBox="0 0 210 84" aria-hidden="true"><rect x="8" y="14" width="86" height="56" rx="8" fill="none" stroke="currentColor" stroke-width="2" style="color:var(--ch3)"/><text x="20" y="38" style="font:700 11px 'SF Mono',monospace;fill:var(--ch3)">共通</text><text x="20" y="58" style="font:11px 'SF Mono',monospace;fill:var(--muted)">0 停止 1 走行</text><rect x="116" y="14" width="86" height="56" rx="8" fill="none" stroke="currentColor" stroke-width="2" stroke-dasharray="4 3" style="color:var(--ch3)"/><text x="128" y="38" style="font:700 11px 'SF Mono',monospace;fill:var(--ch3)">EU だけ</text><text x="128" y="58" style="font:11px 'SF Mono',monospace;fill:var(--muted)">2 回生</text></svg></div>
+      <h4>信号情報ファイルと仕向</h4>
+      <p>状態名やグループを起動時に自動で読み込み、変えたら自動で保存。仕向で違う信号だけ、違う部分を書けます。</p>
+      <span class="more">詳しく →</span>
+    </a>
     <a class="panel new-card" href="#compare" style="--c:var(--ch3);grid-column:1/-1">
       <div class="vis">
         <svg width="260" height="84" viewBox="0 0 260 84" aria-hidden="true"><rect x="96" y="6" width="22" height="72" fill="none" stroke="#f87171" stroke-width="1"/><path d="M4 30 H100 M100 30 V12 H256" fill="none" stroke="currentColor" stroke-width="2" opacity=".45" stroke-dasharray="5 3" style="color:var(--ch3)"/><path d="M4 66 H114 M114 66 V48 H256" fill="none" stroke="currentColor" stroke-width="2.5" style="color:var(--ch3)"/><text x="8" y="24" style="font:700 9px 'SF Mono',Menlo,monospace;fill:var(--faint)">A</text><text x="8" y="60" style="font:700 9px 'SF Mono',Menlo,monospace;fill:var(--faint)">B</text><path d="M101 76 H113" stroke="#b45309" stroke-width="1.2"/><text x="124" y="80" style="font:700 9px 'SF Mono',Menlo,monospace;fill:#b45309">50 ms 遅れ</text></svg>
@@ -457,9 +472,142 @@ footer a{color:var(--ch2)}
   </div>
 </section>
 
-<!-- 04 ツールバー -->
+<!-- 04 ライブモード -->
+<section id="live">
+  <span class="ch" style="--c:var(--ch4)">CH.04 — LIVE MODE <span class="tag">NEW</span></span>
+  <h2>ライブモード（sim gui）</h2>
+  <p class="lead2"><code>sim gui</code> から開くと、シミュレータの変数をリアルタイムに流しながら、値を書き込んで動きを確かめられます。<code>sim_gui.html</code> を直接開いたときは、これまでどおり CSV を読むビューアとして動きます。</p>
+  <div class="flow">
+    <div class="s" style="--c:var(--ch2)"><div class="n">1</div><h4>起動する</h4><p><code>sim gui</code> を実行するとブラウザが開く</p></div>
+    <div class="s" style="--c:var(--ch5)"><div class="n">2</div><h4>選ぶ</h4><p>対象関数と仕向を選ぶ</p></div>
+    <div class="s" style="--c:var(--ch3)"><div class="n">3</div><h4>動かす</h4><p>「実行」で周期ごとに関数を呼ぶ</p></div>
+    <div class="s" style="--c:var(--ch1)"><div class="n">4</div><h4>入れる</h4><p>入力パネルで値を書き込む</p></div>
+    <div class="s" style="--c:var(--ch4)"><div class="n">5</div><h4>確かめる</h4><p>一時停止して拡大・計測、CSV に保存</p></div>
+  </div>
+  <div class="window"><div class="bar"><i></i><i></i><i></i><span>sim gui — 実行中</span></div><img src="docs/guide/live_running.jpg" alt="ライブモードの実行中の画面。上に接続バー、中央に流れる波形、右に仕向・入力パネル・変数モニタ" loading="lazy"></div>
+  <p class="cap">実行中は、変数モニタで「波形」に印を付けた変数が右から流れます。上の接続バーで実行・一時停止・ステップ実行・リセット、速度と周期を変えられます。</p>
+
+  <div class="split" style="margin-top:28px">
+    <div style="--c:var(--ch4)">
+      <h3 style="margin-top:0">基本の操作</h3>
+      <ol class="steps">
+        <li><span>右の<b>変数モニタ</b>で、見たい変数を検索して追加します。「波形」の印を付けた変数が波形に出ます。</span></li>
+        <li><span>上の <kbd class="kbd">実行</kbd> を押します。波形が流れ始めます。</span></li>
+        <li><span>右の<b>入力パネル</b>で変数を追加し、数値・スライダ・トグル・ボタン・状態（一覧から選ぶ）のどれかで値を書き込みます。<b>固定</b>を ON にすると毎周期その値を書き続けます。</span></li>
+        <li><span><kbd class="kbd">一時停止</kbd> を押すと、残した記録の全体を、ふだんのビューアと同じようにズーム・カーソル計測できます。</span></li>
+        <li><span><kbd class="kbd">記録を CSV 保存</kbd> で、開始からの記録を WinAMS 形式の CSV に保存できます（<code>sim run</code> で実行し直せます）。</span></li>
+      </ol>
+    </div>
+    <div>
+      <h3 style="margin-top:0">知っておくこと</h3>
+      <ul class="ticks2">
+        <li><span>書いた値は、止まっているときも含めて<b>次の周期の初め</b>に反映されます。それまでは「反映待ち: 値」と表示します。</span></li>
+        <li><span>LSB・オフセットを設定した変数は、入力も表示も<b>物理値</b>で行えます（書き込むのは生の値）。</span></li>
+        <li><span>入力パネルと監視の一覧は、ブラウザが覚えていて次に開いたときに戻ります。</span></li>
+        <li><span><kbd class="kbd">テスト CSV 再生</kbd> で、WinAMS のテスト CSV の入力を周期ごとに流せます。</span></li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="frame" style="margin-top:28px"><div class="bar"><i></i><i></i><i></i><span>一時停止したところ</span></div><img src="docs/guide/live_paused.jpg" alt="一時停止して記録の全体を表示した画面。走行モードの状態名が帯で表示されている" loading="lazy"></div>
+  <p class="cap">一時停止すると、記録の全体が状態名や単位つきで表示されます。カーソル計測や画像コピーは、この状態で行います。</p>
+
+  <h3 id="variants-panel">仕向（初期化の値）</h3>
+  <div class="split side">
+    <div><div class="frame"><img src="docs/guide/variants_panel.png" alt="右側の仕向パネル。仕向の選択欄、追加・名前変更・削除・CSV から取り込み、初期化の値の表" loading="lazy"></div></div>
+    <div style="--c:var(--ch4)">
+      <p style="font-size:14px;color:var(--muted);margin-bottom:12px">テスト CSV の <code>#InitWheneverCall</code> などで書いている初期化の値を、仕向（出荷先）ごとに登録しておき、ライブモードでも入れられます。</p>
+      <ol class="steps">
+        <li><span>右の<b>仕向</b>で <kbd class="kbd">追加</kbd> を押して名前を付けるか、<kbd class="kbd">CSV から取り込み</kbd> でテスト CSV の <code>#Init...</code> の行から作ります。</span></li>
+        <li><span>「変数名で検索」から変数を足し、値と書き方（<b>最初だけ</b>／<b>毎回</b>）を決めます。</span></li>
+        <li><span>使う仕向を選び、<kbd class="kbd">リセットして反映</kbd> を押します。</span></li>
+      </ol>
+      <div class="callout" style="--c:var(--ch1)"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l10 18H2z"/><path d="M12 10v5M12 18v.5"/></svg><span>仕向を選んでいないと初期化の値を書かないので、入力が効かないことがあります。そのときは上のバーに「仕向が選ばれていません」と出ます。選んだ仕向は <code>sim.cfg</code> と同じフォルダの <code>sim_gui_variants.json</code> に保存され、次に起動したときも使われます。</span></div>
+    </div>
+  </div>
+</section>
+
+<!-- 05 信号情報と仕向 -->
+<section id="signals">
+  <span class="ch" style="--c:var(--ch3)">CH.05 — SIGNAL INFO <span class="tag">NEW</span></span>
+  <h2>信号情報ファイルと仕向ごとの設定</h2>
+  <p class="lead2">信号の LSB・単位・状態名と、グループ・高さ・色などの表示の設定を、1 つのファイルにまとめて保存します。<code>sim gui</code> では<b>起動したときに自動で読み込み、変えると自動で保存</b>するので、毎回 YAML を読み込ませる必要はありません。</p>
+  <div class="pipe">
+    <div class="p" style="--c:var(--ch2)"><div class="ic"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l7-7 7 7M12 5v14"/></svg></div><b>起動</b><span><code>sim gui</code> を実行</span></div>
+    <div class="p" style="--c:var(--ch5)"><div class="ic"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H6v18h12V7z"/><path d="M14 3v4h4"/></svg></div><b>自動で読み込む</b><span>sim_gui_signals.yaml</span></div>
+    <div class="p" style="--c:var(--ch3)"><div class="ic"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h4L19 9l-4-4L4 16z"/></svg></div><b>画面で変える</b><span>状態名・LSB・グループなど</span></div>
+    <div class="p" style="--c:var(--ch1)"><div class="ic"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l2.5 2"/></svg></div><b>1 秒後に保存</b><span>まとめて自動で</span></div>
+    <div class="p" style="--c:var(--ch4)"><div class="ic"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l5 5 9-10"/></svg></div><b>次も同じ設定</b><span>全部のテストで共有</span></div>
+  </div>
+  <ul class="ticks2">
+    <li><span>保存先は <code>sim.cfg</code> と同じフォルダの <code>sim_gui_signals.yaml</code> です。<code>sim.cfg</code> に <code>gui_signals = パス</code> と書くと変えられます（相対パスは <code>sim.cfg</code> のフォルダから）。</span></li>
+    <li><span>仕向（出荷先）で値が違う信号だけ、その仕向での値を<b>同じファイルに</b>書けます。違わない信号は 1 回書くだけです。</span></li>
+  </ul>
+
+  <h3>初めて使うとき（今の YAML を移す）</h3>
+  <ol class="steps" style="--c:var(--ch3)">
+    <li><span><code>sim gui</code> を起動します。</span></li>
+    <li><span>今まで使っていた YAML を、<kbd class="kbd">開く</kbd> で選ぶか、画面にドロップして <b>1 回</b>読み込みます。</span></li>
+    <li><span>1 秒ほどで、新しい形の <code>sim_gui_signals.yaml</code> が保存されます。次からは起動するだけで読み込まれます。</span></li>
+  </ol>
+
+  <h3>仕向ごとに信号の設定を変える</h3>
+  <div class="split">
+    <div style="--c:var(--ch3)">
+      <ol class="steps">
+        <li><span>右側の<b>仕向</b>パネルで、設定したい仕向（例: EU）を選びます。ビューアだけで開いたときは、ツールバーの「仕向」で選びます。</span></li>
+        <li><span>左の<b>信号設定</b>で、変えたい信号の歯車を押します。</span></li>
+        <li><span>いちばん上の <kbd class="kbd">仕向「EU」だけの設定にする</kbd> をオンにします。</span></li>
+        <li><span>状態名・LSB・オフセット・単位・除外値を変えます。EU の値が共通の値と違う項目には「•」が付きます。</span></li>
+      </ol>
+      <ul class="ticks2" style="margin-top:18px">
+        <li><span>オフにすると、EU の値が消えて<b>共通の値</b>に戻ります。</span></li>
+        <li><span>このチェックがオフの信号を変えると、共通の値（どの仕向でも使う値）が変わります。</span></li>
+        <li><span>仕向はいくつでも作れます。仕向ごとに 1〜4 を繰り返します。同時に選べる仕向は 1 つです。</span></li>
+        <li><span>仕向で変えられるのは状態名・LSB・オフセット・単位・除外値だけです。グループ・高さ・色などの表示はどの仕向でも同じです。</span></li>
+      </ul>
+    </div>
+    <div>
+      <div class="frame"><div class="bar"><i></i><i></i><i></i><span>信号設定 — g_cmd.mode</span></div><img src="docs/guide/signal_variant_only.png" alt="信号設定の上に「仕向「EU」だけの設定にする」のチェック。状態名の欄に 0 停止、1 走行、2 回生" loading="lazy"></div>
+      <p class="cap">チェックをオンにした信号は、「上書き: states」のように EU で違う項目が出ます。</p>
+    </div>
+  </div>
+
+  <h3>動画で見る: 仕向だけの状態名を足す</h3>
+  <div class="frame"><div class="bar"><i></i><i></i><i></i><span>約 10 秒 — 音声なし</span></div><video src="docs/guide/variant_only_edit.mp4" controls muted loop playsinline preload="metadata" style="width:100%;display:block" aria-label="チェックを外すと回生が消え、付け直して状態 2 に回生を足すと波形に回生が出る"></video></div>
+  <p class="cap">チェックを外すと EU だけの「回生」が消えて共通の状態名に戻り、付け直して状態 2 に「回生」を足すと、波形にも「回生」が出ます。</p>
+
+  <h3>動画で見る: 仕向を切り替える</h3>
+  <div class="frame"><div class="bar"><i></i><i></i><i></i><span>約 10 秒 — 音声なし</span></div><video src="docs/guide/variant_switch.mp4" controls muted loop playsinline preload="metadata" style="width:100%;display:block" aria-label="右の仕向パネルで国内と EU を切り替えると、状態 2 の名前が出たり消えたりする"></video></div>
+  <p class="cap">右の仕向を「国内」と「EU」で切り替えると、EU にだけある状態名「回生」が出たり消えたりします。波形・計測表・入力パネルのすべてに効きます。</p>
+
+  <h3>ビューアだけで開いたとき</h3>
+  <div class="split side">
+    <div>
+      <div class="frame"><img src="docs/guide/viewer_select.png" alt="ツールバーの右端の「仕向」の選択欄" loading="lazy"></div>
+      <p class="cap">ツールバーの右端に「仕向」が出ます。</p>
+    </div>
+    <div>
+      <ul class="ticks2">
+        <li><span><code>sim_gui.html</code> を直接開いたときは、ファイルの代わりに<b>ブラウザ</b>に信号情報を覚えます。次に同じブラウザで開くと、最後の設定で始まります。</span></li>
+        <li><span>信号情報に仕向の名前があると、ツールバーに「仕向」の選択欄が出ます。「（共通）」か各仕向を選べ、選んだものも覚えます。</span></li>
+        <li><span>ブラウザや開く場所が変わると、別の保存場所になります。</span></li>
+      </ul>
+    </div>
+  </div>
+  <div class="frame" style="margin-top:18px"><div class="bar"><i></i><i></i><i></i><span>sim_gui.html — test_result.csv（仕向: EU）</span></div><img src="docs/guide/viewer_eu.jpg" alt="ビューアで CSV を開き、仕向 EU を選んだ画面。状態 2 に回生と表示" loading="lazy"></div>
+
+  <h3>細かい動作</h3>
+  <div class="grid3">
+    <div class="panel mini-card" style="--c:var(--ch1)"><h4>読めないとき</h4><p>起動時に信号情報ファイルが読めない（壊れているなど）と、上のバーに理由とパスを出し、<b>自動保存を止めます</b>（壊れたファイルを上書きしないため）。直してから起動し直してください。</p></div>
+    <div class="panel mini-card" style="--c:var(--ch2)"><h4>ほかの CSV の信号も残る</h4><p>ファイルは全部のテストで共有します。今開いている CSV にない信号やグループの設定も、消さずに残します。</p></div>
+    <div class="panel mini-card" style="--c:var(--ch5)"><h4>古い形の YAML</h4><p>信号名がいちばん上に並ぶ古い形も、CSV の対応表も読めます。保存は新しい形になります。読めない YAML は「YAML を読めません」と出して何も変えません。</p></div>
+  </div>
+</section>
+
+<!-- 06 ツールバー -->
 <section id="toolbar">
-  <span class="ch" style="--c:var(--ch1)">CH.04 — TOOLBAR</span>
+  <span class="ch" style="--c:var(--ch1)">CH.06 — TOOLBAR</span>
   <h2>ツールバー</h2>
   <p class="lead2">画面上部のボタンで、ファイル操作と表示の切り替えを行います。</p>
   <div class="strip-scroll"><div class="strip">
@@ -501,7 +649,7 @@ footer a{color:var(--ch2)}
 
 <!-- 05 自動再読み込み -->
 <section id="reload">
-  <span class="ch" style="--c:var(--ch2)">CH.05 — AUTO RELOAD <span class="tag">NEW</span></span>
+  <span class="ch" style="--c:var(--ch2)">CH.07 — AUTO RELOAD <span class="tag">NEW</span></span>
   <h2>自動再読み込み</h2>
   <p class="lead2">シミュレーションを回し直すたびに CSV を開き直す必要はありません。ON にしておけば、CSV の更新に合わせて波形が切り替わります。</p>
   <div class="pipe">
@@ -534,7 +682,7 @@ footer a{color:var(--ch2)}
 
 <!-- 06 波形比較 -->
 <section id="compare">
-  <span class="ch" style="--c:var(--ch3)">CH.06 — COMPARE <span class="tag">NEW</span></span>
+  <span class="ch" style="--c:var(--ch3)">CH.08 — COMPARE <span class="tag">NEW</span></span>
   <h2>波形比較</h2>
   <p class="lead2">プログラムを変える前の CSV（A）と変えた後の CSV（B）を重ねて、どこで、どう変わったかを確かめます。値の違いと、状態の切り替わりのずれは自動で見つけます。</p>
   <div class="window"><div class="bar"><i></i><i></i><i></i><span>A（変更前）と B（変更後）を重ねた画面</span></div><img src="docs/screenshots/readme_compare.png" alt="波形比較の画面"></div>
@@ -598,7 +746,7 @@ footer a{color:var(--ch2)}
 
 <!-- 06 信号設定 -->
 <section id="sidebar">
-  <span class="ch" style="--c:var(--ch5)">CH.07 — SIDEBAR</span>
+  <span class="ch" style="--c:var(--ch5)">CH.09 — SIDEBAR</span>
   <h2>信号設定（サイドバー）</h2>
   <p class="lead2">左のサイドバーで、信号の表示・並び・見た目を調整します。⚙ を押すと、その信号の設定パネルが開きます。</p>
   <div class="split side">
@@ -639,7 +787,7 @@ footer a{color:var(--ch2)}
 
 <!-- 07 物理値変換 -->
 <section id="conversion">
-  <span class="ch" style="--c:var(--ch4)">CH.08 — CONVERSION</span>
+  <span class="ch" style="--c:var(--ch4)">CH.10 — CONVERSION</span>
   <h2>物理値変換と Y 軸省略</h2>
   <p class="lead2">CSV の生値は、信号ごとの LSB とオフセットで物理値に直して表示します。<code>2^-8</code> や <code>1/256</code> のような式も書けます。ツールバーの <kbd>値: 生値</kbd> に切り替えると、全信号を変換前の生値で表示します。</p>
   <div class="panel formula">
@@ -674,7 +822,7 @@ footer a{color:var(--ch2)}
 
 <!-- 08 一覧編集 -->
 <section id="table-edit">
-  <span class="ch" style="--c:var(--ch4)">CH.09 — BULK EDIT <span class="tag">NEW</span></span>
+  <span class="ch" style="--c:var(--ch4)">CH.11 — BULK EDIT <span class="tag">NEW</span></span>
   <h2>一覧編集</h2>
   <p class="lead2">サイドバー上部の「一覧編集」で、全信号の設定を 1 つの表で編集できます。信号が多いときの設定作業がまとめて片づきます。</p>
   <div class="frame"><div class="bar"><i></i><i></i><i></i><span>信号設定の一覧編集 — 物理値変換タブ</span></div><img src="docs/screenshots/readme_table_dialog.png" alt="信号設定の一覧編集ダイアログ"></div>
@@ -700,7 +848,7 @@ footer a{color:var(--ch2)}
 
 <!-- 09 計測 -->
 <section id="measure">
-  <span class="ch" style="--c:var(--ch3)">CH.10 — MEASURE</span>
+  <span class="ch" style="--c:var(--ch3)">CH.12 — MEASURE</span>
   <h2>カーソルと計測表</h2>
   <p class="lead2">波形上をダブルクリックするとカーソル（C1, C2, …）が置かれ、計測表に各時点の値が並びます。</p>
   <div class="frame"><div class="bar"><i></i><i></i><i></i><span>計測表</span></div><img src="docs/screenshots/readme_measure_table.png" alt="計測表"></div>
@@ -715,7 +863,7 @@ footer a{color:var(--ch2)}
 
 <!-- 10 画像と保存 -->
 <section id="export">
-  <span class="ch" style="--c:var(--ch1)">CH.11 — EXPORT &amp; SAVE</span>
+  <span class="ch" style="--c:var(--ch1)">CH.13 — EXPORT &amp; SAVE</span>
   <h2>画像コピーと保存</h2>
   <p class="lead2">チャート左上のアイコンで画像をクリップボードへ。作業の状態はファイルに保存して、次回そのまま再開できます。</p>
   <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap;margin-bottom:16px">
@@ -761,12 +909,12 @@ footer a{color:var(--ch2)}
 
 <!-- 11 ファイル形式 -->
 <section id="formats">
-  <span class="ch" style="--c:var(--ch2)">CH.12 — FILE FORMATS</span>
+  <span class="ch" style="--c:var(--ch2)">CH.14 — FILE FORMATS</span>
   <h2>ファイル形式</h2>
-  <p class="lead2">読み込める 4 種類のファイルと、その書き方です。</p>
+  <p class="lead2">読み込める 4 種類のファイルと、その書き方です。信号情報 YAML は、ライブモードでは <code>sim_gui_signals.yaml</code> として自動で読み書きします（<a href="#signals">信号情報と仕向</a>）。</p>
   <div class="formats">
     <div class="panel fmt" style="--c:var(--ch2)"><div class="ext">.csv / .txt</div><h4>波形 CSV</h4><p><code>#COMMENT</code> 行が見出し。以降の 1 行が 1 ステップ。</p></div>
-    <div class="panel fmt" style="--c:var(--ch5)"><div class="ext">.yaml / .yml</div><h4>信号定義 YAML</h4><p>グループ、変換、単位、状態名、見た目。</p></div>
+    <div class="panel fmt" style="--c:var(--ch5)"><div class="ext">.yaml / .yml</div><h4>信号情報 YAML</h4><p>信号の値（変換・単位・状態名と仕向ごとの違い）と表示の設定。</p></div>
     <div class="panel fmt" style="--c:var(--ch3)"><div class="ext">.csv</div><h4>信号定義 CSV</h4><p>「信号名, キー, 値」の 3 列。</p></div>
     <div class="panel fmt" style="--c:var(--ch1)"><div class="ext">.wcp</div><h4>プロジェクト</h4><p>波形と設定（表示状態入り）の ZIP。</p></div>
   </div>
@@ -774,47 +922,48 @@ footer a{color:var(--ch2)}
   <div class="code" data-tabs>
     <div class="hd">
       <div class="tabs" role="tablist">
-        <button role="tab" aria-selected="true" data-t="yaml">engine_test.yaml</button>
+        <button role="tab" aria-selected="true" data-t="yaml">sim_gui_signals.yaml</button>
         <button role="tab" aria-selected="false" data-t="csv">engine_test.csv</button>
         <button role="tab" aria-selected="false" data-t="def">definition.csv</button>
       </div>
       <button class="copy" type="button">コピー</button>
     </div>
-<pre data-p="yaml"><span class="k">groups</span>:
-  <span class="k">パワートレイン</span>:
-    <span class="k">expanded</span>: <span class="v">true</span>      <span class="c"># サイドバーで開いておく</span>
-    <span class="k">visible</span>: <span class="v">true</span>       <span class="c"># グループを表示する</span>
-    <span class="k">layout</span>: overlap     <span class="c"># lane: 信号ごとのレーン / overlap: 重ね表示</span>
-    <span class="k">syncRange</span>: <span class="v">true</span>     <span class="c"># Y 軸レンジを揃える</span>
+<pre data-p="yaml"><span class="k">version</span>: <span class="v">2</span>
+<span class="k">variants</span>: [国内, EU]                  <span class="c"># 選べる仕向の名前</span>
+<span class="k">signals</span>:                              <span class="c"># 信号の値</span>
+  <span class="k">EngineSpeed</span>:                        <span class="c"># 波形 CSV の信号名</span>
+    <span class="k">lsb</span>: <span class="v">2^-2</span>                         <span class="c"># 物理値 = 生値 × lsb + offset（式も可）</span>
+    <span class="k">offset</span>: <span class="v">0</span>
+    <span class="k">unit</span>: rpm
+    <span class="k">undefined</span>: [<span class="v">65535</span>]                <span class="c"># 生値の除外値</span>
+  <span class="k">CurrentGear</span>:
+    <span class="k">states</span>: {<span class="p">0</span>: 停止, <span class="p">1</span>: 走行}        <span class="c"># 共通の状態名</span>
+    <span class="k">variants</span>:
+      <span class="k">EU</span>:                             <span class="c"># EU だけ違う部分</span>
+        <span class="k">states</span>: {<span class="p">2</span>: 回生, <span class="p">1</span>: <span class="v">null</span>}    <span class="c"># 2 を足し、1 の名前を消す</span>
+        <span class="k">unit</span>: <span class="s">"-"</span>                     <span class="c"># 項目ごと置き換え</span>
 
-<span class="k">layoutMode</span>: optimized   <span class="c"># uniform / optimized / manual</span>
-
-<span class="k">EngineSpeed</span>:            <span class="c"># 波形 CSV の信号名</span>
-  <span class="k">alias</span>: エンジン回転数   <span class="c"># 別名</span>
-  <span class="k">group</span>: パワートレイン
-  <span class="k">lsb</span>: <span class="v">2^-2</span>             <span class="c"># 物理値 = 生値 × lsb + offset（式も可）</span>
-  <span class="k">offset</span>: <span class="v">0</span>
-  <span class="k">unit</span>: rpm
-  <span class="k">undefined</span>: [<span class="v">65535</span>]    <span class="c"># 除外値。単一の数値でも可</span>
-  <span class="k">color</span>: <span class="s">"#f59e0b"</span>
-  <span class="k">lineWidth</span>: <span class="v">2</span>          <span class="c"># 既定 1.5</span>
-  <span class="k">lineType</span>: solid       <span class="c"># solid / dashed / dotted</span>
-  <span class="k">weight</span>: <span class="v">2</span>             <span class="c"># レーン高さの比率（既定 1）</span>
-  <span class="k">yMin</span>: <span class="v">0</span>               <span class="c"># Y 軸を固定する場合</span>
-  <span class="k">yMax</span>: <span class="v">8000</span>
-  <span class="k">checked</span>: <span class="v">true</span>         <span class="c"># 表示する</span>
-
-<span class="k">CurrentGear</span>:
-  <span class="k">alias</span>: ギア段
-  <span class="k">group</span>: 状態
-  <span class="p">1</span>: 1st                <span class="c"># 数値をキーにすると状態名</span>
-  <span class="p">2</span>: 2nd
-  <span class="p">3</span>: 3rd
-
-<span class="k">inactive</span>:               <span class="c"># 無効区間（生値で判定）</span>
+<span class="k">inactive</span>:                             <span class="c"># 無効区間（生値で判定）</span>
   - <span class="k">signal</span>: PIG
-    <span class="k">when</span>: <span class="v">0</span>              <span class="c"># 値、または { min, max } の範囲のリスト</span>
-    <span class="k">label</span>: IG OFF</pre>
+    <span class="k">when</span>: <span class="v">0</span>                           <span class="c"># 値、または { min, max } の範囲のリスト</span>
+    <span class="k">label</span>: IG OFF
+
+<span class="k">view</span>:                                 <span class="c"># 表示の設定（仕向に関係なく共通）</span>
+  <span class="k">layoutMode</span>: optimized               <span class="c"># uniform（省略時）/ optimized / manual</span>
+  <span class="k">groups</span>:
+    <span class="k">パワートレイン</span>: {<span class="k">expanded</span>: <span class="v">true</span>, <span class="k">visible</span>: <span class="v">true</span>, <span class="k">layout</span>: overlap, <span class="k">syncRange</span>: <span class="v">true</span>}
+  <span class="k">signals</span>:                            <span class="c"># この順番で並べる</span>
+    <span class="k">EngineSpeed</span>:
+      <span class="k">group</span>: パワートレイン
+      <span class="k">alias</span>: エンジン回転数           <span class="c"># 別名</span>
+      <span class="k">color</span>: <span class="s">"#f59e0b"</span>
+      <span class="k">lineWidth</span>: <span class="v">2</span>                    <span class="c"># 既定 1.5</span>
+      <span class="k">lineType</span>: solid                 <span class="c"># solid / dashed / dotted</span>
+      <span class="k">weight</span>: <span class="v">2</span>                       <span class="c"># レーン高さの比率（既定 1）</span>
+      <span class="k">yMin</span>: <span class="v">0</span>                         <span class="c"># Y 軸を固定する場合</span>
+      <span class="k">yMax</span>: <span class="v">8000</span>
+      <span class="k">checked</span>: <span class="v">true</span>                   <span class="c"># 表示する</span>
+    <span class="k">CurrentGear</span>: {<span class="k">group</span>: 状態, <span class="k">alias</span>: ギア段}</pre>
 <pre data-p="csv" hidden><span class="c">; ";" で始まる行は読み飛ばす</span>
 <span class="k">#COMMENT</span>,Sample/EngineSpeed,Sample/WaterTemp,Sample/CurrentGear
 0,6000,100,1
@@ -829,15 +978,15 @@ CurrentGear,<span class="p">2</span>,2nd</pre>
   </div>
 
   <div class="grid3">
-    <div class="panel mini-card" style="--c:var(--ch2)"><h4>波形 CSV</h4><p>1 列目が <code>#COMMENT</code> の行を見出しに。<code>a/b/Signal</code> は最後の <code>/</code> 以降を信号名に。時刻はステップ × 周期（ms）。</p></div>
-    <div class="panel mini-card" style="--c:var(--ch5)"><h4>信号定義 YAML</h4><p>項目はすべて省略可。名前に <code>exp</code> か <code>期待値</code> を含む信号は、線種の指定がなければ破線で描きます。</p></div>
+    <div class="panel mini-card" style="--c:var(--ch2)"><h4>波形 CSV</h4><p>1 列目が <code>#COMMENT</code> の行を見出しに。<code>a/b/Signal</code> は最後の <code>/</code> 以降を信号名に（ほかの列と重なるときは、区別できるところまでパスを残す）。時刻はステップ × 周期（ms）。WinAMS の結果 CSV は <code>実測?(期待)</code> の実測値を読み、<code>mod</code> ブロックが複数あるときは先頭だけを表示します。</p></div>
+    <div class="panel mini-card" style="--c:var(--ch5)"><h4>信号情報 YAML</h4><p>項目はすべて省略可。仕向で違う信号だけ <code>variants</code> に違う部分を書きます。信号名がいちばん上に並ぶ古い形も読めます（保存は新しい形）。名前に <code>exp</code> か <code>期待値</code> を含む信号は、線種の指定がなければ破線で描きます。</p></div>
     <div class="panel mini-card" style="--c:var(--ch3)"><h4>信号定義 CSV</h4><p>キーは <code>lsb</code>・<code>offset</code>・<code>unit</code>・<code>undefined</code>、または状態名を割り当てる数値。</p></div>
   </div>
 </section>
 
 <!-- 12 ビルド -->
 <section id="build">
-  <span class="ch" style="--c:var(--ch5)">CH.13 — BUILD</span>
+  <span class="ch" style="--c:var(--ch5)">CH.15 — BUILD</span>
   <h2>ビルドと配布</h2>
   <p class="lead2"><code>vite-plugin-singlefile</code> で JS と CSS を 1 つの HTML に埋め込みます。できたファイルはネットワークなしで開けます。</p>
   <div class="code">
@@ -845,14 +994,14 @@ CurrentGear,<span class="p">2</span>,2nd</pre>
 <pre><span class="c"># 依存関係のインストール（初回のみ）</span>
 <span class="p">$</span> npm install
 
-<span class="c"># ビルド（postbuild で winams_csv_viewer.html に複製される）</span>
+<span class="c"># ビルド（postbuild で dist/sim_gui.html に改名される）</span>
 <span class="p">$</span> npm run build
 
 <span class="c"># 開発サーバー（http://localhost:3000）</span>
 <span class="p">$</span> npm run dev</pre>
   </div>
   <ul class="ticks2" style="margin-top:16px">
-    <li><span>配布するのはリポジトリ直下の <code>winams_csv_viewer.html</code> 1 つだけです。</span></li>
+    <li><span>できるのは <code>dist/sim_gui.html</code> 1 つです。コミットしておき、<code>sim</code> のビルドが実行ファイルの隣に置きます（<code>sim</code> を使う PC に Node は要りません）。</span></li>
     <li><span>Chrome / Edge の最新版を推奨します。自動再読み込みと保存先の選択は Chrome / Edge で使えます。</span></li>
   </ul>
 </section>
