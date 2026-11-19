@@ -154,5 +154,8 @@ export function physicalInputValue(text: string, conversion: { lsb: number; offs
 export function physicalInputText(raw: number | string | null | undefined, conversion: { lsb: number; offset: number }): string {
   const value = cellNumber(raw);
   if (value === null) return raw == null ? "—" : String(raw);
-  return String(Number((value * conversion.lsb + conversion.offset).toPrecision(15)));
+  const physical = value * conversion.lsb + conversion.offset;
+  // 安全整数はそのまま出す（15 桁に丸めると、欄の値を書き戻したときに別の値になる）
+  if (Number.isSafeInteger(physical)) return String(physical);
+  return String(Number(physical.toPrecision(15)));
 }

@@ -464,7 +464,13 @@ export function createLiveController(deps: LiveControllerDeps = {}) {
   }
 
   function updateInput(name: string, patch: Partial<InputItem>) {
-    set({ inputs: store.getState().inputs.map((i) => (i.name === name ? { ...i, ...patch } : i)) });
+    set({ inputs: store.getState().inputs.map((i) => {
+      if (i.name !== name) return i;
+      const next = { ...i, ...patch };
+      // まだ値を書いていない新規入力をボタンにしたら、既定の固定も外す（ボタンは押している間だけの一時的な入力）
+      if (patch.widget === "button" && next.holdPending) { next.hold = false; next.holdPending = undefined; }
+      return next;
+    }) });
     persist();
   }
 

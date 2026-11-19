@@ -147,6 +147,10 @@ describe("物理値入力と表示", () => {
   it("現在値・反映待ち・固定・古い保存値もrawから換算する", () => {
     for (const raw of [651, "651", "0x28b"]) expect(physicalInputText(raw, conversion)).toBe("25.1");
     expect(physicalInputText(651, { lsb: 1, offset: 0 })).toBe("651");
+    // 安全整数は丸めない（欄の値を書き戻しても同じ生の値になる）
+    const big = { lsb: 1, offset: 1 };
+    expect(physicalInputText(1234567890123456, big)).toBe("1234567890123457");
+    expect(physicalInputValue(physicalInputText(1234567890123456, big), big, "int")).toBe(1234567890123456);
   });
   it("空欄、非数値、ゼロのlsb、安全に送れない整数や集約型を拒否する", () => {
     expect(physicalInputValue("", conversion, "int")).toBeNull();

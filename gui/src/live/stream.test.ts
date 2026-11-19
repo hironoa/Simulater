@@ -177,6 +177,19 @@ describe("ライブ制御（SSE の取り込み）", () => {
       restored.stop();
     });
 
+    it("まだ書いていない新規入力をボタンに変えると、既定の固定を外す", async () => {
+      const live = makeController();
+      await live.start();
+      live.addInput("push");
+      live.updateInput("push", { widget: "button" });
+      expect(useLiveStore.getState().inputs[0]).toMatchObject({ widget: "button", hold: false });
+      expect(useLiveStore.getState().inputs[0].holdPending).toBeUndefined();
+      live.addInput("kept"); await live.write("kept", "3");
+      live.updateInput("kept", { widget: "button" });
+      expect(useLiveStore.getState().inputs[1].hold).toBe(true); // 書いたあとの固定は利用者の設定なので残す
+      live.stop();
+    });
+
     it("物理値25.06は整数型でraw651を固定として送り、生の値を保存する", async () => {
       const symbols = vi.fn().mockResolvedValue([{ name: "temperature", kind: "int" }]);
       const live = makeController({ symbols });
