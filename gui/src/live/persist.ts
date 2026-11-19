@@ -2,7 +2,7 @@
 
 import { DEFAULT_MAX_SAMPLES } from "./liveRecord";
 
-export type InputWidget = "number" | "slider" | "toggle" | "button";
+export type InputWidget = "number" | "slider" | "toggle" | "button" | "state";
 
 export interface InputItem {
   name: string;
@@ -11,8 +11,10 @@ export interface InputItem {
   max: number;
   step: number;
   hold: boolean;
+  /** 新規入力で、まだサーバに固定値を書いていない。 */
+  holdPending?: boolean;
   /**
-   * 数値入力・スライダの最後の値（復元用）。数値入力は書いた文字列のまま（`"0x20000000000001"` など。Number に通して丸めない）
+   * 最後に書いた生の値（復元用。換算設定が変わっても意味を保つ）。数値入力は書いた文字列のまま（`"0x20000000000001"` など。Number に通して丸めない）
    */
   value?: number | string;
   /**
@@ -53,7 +55,7 @@ const num = (v: unknown, fallback: number) => (typeof v === "number" && Number.i
 
 export function sanitizeLayout(raw: unknown): LiveLayout {
   const doc = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
-  const widgets: InputWidget[] = ["number", "slider", "toggle", "button"];
+  const widgets: InputWidget[] = ["number", "slider", "toggle", "button", "state"];
   const inputs = Array.isArray(doc.inputs) ? doc.inputs : [];
   const watch = Array.isArray(doc.watch) ? doc.watch : [];
   const seenIn = new Set<string>();
@@ -72,6 +74,7 @@ export function sanitizeLayout(raw: unknown): LiveLayout {
       };
       if (typeof it.value === "number" && Number.isFinite(it.value)) item.value = it.value;
       else if (typeof it.value === "string" && it.value.trim() && !/[\r\n]/.test(it.value)) item.value = it.value.trim();
+      if (it.holdPending === true && item.hold && item.value === undefined) item.holdPending = true;
       if (it.monitor === false) item.monitor = false;
       return [item];
     }),

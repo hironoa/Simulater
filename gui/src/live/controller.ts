@@ -2,10 +2,12 @@ import { sanitizeVariants, type InitValue } from "./variants";
 import { setVariantsApplyError, useVariantsStore } from "./variantsStore";
 // ライブモードの制御。サーバ検出、SSE の取り込み、監視一覧・入力の同期、構成の保存をまとめて持つ。
 
+import { getConversion } from "../utils/helpers";
+import { mappingToRows } from "../utils/stateNames";
 import toast from "react-hot-toast";
 import { LIVE_FILE_NAME, useWaveformStore } from "../store/useWaveformStore";
 import { ApiError, createApi, detectServer, type ControlRequest, type DroppedItem, type SimApi, type StateMessage } from "./api";
-import { dropPending, inputValue, restoreHoldText, upsertPending, type InputValue } from "./inputValue";
+import { dropPending, physicalInputValue, inputValue, restoreHoldText, upsertPending, type InputValue } from "./inputValue";
 import { liveRecord, type LiveRecord } from "./liveRecord";
 import { useLiveStore, type LiveStoreState } from "./liveStore";
 import { loadLayout, saveLayout, type InputItem, type InputWidget, type WatchItem } from "./persist";
@@ -152,10 +154,11 @@ export function createLiveController(deps: LiveControllerDeps = {}) {
     let changed = false;
     const next = inputs.map((i) => {
       if (holdBusy.has(i.name) || momentary.has(i.name)) return i;
+      if (i.holdPending && !held.has(i.name)) return i;
       const want = held.has(i.name);
-      if (i.hold === want) return i;
+      if (i.hold === want && !i.holdPending) return i;
       changed = true;
-      return { ...i, hold: want };
+      return { ...i, hold: want, holdPending: undefined };
     });
     if (changed) {
       set({ inputs: next });
@@ -171,7 +174,7 @@ export function createLiveController(deps: LiveControllerDeps = {}) {
     const s = store.getState();
     const inputs = s.inputs.map((i) => {
       let it = i;
-      if (holds.has(i.name) && it.hold) it = { ...it, hold: false };
+      if (holds.has(i.name) && it.hold) it = { ...it, hold: false, holdPending: undefined };
       if (watches.has(i.name) && it.monitor !== false) it = { ...it, monitor: false };
       return it;
     });
@@ -428,20 +431,32 @@ export function createLiveController(deps: LiveControllerDeps = {}) {
     void syncWatch();
   }
 
-  function addInput(name: string, widget: InputWidget = "number") {
+  function addInput(name: string, widget?: InputWidget) {
     const s = store.getState();
     if (!name) return;
     if (s.inputs.some((i) => i.name === name)) {
       remonitor(name);
       return;
     }
-    const item: InputItem = { name, widget, min: 0, max: widget === "toggle" || widget === "button" ? 1 : 100, step: 1, hold: false };
+    widget ??= mappingToRows(waveform.getState().modeMapping[name]).length ? "state" : "number";
+    const item: InputItem = { name, widget, min: 0, max: widget === "toggle" || widget === "button" ? 1 : 100, step: 1, hold: widget !== "button", ...(widget !== "button" ? { holdPending: true } : {}) };
     set({ inputs: [...s.inputs, item] });
     persist();
     void syncWatch();
   }
 
+  function moveInput(from: number, to: number) {
+    const inputs = [...store.getState().inputs];
+    if (!Number.isInteger(from) || !Number.isInteger(to) || from < 0 || to < 0 || from >= inputs.length || to >= inputs.length || from === to) return;
+    inputs.splice(to, 0, inputs.splice(from, 1)[0]);
+    set({ inputs });
+    persist();
+  }
+
+  /** 入力を外した回数（名前ごと）。型を待つ間に外した・足し直したカードへの書き込みを取り消すために使う */
+  const removals = new Map<string, number>();
   function removeInput(name: string) {
+    removals.set(name, (removals.get(name) ?? 0) + 1);
     const item = store.getState().inputs.find((i) => i.name === name);
     set({ inputs: store.getState().inputs.filter((i) => i.name !== name) });
     persist();
@@ -452,7 +467,13 @@ export function createLiveController(deps: LiveControllerDeps = {}) {
   }
 
   function updateInput(name: string, patch: Partial<InputItem>) {
-    set({ inputs: store.getState().inputs.map((i) => (i.name === name ? { ...i, ...patch } : i)) });
+    set({ inputs: store.getState().inputs.map((i) => {
+      if (i.name !== name) return i;
+      const next = { ...i, ...patch };
+      // まだ値を書いていない新規入力をボタンにしたら、既定の固定も外す（ボタンは押している間だけの一時的な入力）
+      if (patch.widget === "button" && next.holdPending) { next.hold = false; next.holdPending = undefined; }
+      return next;
+    }) });
     persist();
   }
 
@@ -503,13 +524,48 @@ export function createLiveController(deps: LiveControllerDeps = {}) {
       noteWritten(name, value, h);
       if (!h) momentary.delete(name);
       // 数値入力の文字列は書いたまま残す（構成の保存・復元でも丸めない）
-      if (item) updateInput(name, { value });
+      if (item) updateInput(name, { value, holdPending: undefined });
       remonitor(name);
       return true;
     } catch (e) {
       if (!store.getState().sim.holds.some((h) => h.name === name)) momentary.delete(name);
       notify.error(`${name} に書き込めませんでした: ${(e as Error).message}`);
       return false;
+    }
+  }
+
+  // 型の取得は物理値を書いたときだけ。関数が変われば別のキャッシュを使う。
+  const symbolKinds = new Map<string, ReturnType<typeof api.symbols>>();
+  async function writePhysical(name: string, value: number | string, hold?: boolean): Promise<number | null> {
+    try {
+      const func = store.getState().sim.func;
+      const removed = removals.get(name) ?? 0;
+      // 換算は入力したときの設定で行う（型を待つ間に yaml などで設定が変わっても、利用者が見ていた換算のまま送る）
+      const settings = waveform.getState();
+      const conversion = getConversion(name, settings.lsbMapping, settings.offsetMapping);
+      const key = `${func}:${name}`;
+      let request = symbolKinds.get(key);
+      if (!request) {
+        request = api.symbols(name, 200);
+        symbolKinds.set(key, request);
+        void request.catch(() => symbolKinds.delete(key));
+      }
+      const symbol = (await request).find(s => s.name === name);
+      // 型を待つ間に対象関数が変わったら、前の関数の型で換算した値を新しい関数へ書かない
+      if (store.getState().sim.func !== func) throw new Error("型を調べている間に対象関数が変わったため、書き込みを取り消しました");
+      // 型を待つ間にカードを外した（足し直した）ら書かない。外したカードの固定が残り、以後の実験に入り続けるため
+      if ((removals.get(name) ?? 0) !== removed || !store.getState().inputs.some(i => i.name === name)) {
+        throw new Error("型を調べている間に入力から外したため、書き込みを取り消しました");
+      }
+      if (!symbol) { symbolKinds.delete(key); throw new Error("型を取得できません"); }
+      const raw = physicalInputValue(String(value), conversion, symbol.kind);
+      if (raw === null) throw new Error("物理値または換算・型が不正です");
+      if (!await write(name, raw, hold)) return null;
+      if (hold !== undefined) { momentary.delete(name); updateInput(name, { hold, holdPending: undefined }); }
+      return raw;
+    } catch (e) {
+      notify.error(`${name} に書き込めませんでした: ${(e as Error).message}`);
+      return null;
     }
   }
 
@@ -546,7 +602,7 @@ export function createLiveController(deps: LiveControllerDeps = {}) {
         return;
       }
     }
-    updateInput(name, { hold });
+    updateInput(name, { hold, holdPending: undefined });
     try {
       await trackHold(name, async () => {
         if (hold) {
@@ -617,7 +673,7 @@ export function createLiveController(deps: LiveControllerDeps = {}) {
 
   return {
     api, record, handlers, start, stop, control, commit, syncWatch,
-    addWatch, removeWatch, updateWatch, addInput, removeInput, updateInput, write, releaseButton, setHold, inputBase, inputBaseValue,
+    addWatch, removeWatch, updateWatch, addInput, moveInput, removeInput, updateInput, write, writePhysical, releaseButton, setHold, inputBase, inputBaseValue,
     setWindowSize, setMaxSamples, loadCsv, exportCsv,
     /** テスト用: 保留中の最新値を即座に反映する */
     flushValues,
