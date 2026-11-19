@@ -625,6 +625,7 @@ export const useWaveformStore = create<WaveformStore>((set, get) => ({
   parseMappingData: (text, format, keepExisting = false, options) => {
     let importedDefs: SignalDefs | null = null;
     let importedView: SignalView | null = null;
+    let legacyDefinitions = format !== "yaml";
     let selectedVariant = useLiveStore.getState().mode !== "offline" ? useVariantsStore.getState().doc.selected : get().selectedVariant;
     if (format === "yaml") {
       try {
@@ -637,6 +638,7 @@ export const useWaveformStore = create<WaveformStore>((set, get) => ({
         } else {
           importedView = { signals: Object.fromEntries(Object.entries(original).filter(([k]) => !["groups", "inactive", "viewState", "layoutMode"].includes(k))), groups: original.groups ?? {} };
           // v1 has no variants; it becomes a common definition.
+          legacyDefinitions = true;
           importedDefs = emptyDefs();
           importedDefs.order = Object.keys(importedView.signals);
         }
@@ -645,11 +647,12 @@ export const useWaveformStore = create<WaveformStore>((set, get) => ({
         return;
       }
     }
-    let modeMapping = keepExisting ? { ...get().modeMapping } : {};
-    let lsbMapping = keepExisting ? { ...get().lsbMapping } : {};
-    let offsetMapping = keepExisting ? { ...get().offsetMapping } : {};
-    let unitMapping = keepExisting ? { ...get().unitMapping } : {};
-    let undefinedMapping = keepExisting ? { ...get().undefinedMapping } : {};
+    // Parse only this file; existing effective values may contain variant overrides.
+    let modeMapping: AppState["modeMapping"] = {};
+    let lsbMapping: AppState["lsbMapping"] = {};
+    let offsetMapping: AppState["offsetMapping"] = {};
+    let unitMapping: AppState["unitMapping"] = {};
+    let undefinedMapping: AppState["undefinedMapping"] = {};
     let inactive = keepExisting ? get().inactive : { show: true, rules: [] };
     let signalGroups = keepExisting ? [...get().signalGroups] : [];
     let signalSettings = { ...get().signalSettings };
@@ -906,10 +909,15 @@ export const useWaveformStore = create<WaveformStore>((set, get) => ({
       }
     }
 
-    if (importedDefs) {
-      if (!Object.keys(importedDefs.base).length) {
-        for (const sig of importedDefs.order) importedDefs.base[sig] = defFromMappings(nextState as AppState, sig);
+    if (legacyDefinitions) {
+      if (!importedDefs) {
+        importedDefs = emptyDefs();
+        importedDefs.order = unique([...Object.keys(modeMapping), ...Object.keys(lsbMapping), ...Object.keys(offsetMapping), ...Object.keys(unitMapping), ...Object.keys(undefinedMapping)]);
+        importedView = get().signalView;
       }
+      for (const sig of importedDefs.order) importedDefs.base[sig] = defFromMappings(nextState as AppState, sig);
+    }
+    if (importedDefs) {
       if (keepExisting) {
         const previous = get().signalDefs;
         const variants = { ...previous.variants };
@@ -922,9 +930,6 @@ export const useWaveformStore = create<WaveformStore>((set, get) => ({
       nextState.signalView = importedView!;
       nextState.selectedVariant = selectedVariant;
       Object.assign(nextState, effectiveMappings(importedDefs, selectedVariant));
-    } else {
-      const names = unique([...Object.keys(modeMapping), ...Object.keys(lsbMapping), ...Object.keys(offsetMapping), ...Object.keys(unitMapping), ...Object.keys(undefinedMapping)]);
-      nextState.signalDefs = writeEffective(keepExisting ? get().signalDefs : emptyDefs(), nextState as AppState, keepExisting ? selectedVariant : "", names);
     }
     set(nextState);
     if (useLiveStore.getState().mode === "offline" && typeof viewStateConfig?.variant === "string") {

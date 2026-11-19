@@ -101,6 +101,47 @@ describe("信号情報 v2", () => {
     state().parseMappingData("X,lsb,2\nX,1,ON\n", "csv");
     expect(output().signals.X).toEqual({ lsb: 2, states: { 1: "ON" } });
   });
+  it.each(["yaml", "csv"] as const)("%s の追加読込で仕向の実効値を共通へコピーしない", (format) => {
+    read("version: 2\nsignals: {X: {lsb: 1, variants: {EU: {lsb: 0.1, offset: 3, undefined: [255], states: {1: EU}}}}}\n");
+    state().setSelectedVariant("EU");
+    const previous = state().signalDefs;
+    state().parseMappingData(format === "yaml" ? "X: {unit: V}\n" : "X,unit,V\n", format, true);
+    expect(state().signalDefs.base.X).toEqual({ lsb: 1, unit: "V" });
+    expect(state().signalDefs.variants).toEqual(previous.variants);
+    expect(state().selectedVariant).toBe("EU");
+    expect(state().lsbMapping.X).toBe("0.1");
+    expect(state().unitMapping.X).toBe("V");
+    expect(state().offsetMapping.X).toBe("3");
+    expect(state().undefinedMapping.X).toEqual([255]);
+    expect(state().modeMapping.X).toEqual({ 1: "EU" });
+    state().setSelectedVariant("");
+    expect(state().lsbMapping.X).toBe("1");
+    expect(state().offsetMapping.X).toBeUndefined();
+    expect(state().undefinedMapping.X).toBeUndefined();
+    expect(state().modeMapping.X).toBeUndefined();
+  });
+  it.each(["yaml", "csv"] as const)("%s の追加読込で明記した項目と状態名だけを共通へ重ねる", (format) => {
+    read("version: 2\nsignals: {X: {lsb: 1, states: {0: BASE, 1: OLD}, variants: {EU: {lsb: 0.1, states: {0: EU, 2: ONLY_EU}}}}}\n");
+    state().setSelectedVariant("EU");
+    const previous = state().signalDefs;
+    state().parseMappingData(format === "yaml"
+      ? "X: {lsb: 2, offset: 4, unit: V, undefined: [254, 255], 1: NEW, 3: ADDED}\n"
+      : 'X,lsb,2\nX,offset,4\nX,unit,V\nX,undefined,"254,255"\nX,1,NEW\nX,3,ADDED\n', format, true);
+    expect(state().signalDefs.base.X).toEqual({ lsb: 2, offset: 4, unit: "V", undefined: [254, 255], states: { 0: "BASE", 1: "NEW", 3: "ADDED" } });
+    expect(state().signalDefs.variants).toEqual(previous.variants);
+    expect(previous.base.X.states).toEqual({ 0: "BASE", 1: "OLD" });
+    expect(state().lsbMapping.X).toBe("0.1");
+    expect(state().modeMapping.X).toEqual({ 0: "EU", 1: "NEW", 2: "ONLY_EU", 3: "ADDED" });
+  });
+  it.each(["yaml", "csv"] as const)("%s の通常読込では共通の定義を置き換える", (format) => {
+    read("version: 2\nsignals: {X: {lsb: 1, variants: {EU: {lsb: 0.1}}}, Y: {unit: A}}\n");
+    state().setSelectedVariant("EU");
+    state().parseMappingData(format === "yaml" ? "X: {unit: V}\n" : "X,unit,V\n", format, false);
+    expect(state().signalDefs.base).toEqual({ X: { unit: "V" } });
+    expect(state().signalDefs.variants).toEqual({});
+    expect(state().lsbMapping.X).toBeUndefined();
+    expect(state().unitMapping).toEqual({ X: "V" });
+  });
   it("EU の states の追加・削除と unit の置換を反映し共通に戻す", () => {
     read();
     state().setSelectedVariant("EU");
