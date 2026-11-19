@@ -535,7 +535,8 @@ export function createLiveController(deps: LiveControllerDeps = {}) {
   const symbolKinds = new Map<string, ReturnType<typeof api.symbols>>();
   async function writePhysical(name: string, value: number | string, hold?: boolean): Promise<number | null> {
     try {
-      const key = `${store.getState().sim.func}:${name}`;
+      const func = store.getState().sim.func;
+      const key = `${func}:${name}`;
       let request = symbolKinds.get(key);
       if (!request) {
         request = api.symbols(name, 200);
@@ -543,6 +544,8 @@ export function createLiveController(deps: LiveControllerDeps = {}) {
         void request.catch(() => symbolKinds.delete(key));
       }
       const symbol = (await request).find(s => s.name === name);
+      // 型を待つ間に対象関数が変わったら、前の関数の型で換算した値を新しい関数へ書かない
+      if (store.getState().sim.func !== func) throw new Error("型を調べている間に対象関数が変わったため、書き込みを取り消しました");
       if (!symbol) { symbolKinds.delete(key); throw new Error("型を取得できません"); }
       const settings = waveform.getState();
       const raw = physicalInputValue(String(value), getConversion(name, settings.lsbMapping, settings.offsetMapping), symbol.kind);

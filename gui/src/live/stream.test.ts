@@ -204,6 +204,22 @@ describe("ライブ制御（SSE の取り込み）", () => {
       live.stop();
     });
 
+    it("型を調べている間に対象関数が変わったら、物理値を書かない", async () => {
+      let resolve!: (v: { name: string; kind: string }[]) => void;
+      const symbols = vi.fn().mockReturnValue(new Promise(r => { resolve = r; }));
+      const live = makeController({ symbols });
+      await live.start();
+      useWaveformStore.setState({ lsbMapping: { temperature: "0.1" }, offsetMapping: { temperature: "-40" } });
+      live.addInput("temperature");
+      const pending = live.writePhysical("temperature", "25.06");
+      useLiveStore.setState({ sim: { ...useLiveStore.getState().sim, func: "other_func" } });
+      resolve([{ name: "temperature", kind: "int" }]);
+      expect(await pending).toBeNull();
+      expect(posted.filter(p => p.url === "/api/write")).toEqual([]);
+      expect(notify.error).toHaveBeenCalledWith(expect.stringContaining("対象関数が変わった"));
+      live.stop();
+    });
+
     it("型が取得できない物理値は送らず、誤りを通知する", async () => {
       const live = makeController({ symbols: vi.fn().mockResolvedValue([]) });
       await live.start(); live.addInput("unknown");
