@@ -71,6 +71,31 @@ describe("信号情報の自動保存", () => {
     expect(mock.saveSignals).not.toHaveBeenCalled();
     expect(useSignalsPersistStore.getState().error).toContain("network");
   });
+  it.each(["取得エラー", "不正 YAML", "不正な定義", "通信例外"])("起動時の%s後も手動読み込みした定義で仕向に追従し、保存しない", async (failure) => {
+    const mock = api();
+    if (failure === "通信例外") mock.getSignals.mockRejectedValue(new Error("network"));
+    else mock.getSignals.mockResolvedValue({
+      path: "bad.yaml", exists: true,
+      text: failure === "不正 YAML" ? "broken: [" : failure === "不正な定義" ? "version: 2\nsignals: []" : config,
+      error: failure === "取得エラー" ? "権限がありません" : "",
+    });
+    persist = createSignalsPersistence(mock); await persist.start("live");
+    expect(useSignalsPersistStore.getState().error).toContain("信号情報ファイルを読めません:");
+    store.getState().parseMappingData(config, "yaml", false);
+    expect(store.getState().unitMapping.X).toBe("V");
+    useVariantsStore.setState({ doc: { version: 1, selected: "EU", variants: [] } });
+    expect(store.getState().selectedVariant).toBe("EU");
+    expect(store.getState().unitMapping.X).toBe("A");
+    await tick(); expect(mock.saveSignals).not.toHaveBeenCalled();
+    useVariantsStore.setState({ doc: { version: 1, selected: "", variants: [] } });
+    expect(store.getState().selectedVariant).toBe("");
+    expect(store.getState().unitMapping.X).toBe("V");
+    await tick(); expect(mock.saveSignals).not.toHaveBeenCalled();
+    persist.stop();
+    useVariantsStore.setState({ doc: { version: 1, selected: "EU", variants: [] } });
+    expect(store.getState().selectedVariant).toBe("");
+    await tick(); expect(mock.saveSignals).not.toHaveBeenCalled();
+  });
   it("ファイルがないときは何も読み込まず次の編集で v2 を作る", async () => {
     const mock = api(); mock.getSignals.mockResolvedValue({ path: "new.yaml", exists: false, text: null, error: "" });
     persist = createSignalsPersistence(mock); await persist.start("live"); await tick();

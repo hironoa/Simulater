@@ -62,6 +62,9 @@ export function createSignalsPersistence(api: Pick<SimApi, "getSignals" | "saveS
     try {
       if (live) {
         followVariants();
+        unsubscribeVariants = useVariantsStore.subscribe((next, prev) => {
+          if (next.doc !== prev.doc) { followVariants(); schedule(); }
+        });
         const result = await api.getSignals();
         if (stopped) return;
         path = result.path;
@@ -88,9 +91,6 @@ export function createSignalsPersistence(api: Pick<SimApi, "getSignals" | "saveS
     unsubscribe = useWaveformStore.subscribe((next, prev) => {
       const a = watched(next), b = watched(prev);
       if (a.some((value, i) => value !== b[i])) schedule();
-    });
-    if (live) unsubscribeVariants = useVariantsStore.subscribe((next, prev) => {
-      if (next.doc !== prev.doc) { followVariants(); schedule(); }
     });
   }
   function stop() {
