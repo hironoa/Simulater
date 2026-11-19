@@ -40,6 +40,46 @@ beforeEach(() => {
 });
 
 describe("信号情報 v2", () => {
+  it("追加読込で base の項目と states の数値キーを重ねる", () => {
+    read("version: 2\nsignals:\n  X: {lsb: 0.1, unit: V}\n  Y: {states: {0: A, 1: B}}\n");
+    const previous = state().signalDefs;
+    state().parseMappingData("version: 2\nsignals:\n  X: {states: {1: ON}}\n  Y: {states: {1: C, 2: D}}\n", "yaml", true);
+    expect(state().signalDefs.base.X).toEqual({ lsb: 0.1, unit: "V", states: { 1: "ON" } });
+    expect(state().lsbMapping.X).toBe("0.1");
+    expect(state().unitMapping.X).toBe("V");
+    expect(state().modeMapping.X).toEqual({ 1: "ON" });
+    expect(state().modeMapping.Y).toEqual({ 0: "A", 1: "C", 2: "D" });
+    expect(previous.base.Y.states).toEqual({ 0: "A", 1: "B" });
+  });
+  it("追加読込で仕向の項目と states を重ね、後の null を残す", () => {
+    read("version: 2\nsignals:\n  X: {states: {3: BASE}, variants: {EU: {lsb: 0.1, unit: V, states: {0: A, 1: B, 2: OLD, 3: null}}}}\n");
+    state().setSelectedVariant("EU");
+    state().parseMappingData("version: 2\nsignals:\n  X: {variants: {EU: {unit: A, states: {1: C, 2: null, 4: D}}}}\n", "yaml", true);
+    expect(state().signalDefs.variants.EU.X).toEqual({ lsb: 0.1, unit: "A", states: { 0: "A", 1: "C", 2: null, 3: null, 4: "D" } });
+    expect(state().lsbMapping.X).toBe("0.1");
+    expect(state().unitMapping.X).toBe("A");
+    expect(state().modeMapping.X).toEqual({ 0: "A", 1: "C", 4: "D" });
+  });
+  it.each([true, false])("view の項目は追加読込=%s のときだけ保持する", (keepExisting) => {
+    read("version: 2\nsignals: {X: {lsb: 0.1, unit: V, states: {0: A}}, Y: {unit: A}}\nview:\n  signals: {X: {color: '#f00', weight: 2}}\n  groups: {G: {expanded: false, visible: true}}\n");
+    state().parseMappingData("version: 2\nsignals: {X: {states: {1: ON}}}\nview:\n  signals: {X: {weight: 3}}\n  groups: {G: {visible: false}}\n", "yaml", keepExisting);
+    expect(state().signalView.signals.X).toEqual(keepExisting ? { color: "#f00", weight: 3 } : { weight: 3 });
+    expect(state().signalView.groups.G).toEqual(keepExisting ? { expanded: false, visible: false } : { visible: false });
+    if (!keepExisting) {
+      expect(state().signalDefs.base).toEqual({ X: { states: { 1: "ON" } } });
+      expect(state().lsbMapping.X).toBeUndefined();
+      expect(state().unitMapping.X).toBeUndefined();
+      expect(state().modeMapping.X).toEqual({ 1: "ON" });
+    }
+  });
+  it("通常読込では以前の仕向定義を置き換える", () => {
+    read();
+    read("version: 2\nsignals: {MODE: {variants: {EU: {states: {1: NEW}}}}}\n");
+    expect(state().signalDefs.variants).toEqual({ EU: { MODE: { states: { 1: "NEW" } } } });
+    state().setSelectedVariant("EU");
+    expect(state().modeMapping.MODE).toEqual({ 1: "NEW" });
+    expect(state().unitMapping.MODE).toBeUndefined();
+  });
   it("v2 の意味・見た目・inactive を往復する", () => {
     state().parseWaveformCSV(csv(["SPEED", "MODE"]), "a.csv");
     read();

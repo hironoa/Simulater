@@ -1,5 +1,5 @@
 import { useVariantsStore } from "../live/variantsStore";
-import { emptyDefs, emptyView, readSignalDocument, readDefs, legacyView, effectiveMappings, writeEffective, defFromMappings, dumpSignals, unique, type SignalDefs, type SignalView } from "./signalDefs";
+import { emptyDefs, emptyView, readSignalDocument, readDefs, legacyView, effectiveMappings, writeEffective, defFromMappings, dumpSignals, unique, type DefOverride, type SignalDefs, type SignalView } from "./signalDefs";
 import { useLiveStore } from "../live/liveStore";
 import { listedSignals } from "../utils/displaySignalName";
 import { saveLayout } from "../live/persist";
@@ -28,6 +28,22 @@ export const LIVE_FILE_NAME = "ライブ記録";
 
 // Swaps restore the view explicitly after both CSVs have been parsed.
 let swappingCompare = false;
+
+function mergeDefinitions<T extends DefOverride>(previous: Record<string, T>, incoming: Record<string, T>): Record<string, T> {
+  const merged = { ...previous };
+  for (const [sig, def] of Object.entries(incoming)) {
+    merged[sig] = { ...previous[sig], ...def,
+      ...(def.states !== undefined ? { states: { ...previous[sig]?.states, ...def.states } } : {}),
+    };
+  }
+  return merged;
+}
+
+function mergeViewEntries(previous: SignalView["signals"], incoming: SignalView["signals"]): SignalView["signals"] {
+  const merged = { ...previous };
+  for (const [name, fields] of Object.entries(incoming)) merged[name] = { ...previous[name], ...fields };
+  return merged;
+}
 
 export interface WaveformFileHandle extends FileSystemFileHandle {
   queryPermission: (options: { mode: "read" }) => Promise<PermissionState>;
@@ -897,10 +913,10 @@ export const useWaveformStore = create<WaveformStore>((set, get) => ({
       if (keepExisting) {
         const previous = get().signalDefs;
         const variants = { ...previous.variants };
-        for (const [name, overrides] of Object.entries(importedDefs.variants)) variants[name] = { ...variants[name], ...overrides };
-        importedDefs = { base: { ...previous.base, ...importedDefs.base }, variants,
+        for (const [name, overrides] of Object.entries(importedDefs.variants)) variants[name] = mergeDefinitions(variants[name] ?? {}, overrides);
+        importedDefs = { base: mergeDefinitions(previous.base, importedDefs.base), variants,
           variantNames: unique([...previous.variantNames, ...importedDefs.variantNames]), order: unique([...previous.order, ...importedDefs.order]) };
-        importedView = { signals: { ...get().signalView.signals, ...importedView!.signals }, groups: { ...get().signalView.groups, ...importedView!.groups } };
+        importedView = { signals: mergeViewEntries(get().signalView.signals, importedView!.signals), groups: mergeViewEntries(get().signalView.groups, importedView!.groups) };
       }
       nextState.signalDefs = importedDefs;
       nextState.signalView = importedView!;
