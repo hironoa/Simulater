@@ -58,6 +58,9 @@ function InputCard({ item, names, current, pending, held, base }: InputCardProps
     return (raw == null ? null : cellNumber(display(raw))) ?? item.min;
   });
   const [pressed, setPressed] = useState(false);
+  // 書き込みの応答が返ったときに、送ったあとで欄が編集されたかを見るため、最新の値を持っておく
+  const latest = useRef({ text, slider });
+  latest.current = { text, slider };
   const textRef = useRef<HTMLInputElement>(null);
   // スライダは、利用者が最後に設定した値（反映待ち・固定）に合わせる。まだ操作していなければ現在値にも合わせる。
   // 書き込みはステップまでメモリに反映されないので、現在値だけを見ると書いた直後に古い値へ戻って見える
@@ -91,11 +94,13 @@ function InputCard({ item, names, current, pending, held, base }: InputCardProps
   // 書式の検証はサーバに任せ、400 ならそのメッセージを出す（'文字列' や 1|2|3 も書ける）。空欄は送らない
   const writeDisplay = async (value: string | number, hold?: boolean) => {
     if (!physical) { await live.write(item.name, value, hold); return; }
+    // 応答を待つ間に利用者が欄やスライダを動かしていたら、その値を古い書き込みで上書きしない
+    const sentText = latest.current.text, sentSlider = latest.current.slider;
     const raw = await live.writePhysical(item.name, value, hold);
     if (raw !== null) {
       const shownValue = physicalInputText(raw, { lsb, offset });
-      setText(shownValue);
-      setSlider(Number(shownValue));
+      if (latest.current.text === sentText) setText(shownValue);
+      if (latest.current.slider === sentSlider) setSlider(Number(shownValue));
     }
   };
   const writeNumber = () => {
