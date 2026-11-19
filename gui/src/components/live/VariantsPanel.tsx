@@ -21,10 +21,17 @@ export function VariantsPanel() {
   const file = useRef<HTMLInputElement>(null);
   const current = doc.variants.find(v => v.name === doc.selected);
   const api = liveController().api;
-  async function apply(next: VariantsDoc) {
-    useVariantsStore.setState({ doc: next });
+  async function apply(next: VariantsDoc, onApplied?: () => void) {
+    if (!onApplied) useVariantsStore.setState({ doc: next });
     setBusy(true);
-    try { await api.setInit(next.variants.find(v => v.name === next.selected)?.values ?? []); setErrors({}); }
+    try {
+      await api.setInit(next.variants.find(v => v.name === next.selected)?.values ?? []);
+      if (onApplied) {
+        onApplied();
+        useVariantsStore.setState({ doc: next });
+      }
+      setErrors({});
+    }
     catch (e) { setVariantsApplyError(e); }
     finally { setBusy(false); }
   }
@@ -44,7 +51,7 @@ export function VariantsPanel() {
   const rename = (adding: boolean) => {
     const name = window.prompt(adding ? "仕向の名前" : "新しい名前", adding ? "" : doc.selected)?.trim();
     if (!name || doc.variants.some(v => v.name === name)) return;
-    void apply({ ...doc, selected: name, variants: adding ? [...doc.variants, { name, values: [] }] : doc.variants.map(v => v.name === doc.selected ? { ...v, name } : v) });
+    void apply({ ...doc, selected: name, variants: adding ? [...doc.variants, { name, values: [] }] : doc.variants.map(v => v.name === doc.selected ? { ...v, name } : v) }, adding ? undefined : () => useWaveformStore.getState().renameVariant(doc.selected, name));
   };
   return <div className="text-xs flex flex-col gap-2">
     {error && <p role="alert" className="text-red-500">{error}（自動保存しません）</p>}

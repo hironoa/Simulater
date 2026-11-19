@@ -47,6 +47,7 @@ interface WaveformStore extends AppState {
   signalView: SignalView;
   selectedVariant: string;
   setSelectedVariant: (variant: string) => void;
+  renameVariant: (oldName: string, newName: string) => void;
   setVariantOverride: (sig: string, enabled: boolean) => void;
   setInactive: (config: InactiveConfig) => void;
   inactiveEditorOpen: boolean;
@@ -261,6 +262,24 @@ export const useWaveformStore = create<WaveformStore>((set, get) => ({
     set({ selectedVariant, ...effectiveMappings(state.signalDefs, selectedVariant), autoAdjustTrigger: state.autoAdjustTrigger + 1 });
     if (useLiveStore.getState().mode === "offline") {
       try { localStorage.setItem("sim-gui:signals-variant:v1", selectedVariant); } catch { /* unavailable */ }
+    }
+  },
+  renameVariant: (oldName, newName) => {
+    if (!oldName || !newName || oldName === newName) return;
+    const state = get();
+    const variants = { ...state.signalDefs.variants };
+    if (Object.hasOwn(variants, oldName)) {
+      variants[newName] = { ...variants[newName], ...variants[oldName] };
+      delete variants[oldName];
+    }
+    const signalDefs = { ...state.signalDefs, variants,
+      variantNames: unique(state.signalDefs.variantNames.map(name => name === oldName ? newName : name)) };
+    const selectedVariant = state.selectedVariant === oldName ? newName : state.selectedVariant;
+    set({ signalDefs, selectedVariant, ...effectiveMappings(signalDefs, selectedVariant), autoAdjustTrigger: state.autoAdjustTrigger + 1 });
+    if (useLiveStore.getState().mode === "offline") {
+      try {
+        if (localStorage.getItem("sim-gui:signals-variant:v1") === oldName) localStorage.setItem("sim-gui:signals-variant:v1", newName);
+      } catch { /* unavailable */ }
     }
   },
   setVariantOverride: (sig, enabled) => {

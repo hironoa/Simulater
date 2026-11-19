@@ -34,7 +34,7 @@ const read = (text = config) => state().parseMappingData(text, "yaml", false);
 const output = () => yaml.load(state().getConfigYAML()) as any;
 
 beforeEach(() => {
-  vi.stubGlobal("localStorage", { getItem: () => null, setItem: vi.fn() });
+  vi.stubGlobal("localStorage", { getItem: vi.fn(() => null), setItem: vi.fn() });
   store.setState({ ...initial, signalDefs: emptyDefs(), signalView: emptyView() });
   useLiveStore.setState({ mode: "offline" });
 });
@@ -69,6 +69,38 @@ describe("信号情報 v2", () => {
     state().setSelectedVariant("");
     expect(state().modeMapping.MODE).toEqual({ 0: "停止", 1: "走行" });
     expect(state().unitMapping.MODE).toBeUndefined();
+  });
+  it("仕向の名前変更で選択・実効値・保存 YAML とビューアの選択を移す", () => {
+    read("version: 2\nvariants: [国内, EU, US]\nsignals:\n  SPEED: {lsb: 1, variants: {EU: {lsb: 0.1}}}\n");
+    state().setSelectedVariant("EU");
+    vi.mocked(localStorage.setItem).mockClear();
+    vi.mocked(localStorage.getItem).mockReturnValue("EU");
+    state().renameVariant("EU", "EU2");
+    expect(state().selectedVariant).toBe("EU2");
+    expect(state().lsbMapping.SPEED).toBe("0.1");
+    expect(output().variants).toEqual(["国内", "EU2", "US"]);
+    expect(output().signals.SPEED).toEqual({ lsb: 1, variants: { EU2: { lsb: 0.1 } } });
+    expect(state().signalDefs.variants.EU).toBeUndefined();
+    expect(localStorage.setItem).toHaveBeenCalledWith("sim-gui:signals-variant:v1", "EU2");
+  });
+  it("既存の新名には信号ごとに旧名を優先し、候補の順序を保って重複を除く", () => {
+    read("version: 2\nvariants: [国内, EU, US, EU2]\nsignals:\n  X: {variants: {EU: {lsb: 0.1}, EU2: {unit: V}}}\n  Y: {variants: {EU2: {lsb: 2}}}\n");
+    state().setSelectedVariant("EU2");
+    state().renameVariant("EU", "EU2");
+    expect(state().signalDefs.variantNames).toEqual(["国内", "EU2", "US"]);
+    expect(state().signalDefs.variants).toEqual({ EU2: { X: { lsb: 0.1 }, Y: { lsb: 2 } } });
+    expect(state().lsbMapping.X).toBe("0.1");
+    expect(state().unitMapping.X).toBeUndefined();
+  });
+  it("ライブで名前変更してもビューアの選択を保存しない", () => {
+    read();
+    useLiveStore.setState({ mode: "live" });
+    state().setSelectedVariant("EU");
+    vi.mocked(localStorage.getItem).mockReturnValue("EU");
+    vi.mocked(localStorage.setItem).mockClear();
+    state().renameVariant("EU", "EU2");
+    expect(state().selectedVariant).toBe("EU2");
+    expect(localStorage.setItem).not.toHaveBeenCalled();
   });
   it("上書きがある信号は差分へ、ない信号は base へ書き戻す", () => {
     read();
