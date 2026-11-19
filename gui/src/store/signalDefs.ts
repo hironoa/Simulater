@@ -155,6 +155,15 @@ export function legacyView(doc: Record<string, any>, defs: SignalDefs, variant: 
   return flat;
 }
 export function dumpSignals(doc: unknown): string {
-  // js-yaml quotes numeric object keys by default; state names use YAML numeric keys.
-  return yaml.dump(doc, { noRefs: true }).replace(/^(\s*)'(-?\d+(?:\.\d+)?(?:e[+-]?\d+)?)':/gm, "$1$2:");
+  // Only direct children of states use numeric keys; other names stay quoted.
+  let statesIndent: number | undefined;
+  return yaml.dump(doc, { noRefs: true }).split("\n").map(line => {
+    const indent = line.match(/^ */)![0].length;
+    if (line.trim() && statesIndent !== undefined && indent <= statesIndent) statesIndent = undefined;
+    if (statesIndent !== undefined && indent === statesIndent + 2) {
+      line = line.replace(/^( *)'(-?\d+(?:\.\d+)?(?:e[+-]?\d+)?)':/, "$1$2:");
+    }
+    if (/^ *states:$/.test(line)) statesIndent = indent;
+    return line;
+  }).join("\n");
 }
