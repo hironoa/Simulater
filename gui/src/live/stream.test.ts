@@ -235,6 +235,23 @@ describe("ライブ制御（SSE の取り込み）", () => {
       live.stop();
     });
 
+    it("型を調べている間にカードを外したら、物理値を書かない", async () => {
+      let resolve!: (v: { name: string; kind: string }[]) => void;
+      const symbols = vi.fn().mockReturnValue(new Promise(r => { resolve = r; }));
+      const live = makeController({ symbols });
+      await live.start();
+      useWaveformStore.setState({ lsbMapping: { temperature: "0.1" }, offsetMapping: { temperature: "-40" } });
+      live.addInput("temperature");
+      const pending = live.writePhysical("temperature", "25.06", true);
+      live.removeInput("temperature");
+      live.addInput("temperature"); // 足し直しても、前のカードの操作は書かない
+      resolve([{ name: "temperature", kind: "int" }]);
+      expect(await pending).toBeNull();
+      // 外したときの固定の解除は送ってよいが、換算した値 651 は書かない
+      expect(posted.filter(p => p.url === "/api/write").map(p => (p.body as { value?: unknown }).value)).not.toContain(651);
+      live.stop();
+    });
+
     it("型が取得できない物理値は送らず、誤りを通知する", async () => {
       const live = makeController({ symbols: vi.fn().mockResolvedValue([]) });
       await live.start(); live.addInput("unknown");

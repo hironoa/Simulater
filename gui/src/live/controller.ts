@@ -453,7 +453,10 @@ export function createLiveController(deps: LiveControllerDeps = {}) {
     persist();
   }
 
+  /** 入力を外した回数（名前ごと）。型を待つ間に外した・足し直したカードへの書き込みを取り消すために使う */
+  const removals = new Map<string, number>();
   function removeInput(name: string) {
+    removals.set(name, (removals.get(name) ?? 0) + 1);
     const item = store.getState().inputs.find((i) => i.name === name);
     set({ inputs: store.getState().inputs.filter((i) => i.name !== name) });
     persist();
@@ -536,6 +539,7 @@ export function createLiveController(deps: LiveControllerDeps = {}) {
   async function writePhysical(name: string, value: number | string, hold?: boolean): Promise<number | null> {
     try {
       const func = store.getState().sim.func;
+      const removed = removals.get(name) ?? 0;
       // 換算は入力したときの設定で行う（型を待つ間に yaml などで設定が変わっても、利用者が見ていた換算のまま送る）
       const settings = waveform.getState();
       const conversion = getConversion(name, settings.lsbMapping, settings.offsetMapping);
@@ -549,6 +553,10 @@ export function createLiveController(deps: LiveControllerDeps = {}) {
       const symbol = (await request).find(s => s.name === name);
       // 型を待つ間に対象関数が変わったら、前の関数の型で換算した値を新しい関数へ書かない
       if (store.getState().sim.func !== func) throw new Error("型を調べている間に対象関数が変わったため、書き込みを取り消しました");
+      // 型を待つ間にカードを外した（足し直した）ら書かない。外したカードの固定が残り、以後の実験に入り続けるため
+      if ((removals.get(name) ?? 0) !== removed || !store.getState().inputs.some(i => i.name === name)) {
+        throw new Error("型を調べている間に入力から外したため、書き込みを取り消しました");
+      }
       if (!symbol) { symbolKinds.delete(key); throw new Error("型を取得できません"); }
       const raw = physicalInputValue(String(value), conversion, symbol.kind);
       if (raw === null) throw new Error("物理値または換算・型が不正です");
