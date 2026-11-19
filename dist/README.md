@@ -18,11 +18,11 @@
 
 | 項目 | 内容 |
 | --- | --- |
-| ビルド元 | `759edf3`（左の信号設定に前のファイルの信号名や yaml の viewState が混ざらないようにする GUI の変更を、`f43bf37`（PR #54・#55 までの main）に足したもの。PR #56。C のソースは `f43bf37` と同じ） |
+| ビルド元 | `bf3ff11`（仕向を選んでいないときに警告し、選んだ仕向をファイルに保存する GUI の変更を、`abeac77`（PR #58 までの main）に足したもの。PR #59。C のソースは `abeac77` と同じ） |
 | ビルドした日 | 2026-11-19 |
-| ビルド方法 | GitHub Actions の `windows` ジョブ（run 44409438017、windows-2025、MinGW-Builds の gcc 15.2.0、x86_64、posix-seh、UCRT。`build.bat` の `CC=gcc`）の成果物 `sim-windows-x64` から `sim.exe` を取った。テキストのファイル（`sim_gui.html`、`README.md`、`sim.cfg.example`、`native_ram_clear.c`、`xlate/`、`native/`）は、成果物と改行コード以外が同じであることを確かめて、リポジトリのソースの写し（LF）を置いた |
+| ビルド方法 | GitHub Actions の `windows` ジョブ（run 44429835556、windows-2025、MinGW-Builds の gcc 15.2.0、x86_64、posix-seh、UCRT。`build.bat` の `CC=gcc`）の成果物 `sim-windows-x64` から `sim.exe` を取った。テキストのファイル（`sim_gui.html`、`README.md`、`sim.cfg.example`、`native_ram_clear.c`、`xlate/`、`native/`）は、成果物と改行コード以外が同じであることを確かめて、リポジトリのソースの写し（LF）を置いた |
 | 依存する DLL | Windows 標準のものだけ（KERNEL32、SHELL32、WS2_32、UCRT）。MinGW の DLL は要らない |
-| 確認 | CI の同じ run で、windows ジョブの `tests\run_tests.bat` 894 件と、コア単体の試験（`rl78\tests\run_tests.bat`）、clang でのビルドが成功し、macos ジョブの `tests/run_tests.sh` 1176 件がすべて成功。Mac の上では GUI の `npx vitest run` 223 件と `npm run lint` が成功。`sim.exe` そのものは Windows で実行していない |
+| 確認 | CI の同じ run で、windows ジョブの `tests\run_tests.bat` 917 件と、コア単体の試験（`rl78\tests\run_tests.bat`）、clang でのビルドが成功し、macos ジョブの `tests/run_tests.sh` 1176 件がすべて成功。Mac の上では GUI の `npx vitest run` 224 件と `npm run lint` が成功し、モックのサーバで仕向の警告と選択の保存を画面で確かめた。`sim.exe` そのものは Windows で実行していない |
 
 普段の配布物は CI（GitHub Actions の `windows` ジョブの成果物 `sim-windows-x64`）が作ります。
 このフォルダは、CI を使えなかったときの代わりに置いたものです。ソースを変えても自動では作り直されないので、
