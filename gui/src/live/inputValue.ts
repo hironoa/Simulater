@@ -146,10 +146,7 @@ export function physicalInputValue(text: string, conversion: { lsb: number; offs
   const physical = Number(text);
   if (!Number.isFinite(physical) || !Number.isFinite(conversion.lsb) || conversion.lsb === 0 || !Number.isFinite(conversion.offset)) return null;
   const raw = (physical - conversion.offset) / conversion.lsb;
-  // 十進小数の割り算の誤差（25.05 → 650.4999999999999）で四捨五入の結果が変わらないよう、15 桁に整えてから丸める。
-  // 15 桁を超える大きさの値は整えると桁が落ちるので、そのまま丸める。四捨五入は 0 から遠い側へ（-650.5 → -651）
-  const tidy = Math.abs(raw) < 1e15 ? Number(raw.toPrecision(15)) : raw;
-  const value = kind === "float" ? raw : Math.sign(tidy) * Math.round(Math.abs(tidy));
+  const value = kind === "float" ? raw : roundHalfAway(raw);
   return Number.isFinite(value) && (kind === "float" || Number.isSafeInteger(value)) ? value : null;
 }
 
@@ -161,4 +158,16 @@ export function physicalInputText(raw: number | string | null | undefined, conve
   // 安全整数はそのまま出す（15 桁に丸めると、欄の値を書き戻したときに別の値になる）
   if (Number.isSafeInteger(physical)) return String(physical);
   return String(Number(physical.toPrecision(15)));
+}
+
+/**
+ * 0 から遠い側へ四捨五入する（-650.5 → -651）。十進小数の割り算の誤差（25.05 → 650.4999999999999）で
+ * ちょうど .5 の境界がずれたときだけ .5 とみなす。誤差の範囲（値の大きさの 2 ulp 程度）を超える小数部分は変えない。
+ */
+export function roundHalfAway(x: number): number {
+  const a = Math.abs(x);
+  const f = Math.floor(a);
+  // 2^40 を超える大きさでは補正しない（誤差の幅が小数部分の差より広くなり、整数や .49 まで .5 とみなしてしまう）
+  const nearHalf = a < 2 ** 40 && Math.abs(a - f - 0.5) <= Math.max(a, 1) * Number.EPSILON * 2;
+  return Math.sign(x) * (nearHalf ? f + 1 : Math.round(a));
 }

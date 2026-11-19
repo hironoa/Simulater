@@ -24,11 +24,15 @@ describe("入力カードの表示", () => {
   it("保存したraw651を物理値25.1で表示し、単位と生の値の案内を付ける", () => {
     Object.assign(wave, { lsbMapping: { temperature: "0.1" }, offsetMapping: { temperature: "-40" }, unitMapping: { temperature: "℃" } });
     const html = render(item({ value: 651 }), 650, "652", "651");
-    expect(html).toContain('value="25.1"');
+    expect(html).toContain('value="25.2"'); // 欄は保存値より反映待ちの値を優先する
     expect(html).toContain("物理値"); expect(html).toContain("℃");
     expect(html).toContain("反映待ち: 25.2"); expect(html).toContain("固定値: 25.1");
     expect(html).toContain("生の値: 現在 650 / 反映待ち 652 / 固定 651");
     expect(html).toContain("ドラッグで並べ替え");
+  });
+  it("保存値よりサーバの固定値を欄に出す（別のタブで固定値を変えたあと）", () => {
+    Object.assign(wave, { lsbMapping: { temperature: "0.1" }, offsetMapping: { temperature: "-40" } });
+    expect(render(item({ value: 651 }), 650, undefined, "652")).toContain('value="25.2"');
   });
   it("まだ書いていない固定には案内を表示する", () => {
     expect(render(item({ holdPending: true }))).toContain("値を入れると固定します");

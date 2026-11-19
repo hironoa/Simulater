@@ -51,7 +51,8 @@ function InputCard({ item, names, current, pending, held, base }: InputCardProps
   const display = (value: number | string | null | undefined) => physical ? physicalInputText(value, { lsb, offset }) : value == null ? "—" : String(value);
   const states = useMemo(() => mappingToRows(mapping), [mapping]);
   // 数値入力は書いた文字列のまま持つ（Number に通すと 2^53 を超える整数が丸まる）
-  const [text, setText] = useState(item.value !== undefined ? display(item.value) : "");
+  // 初めの表示も、サーバの反映待ち・固定の値があれば保存した値より優先する
+  const [text, setText] = useState(() => { const v = pending ?? held ?? item.value; return v !== undefined ? display(v) : ""; });
   // スライダの最小・最大は表示の単位（物理値なら物理値）なので、item.min は換算しない
   const [slider, setSlider] = useState(() => {
     const raw = item.value ?? base.value;
@@ -79,10 +80,12 @@ function InputCard({ item, names, current, pending, held, base }: InputCardProps
     if (textRef.current && document.activeElement === textRef.current) return;
     setText(physical ? physicalInputText(shown, { lsb, offset }) : shown);
   }, [shown, physical, lsb, offset]);
-  // 換算やウィジェットが変わったら保存した生の値から表示し直す。
+  // 換算やウィジェットが変わったら生の値から表示し直す。サーバの反映待ち・固定の値があれば、保存した値より優先する
+  // （別のタブで固定値を変えたあとに開き直したとき、古い保存値で欄を戻さないため）
   useEffect(() => {
-    if (item.value === undefined) return;
-    const shownValue = physical ? physicalInputText(item.value, { lsb, offset }) : String(item.value);
+    const source = shown ?? item.value;
+    if (source === undefined) return;
+    const shownValue = physical ? physicalInputText(source, { lsb, offset }) : String(source);
     setText(shownValue);
     const n = cellNumber(shownValue);
     if (n !== null) setSlider(n);

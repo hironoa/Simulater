@@ -145,6 +145,9 @@ describe("物理値入力と表示", () => {
     // 割り算の誤差（650.4999999999999）で丸めの境界がずれない。負の値は 0 から遠い側へ
     expect(physicalInputValue("25.05", conversion, "int")).toBe(651);
     expect(physicalInputValue("-105.05", conversion, "int")).toBe(-651);
+    // 誤差の範囲を超える小数部分は変えない（.49 は切り捨てる）
+    expect(physicalInputValue("10000000000001.49", { lsb: 1, offset: 1 }, "int")).toBe(10000000000000);
+    expect(physicalInputValue("10000000000001.5", { lsb: 1, offset: 1 }, "int")).toBe(10000000000001);
     expect(physicalInputValue("25.06", conversion, "float")).toBeCloseTo(650.6);
   });
   it("現在値・反映待ち・固定・古い保存値もrawから換算する", () => {
