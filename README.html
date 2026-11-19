@@ -1,0 +1,1282 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Simulater 使い方ガイド</title>
+<meta name="description" content="RL78 向け組み込みソフトを WinAMS のテスト CSV のまま PC で実行するシミュレータの使い方">
+<style>
+:root{
+  --bg:#f5f6f8;--bg-2:#eceef2;--panel:#ffffff;--panel-2:#f8f9fb;
+  --line:rgba(15,23,42,.09);--line-2:rgba(15,23,42,.16);
+  --text:#0f1623;--muted:#586173;--faint:#8b93a3;
+  --ch1:#c27803;--ch2:#0e8fae;--ch3:#d0306f;--ch4:#15924a;--ch5:#7044d6;
+  --accent:var(--ch2);
+  --grid:rgba(15,23,42,.05);--grid-major:rgba(15,23,42,.08);
+  --hero-bg:#fbfcfe;--hero-text:#0f1623;--hero-muted:#586173;
+  --code-bg:#fbfcfd;--code-bar:#f0f2f6;
+  --shadow:0 1px 0 rgba(15,23,42,.04),0 12px 32px -12px rgba(15,23,42,.18);
+}
+
+*{box-sizing:border-box;margin:0;padding:0}
+html{scroll-behavior:smooth;scroll-padding-top:72px}
+body{font-family:-apple-system,BlinkMacSystemFont,"Hiragino Sans","Noto Sans JP","Yu Gothic UI",sans-serif;background:var(--bg);color:var(--text);line-height:1.8;font-size:15px;-webkit-font-smoothing:antialiased}
+img{max-width:100%;display:block}
+a{color:inherit}
+.mono,code,pre{font-family:"SF Mono","JetBrains Mono",Menlo,Consolas,monospace}
+:not(pre)>code{font-size:.84em;background:var(--bg-2);border:1px solid var(--line);border-radius:5px;padding:1px 6px}
+@media (prefers-reduced-motion: reduce){*{animation:none!important;transition:none!important}html{scroll-behavior:auto}}
+
+/* ---------- top bar ---------- */
+.topbar{position:sticky;top:0;z-index:30;height:56px;display:flex;align-items:center;gap:16px;padding:0 20px;
+  background:rgba(255,255,255,.85);backdrop-filter:blur(14px) saturate(1.4);border-bottom:1px solid var(--line);color:var(--text)}
+.brand{display:flex;align-items:center;gap:10px;font-weight:700;font-size:14.5px;text-decoration:none;white-space:nowrap}
+.brand svg{flex:none}
+.topbar .ver{font-size:11px;color:var(--muted);border:1px solid var(--line-2);border-radius:999px;padding:1px 8px}
+.topbar nav{margin-left:auto;display:flex;gap:4px;overflow-x:auto}
+.topbar nav a{color:var(--hero-muted);text-decoration:none;font-size:13px;padding:6px 10px;border-radius:6px;white-space:nowrap}
+.topbar nav a:hover{color:var(--text);background:var(--bg-2)}
+@media (max-width:760px){.topbar nav{display:none}}
+
+/* ---------- hero ---------- */
+.hero{position:relative;background:var(--hero-bg);color:var(--hero-text);overflow:hidden;isolation:isolate}
+.hero::before{content:"";position:absolute;inset:0;z-index:-2;
+  background-image:linear-gradient(rgba(14,143,174,.06) 1px,transparent 1px),linear-gradient(90deg,rgba(14,143,174,.06) 1px,transparent 1px),
+  linear-gradient(rgba(14,143,174,.11) 1px,transparent 1px),linear-gradient(90deg,rgba(14,143,174,.11) 1px,transparent 1px);
+  background-size:24px 24px,24px 24px,120px 120px,120px 120px;
+  mask-image:radial-gradient(ellipse 90% 80% at 50% 30%,#000 40%,transparent 100%)}
+.hero::after{content:"";position:absolute;z-index:-1;width:900px;height:600px;left:50%;top:-200px;transform:translateX(-50%);
+  background:radial-gradient(closest-side,rgba(45,212,240,.16),transparent),radial-gradient(closest-side at 70% 60%,rgba(167,139,250,.12),transparent)}
+.hero-inner{max-width:1200px;margin:0 auto;padding:72px 20px 0}
+.eyebrow{font-family:"SF Mono",Menlo,monospace;font-size:12px;letter-spacing:.18em;color:var(--ch2);display:flex;align-items:center;gap:10px}
+.eyebrow::before{content:"";width:8px;height:8px;border-radius:50%;background:var(--ch2);box-shadow:0 0 0 4px rgba(14,143,174,.16);animation:blink 2.4s ease-in-out infinite}
+@keyframes blink{50%{opacity:.35}}
+.hero h1{font-size:clamp(34px,6vw,64px);line-height:1.12;font-weight:800;letter-spacing:-.01em;margin:18px 0 18px}
+.hero h1 .grad{background:linear-gradient(90deg,#0e8fae,#7044d6 55%,#d0306f);-webkit-background-clip:text;background-clip:text;color:transparent}
+.hero .lead{max-width:640px;color:var(--hero-muted);font-size:16.5px}
+.specs{display:flex;flex-wrap:wrap;gap:0;margin:28px 0 0;border:1px solid var(--line-2);border-radius:10px;width:fit-content;max-width:100%;overflow:hidden;background:#fff;box-shadow:var(--shadow)}
+.specs div{padding:10px 18px;border-right:1px solid var(--line)}
+.specs div:last-child{border-right:none}
+.specs b{display:block;font-family:"SF Mono",Menlo,monospace;font-size:14px;color:var(--text)}
+.specs span{font-size:11.5px;color:var(--hero-muted)}
+.trace{position:absolute;left:0;right:0;top:120px;height:220px;z-index:-1;opacity:.45;pointer-events:none;
+  -webkit-mask-image:linear-gradient(90deg,transparent 0 48%,#000 72%);mask-image:linear-gradient(90deg,transparent 0 48%,#000 72%)}
+@media (max-width:820px){.trace{display:none}}
+.trace path{fill:none;stroke-width:1.6;stroke-dasharray:2400;stroke-dashoffset:2400;animation:draw 3.2s cubic-bezier(.4,0,.2,1) forwards}
+.trace path:nth-child(2){animation-delay:.35s}
+.trace path:nth-child(3){animation-delay:.7s}
+@keyframes draw{to{stroke-dashoffset:0}}
+
+/* window frame */
+.window{border-radius:12px;overflow:hidden;background:#fff;border:1px solid var(--line-2);box-shadow:var(--shadow)}
+.window .bar{height:34px;display:flex;align-items:center;gap:7px;padding:0 12px;background:linear-gradient(#f4f6f9,#eceff4);border-bottom:1px solid var(--line)}
+.window .bar i{width:11px;height:11px;border-radius:50%;background:#cfd5de}
+.window .bar i:nth-child(1){background:#ff5f57}.window .bar i:nth-child(2){background:#febc2e}.window .bar i:nth-child(3){background:#28c840}
+.window .bar span{margin-left:10px;font-family:"SF Mono",Menlo,monospace;font-size:11.5px;color:var(--muted);background:#fff;border:1px solid var(--line);border-radius:6px;padding:1px 12px;flex:1;max-width:420px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.hero-shot{margin-top:56px;position:relative;border-bottom-left-radius:0;border-bottom-right-radius:0;border-bottom:none;box-shadow:0 -10px 60px -20px rgba(14,143,174,.25),0 24px 60px -20px rgba(15,23,42,.25)}
+.hot{position:absolute;transform:translate(-50%,-50%);width:28px;height:28px;border-radius:50%;border:none;cursor:help;
+  background:var(--c,#0e8fae);color:#fff;font:700 12.5px/28px "SF Mono",Menlo,monospace;text-align:center;
+  box-shadow:0 0 0 4px color-mix(in srgb,var(--c,#0e8fae) 25%,transparent),0 6px 16px rgba(15,23,42,.25)}
+.hot::before{content:"";position:absolute;inset:-4px;border-radius:50%;border:2px solid var(--c,#0e8fae);animation:ping 2.6s ease-out infinite;opacity:0}
+@keyframes ping{0%{transform:scale(.8);opacity:.8}80%,100%{transform:scale(1.8);opacity:0}}
+.hot .tip{position:absolute;left:50%;bottom:calc(100% + 10px);transform:translateX(-50%) translateY(4px);white-space:nowrap;
+  background:#fff;color:var(--text);border:1px solid var(--line-2);box-shadow:var(--shadow);border-radius:8px;padding:6px 10px;font:500 12.5px/1.4 -apple-system,"Hiragino Sans",sans-serif;
+  opacity:0;pointer-events:none;transition:.15s}
+.hot:hover .tip,.hot:focus-visible .tip{opacity:1;transform:translateX(-50%)}
+
+/* legend under hero */
+.legend-wrap{background:var(--panel);border-bottom:1px solid var(--line)}
+.legend{max-width:1200px;margin:0 auto;padding:18px 20px;display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:4px 16px}
+.legend div{display:flex;align-items:center;gap:9px;font-size:13px;color:var(--muted);padding:4px 0}
+.legend b{color:var(--text);font-weight:600}
+.dot{flex:none;width:20px;height:20px;border-radius:50%;background:var(--c);color:#fff;font:700 11px/20px "SF Mono",Menlo,monospace;text-align:center}
+
+/* ---------- layout ---------- */
+.shell{max-width:1200px;margin:0 auto;padding:0 20px;display:grid;grid-template-columns:200px minmax(0,1fr);gap:56px}
+.toc{position:sticky;top:80px;align-self:start;padding:48px 0;font-size:13px}
+.toc p{font-family:"SF Mono",Menlo,monospace;font-size:11px;letter-spacing:.14em;color:var(--faint);margin-bottom:10px}
+.toc a{display:flex;align-items:center;gap:10px;padding:5px 0 5px 12px;color:var(--muted);text-decoration:none;border-left:2px solid var(--line);transition:.15s}
+.toc a span{font-family:"SF Mono",Menlo,monospace;font-size:10.5px;color:var(--faint)}
+.toc a:hover{color:var(--text)}
+.toc a.on{color:var(--text);border-left-color:var(--accent);font-weight:600}
+main{min-width:0;padding-bottom:40px}
+@media (max-width:1000px){.shell{grid-template-columns:minmax(0,1fr)}.toc{display:none}}
+
+section{padding:72px 0 8px;border-bottom:1px dashed var(--line-2)}
+section:last-of-type{border-bottom:none}
+.ch{display:inline-flex;align-items:center;gap:8px;font-family:"SF Mono",Menlo,monospace;font-size:11.5px;letter-spacing:.14em;color:var(--c)}
+.ch::before{content:"";width:22px;height:2px;background:var(--c);border-radius:2px}
+h2{font-size:clamp(24px,3.4vw,32px);line-height:1.3;margin:10px 0 10px;letter-spacing:-.005em}
+.lead2{color:var(--muted);max-width:680px;margin-bottom:28px;font-size:15.5px}
+h3{font-size:16px;margin:32px 0 12px;display:flex;align-items:center;gap:8px}
+.tag{display:inline-block;font:700 10px/1 "SF Mono",Menlo,monospace;letter-spacing:.08em;color:#fff;background:var(--ch3);border-radius:4px;padding:4px 6px;vertical-align:2px}
+
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow)}
+.frame{border-radius:12px;overflow:hidden;border:1px solid var(--line-2);box-shadow:var(--shadow);background:var(--panel)}
+.frame .bar{height:28px;display:flex;align-items:center;gap:6px;padding:0 10px;background:var(--bg-2);border-bottom:1px solid var(--line)}
+.frame .bar i{width:9px;height:9px;border-radius:50%;background:var(--line-2)}
+.frame .bar span{margin-left:8px;font-family:"SF Mono",Menlo,monospace;font-size:11px;color:var(--faint)}
+.cap{font-size:12.5px;color:var(--faint);margin-top:10px;display:flex;gap:8px}
+.cap::before{content:"▲";font-size:9px;line-height:20px;color:var(--accent)}
+.split{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:32px;align-items:start}
+.split.side{grid-template-columns:minmax(0,300px) minmax(0,1fr)}
+@media (max-width:820px){.split,.split.side{grid-template-columns:minmax(0,1fr)}}
+
+/* ---------- what's new ---------- */
+.news{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}
+@media (max-width:900px){.news{grid-template-columns:minmax(0,1fr)}}
+.new-card{position:relative;padding:22px;overflow:hidden;text-decoration:none;display:flex;flex-direction:column;gap:8px;transition:transform .2s,border-color .2s}
+.new-card:hover{transform:translateY(-3px);border-color:color-mix(in srgb,var(--c) 50%,var(--line))}
+.new-card::before{content:"";position:absolute;left:0;right:0;top:0;height:3px;background:var(--c)}
+.new-card .vis{height:120px;border-radius:10px;background:var(--panel-2);border:1px solid var(--line);margin-bottom:8px;display:grid;place-items:center;position:relative;overflow:hidden;
+  background-image:linear-gradient(var(--grid) 1px,transparent 1px),linear-gradient(90deg,var(--grid) 1px,transparent 1px);background-size:16px 16px}
+.new-card h4{font-size:16.5px}
+.new-card p{font-size:13.5px;color:var(--muted);line-height:1.7}
+.new-card .more{margin-top:auto;font-size:12.5px;color:var(--c);font-weight:600}
+.spin{animation:spin 6s linear infinite;transform-origin:50% 50%}
+@keyframes spin{to{transform:rotate(360deg)}}
+.mini-formula{display:flex;align-items:center;gap:6px;font-family:"SF Mono",Menlo,monospace;font-size:13px}
+.mini-formula b{background:var(--panel);border:1px solid var(--line-2);border-radius:6px;padding:4px 8px}
+.mini-formula b.r{background:var(--c);border-color:var(--c);color:#fff}
+.mini-table{display:grid;grid-template-columns:repeat(4,38px);gap:3px}
+.mini-table i{height:13px;border-radius:3px;background:var(--line-2)}
+.mini-table i.s{background:color-mix(in srgb,var(--c) 55%,transparent)}
+.mini-table i.h{background:color-mix(in srgb,var(--c) 25%,transparent)}
+
+/* ---------- bento ---------- */
+.bento{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:12px;margin-top:20px}
+.bento .b{padding:20px;grid-column:span 2;position:relative;overflow:hidden}
+.bento .b.w3{grid-column:span 3}
+.bento .b .ico{width:36px;height:36px;border-radius:10px;display:grid;place-items:center;color:var(--c);background:color-mix(in srgb,var(--c) 13%,transparent);margin-bottom:14px}
+.bento .b h4{font-size:15px;margin-bottom:4px}
+.bento .b p{font-size:13.5px;color:var(--muted);line-height:1.7}
+.bento .b .no{position:absolute;right:16px;top:14px;font-family:"SF Mono",Menlo,monospace;font-size:11px;color:var(--faint)}
+@media (max-width:900px){.bento{grid-template-columns:repeat(2,minmax(0,1fr))}.bento .b,.bento .b.w3{grid-column:span 1}}
+@media (max-width:560px){.bento{grid-template-columns:minmax(0,1fr)}}
+
+/* ---------- workflow ---------- */
+.flow{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));position:relative;margin:8px 0 40px}
+.flow::before{content:"";position:absolute;left:10%;right:10%;top:23px;height:2px;background:linear-gradient(90deg,var(--ch2),var(--ch5),var(--ch3),var(--ch1),var(--ch4))}
+.flow .s{text-align:center;padding:0 10px;position:relative}
+.flow .s .n{width:48px;height:48px;margin:0 auto 14px;border-radius:50%;background:var(--panel);border:2px solid var(--c);color:var(--c);display:grid;place-items:center;font:700 15px "SF Mono",Menlo,monospace;box-shadow:0 0 0 6px var(--bg)}
+.flow .s h4{font-size:15px}
+.flow .s p{font-size:12.5px;color:var(--muted);line-height:1.65;margin-top:4px}
+@media (max-width:760px){.flow{grid-template-columns:minmax(0,1fr);gap:18px}.flow::before{left:23px;right:auto;top:10px;bottom:10px;width:2px;height:auto;background:linear-gradient(180deg,var(--ch2),var(--ch5),var(--ch3),var(--ch1),var(--ch4))}
+  .flow .s{text-align:left;display:grid;grid-template-columns:48px 1fr;gap:0 16px;padding:0}.flow .s .n{margin:0;grid-row:span 2}}
+
+/* ---------- key list ---------- */
+.keys{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 28px}
+@media (max-width:820px){.keys{grid-template-columns:minmax(0,1fr)}}
+.key{display:grid;grid-template-columns:24px minmax(0,1fr);gap:4px 12px;padding:13px 0;border-bottom:1px solid var(--line);align-items:start}
+.key .dot{margin-top:3px}
+.key kbd,.kbd{display:inline-block;font:600 12.5px/1.5 "SF Mono",Menlo,"Hiragino Sans",monospace;color:var(--text);background:var(--panel);border:1px solid var(--line-2);border-bottom-width:2px;border-radius:6px;padding:1px 8px}
+.key>kbd{justify-self:start}
+.key p{grid-column:2;font-size:13.5px;color:var(--muted);line-height:1.7}
+.key.plain{grid-template-columns:minmax(0,1fr)}
+.key.plain p{grid-column:1}
+
+/* toolbar strip */
+.strip-scroll{overflow-x:auto;padding-bottom:4px}
+.strip{min-width:860px;position:relative;margin-right:12px}
+.strip img{border-radius:10px;border:1px solid var(--line-2)}
+.strip .ticks{position:relative;height:40px}
+.strip .ticks .dot{position:absolute;top:14px;transform:translateX(-50%)}
+.strip .ticks .dot::before{content:"";position:absolute;left:50%;top:-14px;height:14px;border-left:1.5px dashed var(--c)}
+
+/* ---------- pipeline ---------- */
+.pipe{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:0;margin:8px 0 28px;position:relative}
+.pipe .p{padding:0 8px;text-align:center;position:relative}
+.pipe .p .ic{width:56px;height:56px;border-radius:16px;margin:0 auto 12px;display:grid;place-items:center;color:var(--c);background:var(--panel);border:1px solid var(--line-2);box-shadow:var(--shadow);position:relative;z-index:1}
+.pipe .p:not(:last-child)::after{content:"";position:absolute;top:28px;left:calc(50% + 34px);right:calc(-50% + 34px);border-top:2px dotted var(--line-2)}
+.pipe .p b{display:block;font-size:13.5px}
+.pipe .p span{display:block;font-size:12px;color:var(--muted);line-height:1.6;margin-top:2px}
+@media (max-width:760px){.pipe{grid-template-columns:minmax(0,1fr);gap:16px}.pipe .p{display:grid;grid-template-columns:56px 1fr;gap:0 14px;text-align:left}.pipe .p .ic{margin:0;grid-row:span 2}.pipe .p:not(:last-child)::after{display:none}}
+
+.callout{display:flex;gap:12px;align-items:flex-start;padding:14px 16px;border-radius:10px;font-size:13.5px;margin:18px 0;background:color-mix(in srgb,var(--c) 9%,var(--panel));border:1px solid color-mix(in srgb,var(--c) 28%,transparent)}
+.callout svg{flex:none;color:var(--c);margin-top:3px}
+
+ol.steps{list-style:none;counter-reset:s;display:grid;gap:12px}
+ol.steps li{counter-increment:s;display:grid;grid-template-columns:28px 1fr;gap:12px;font-size:14px;align-items:start}
+ol.steps li::before{content:counter(s);width:28px;height:28px;border-radius:8px;background:color-mix(in srgb,var(--c) 14%,transparent);color:var(--c);font:700 13px/28px "SF Mono",Menlo,monospace;text-align:center}
+ul.ticks2{list-style:none;display:grid;gap:10px}
+ul.ticks2 li{display:grid;grid-template-columns:18px 1fr;gap:10px;font-size:14px;color:var(--muted)}
+ul.ticks2 li::before{content:"";width:16px;height:16px;margin-top:4px;border-radius:50%;background:color-mix(in srgb,var(--ch4) 18%,transparent) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M4.5 8.2l2.2 2.2 4.8-4.8' fill='none' stroke='%2322a55a' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center/16px no-repeat}
+ul.ticks2 b{color:var(--text)}
+
+/* ---------- formula ---------- */
+.formula{display:flex;flex-wrap:wrap;align-items:stretch;justify-content:center;gap:12px;padding:28px 20px;
+  background-image:linear-gradient(var(--grid) 1px,transparent 1px),linear-gradient(90deg,var(--grid) 1px,transparent 1px);background-size:20px 20px}
+.formula .t{min-width:110px;padding:12px 18px;border-radius:12px;background:var(--panel);border:1px solid var(--line-2);text-align:center}
+.formula .t small{display:block;font-size:11px;color:var(--faint);letter-spacing:.06em}
+.formula .t b{font:700 24px/1.4 "SF Mono",Menlo,monospace;color:var(--c,var(--text))}
+.formula .op{align-self:center;font:400 26px "SF Mono",Menlo,monospace;color:var(--faint)}
+.formula .t.res{background:linear-gradient(135deg,var(--ch2),var(--ch5));border:none;color:#fff}
+.formula .t.res small{color:rgba(255,255,255,.8)}
+.formula .t.res b{color:#fff}
+.brk text{fill:var(--muted);font:11.5px "SF Mono",Menlo,monospace}
+.brk .ax{stroke:var(--line-2)}
+.brk .gl{stroke:var(--grid-major)}
+.brk .band{fill:color-mix(in srgb,var(--ch1) 12%,transparent)}
+.brk .z{stroke:var(--ch1);fill:none;stroke-width:1.6}
+.brk .w{stroke:var(--ch5);fill:none;stroke-width:2.4;stroke-linejoin:round}
+
+/* ---------- excel roundtrip ---------- */
+.rt{display:flex;align-items:center;justify-content:center;gap:14px;flex-wrap:wrap;padding:22px}
+.rt .node{padding:10px 16px;border-radius:10px;border:1px solid var(--line-2);background:var(--panel);font-size:13px;font-weight:600;display:flex;align-items:center;gap:8px}
+.rt .node.xl{background:color-mix(in srgb,var(--ch4) 14%,var(--panel));border-color:color-mix(in srgb,var(--ch4) 35%,transparent);color:var(--ch4)}
+.rt .arr{font:13px "SF Mono",Menlo,monospace;color:var(--faint);text-align:center;line-height:1.3}
+.rt .arr small{display:block;font-size:11px}
+
+.grid3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin-top:16px}
+@media (max-width:820px){.grid3{grid-template-columns:minmax(0,1fr)}}
+.mini-card{padding:16px 18px}
+.mini-card h4{font-size:14.5px;margin-bottom:4px;display:flex;align-items:center;gap:8px}
+.mini-card h4::before{content:"";width:6px;height:6px;border-radius:2px;background:var(--c)}
+.mini-card p{font-size:13px;color:var(--muted);line-height:1.7}
+
+/* ---------- export layouts ---------- */
+.layouts{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
+@media (max-width:820px){.layouts{grid-template-columns:repeat(2,minmax(0,1fr))}}
+.lay{padding:14px}
+.lay .m{height:92px;display:grid;gap:5px;margin-bottom:12px;padding:8px;border-radius:8px;background:var(--panel-2);border:1px solid var(--line)}
+.lay .wv{border-radius:5px;background:color-mix(in srgb,var(--ch2) 10%,var(--panel));border:1px solid color-mix(in srgb,var(--ch2) 35%,transparent);
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 30' preserveAspectRatio='none'%3E%3Cpath d='M0 20 Q12 4 25 15 T50 15 T75 12 T100 18' fill='none' stroke='%2318a8c8' stroke-width='1.6' vector-effect='non-scaling-stroke'/%3E%3C/svg%3E");background-size:100% 100%}
+.lay .tb{border-radius:5px;border:1px solid var(--line-2);background:repeating-linear-gradient(0deg,var(--bg-2) 0 8px,var(--panel) 8px 16px)}
+.lay .tb.c{background:repeating-linear-gradient(90deg,var(--bg-2) 0 14px,var(--panel) 14px 28px)}
+.lay b{font-size:13.5px;display:block}
+.lay span{font-size:12px;color:var(--muted)}
+
+.matrix{width:100%;border-collapse:separate;border-spacing:0;font-size:13.5px}
+.matrix th{font:600 11.5px "SF Mono",Menlo,monospace;letter-spacing:.06em;color:var(--faint);text-align:center;padding:12px 10px;border-bottom:1px solid var(--line)}
+.matrix th:first-child{text-align:left}
+.matrix td{padding:11px 10px;border-bottom:1px solid var(--line);text-align:center}
+.matrix td:first-child{text-align:left}
+.matrix tr:last-child td{border-bottom:none}
+.y{display:inline-grid;place-items:center;width:22px;height:22px;border-radius:50%;background:color-mix(in srgb,var(--ch4) 16%,transparent);color:var(--ch4);font-weight:700;font-size:12px}
+.n{color:var(--faint)}
+
+/* ---------- code windows ---------- */
+.code{border-radius:12px;overflow:hidden;background:var(--code-bg);border:1px solid var(--line-2);box-shadow:var(--shadow);margin:14px 0}
+.code .hd{display:flex;align-items:center;gap:6px;height:40px;padding:0 8px 0 14px;background:var(--code-bar);border-bottom:1px solid var(--line)}
+.code .tabs{display:flex;gap:2px;overflow-x:auto}
+.code .tabs button,.code .fname{font:500 12px "SF Mono",Menlo,monospace;color:var(--muted);background:none;border:none;padding:6px 12px;border-radius:6px;cursor:pointer;white-space:nowrap}
+.code .fname{cursor:default;padding-left:0}
+.code .tabs button[aria-selected="true"]{color:var(--text);background:#fff;box-shadow:0 0 0 1px var(--line-2)}
+.code .copy{margin-left:auto;font:500 11.5px "SF Mono",Menlo,monospace;color:var(--muted);background:#fff;border:1px solid var(--line-2);border-radius:6px;padding:4px 10px;cursor:pointer}
+.code .copy:hover{color:var(--text)}
+.code pre{margin:0;padding:18px 20px;overflow-x:auto;color:#1e293b;font-size:13px;line-height:1.75}
+.code pre[hidden]{display:none}
+.code .c{color:#8b93a3}.code .k{color:#0e7490}.code .s{color:#b45309}.code .v{color:#be185d}.code .p{color:#15803d}
+.formats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}
+@media (max-width:820px){.formats{grid-template-columns:repeat(2,minmax(0,1fr))}}
+.fmt{padding:14px 16px;border-top:3px solid var(--c)}
+.fmt .ext{font:700 12px "SF Mono",Menlo,monospace;color:var(--c)}
+.fmt h4{font-size:14px;margin:2px 0}
+.fmt p{font-size:12.5px;color:var(--muted);line-height:1.6}
+
+footer{background:var(--panel);border-top:1px solid var(--line);color:var(--muted);margin-top:40px}
+footer .in{max-width:1200px;margin:0 auto;padding:36px 20px;display:flex;flex-wrap:wrap;gap:12px 32px;align-items:center;justify-content:space-between;font-size:13px}
+footer a{color:var(--ch2)}
+
+/* ---------- README.html（sim 本体）で足したもの ---------- */
+.hero .lead b{color:var(--text)}
+img{height:auto}
+.hero-shot video,.hero-shot img{width:100%;display:block}
+.cta{display:flex;flex-wrap:wrap;gap:10px;margin-top:26px}
+.btn{display:inline-flex;align-items:center;gap:8px;padding:10px 18px;border-radius:10px;font-weight:700;font-size:14px;text-decoration:none;border:1px solid var(--line-2);background:var(--panel);box-shadow:var(--shadow)}
+.btn.pri{background:var(--ch2);border-color:var(--ch2);color:#fff}
+.btn:hover{transform:translateY(-1px)}
+
+/* 3 つの使い方 */
+.modes{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}
+@media (max-width:900px){.modes{grid-template-columns:minmax(0,1fr)}}
+.mode{padding:22px;position:relative;overflow:hidden}
+.mode::before{content:"";position:absolute;left:0;right:0;top:0;height:3px;background:var(--c)}
+.mode .ico{width:40px;height:40px;border-radius:11px;display:grid;place-items:center;color:var(--c);background:color-mix(in srgb,var(--c) 13%,transparent);margin-bottom:12px}
+.mode h4{font-size:16px;margin-bottom:4px}
+.mode p{font-size:13.5px;color:var(--muted);line-height:1.75}
+.mode code{font-size:.8em}
+
+/* 図（SVG） */
+.diagram{padding:18px 16px;overflow-x:auto}
+.diagram svg{display:block;margin:0 auto;max-width:100%;height:auto}
+.diagram text{font-family:-apple-system,BlinkMacSystemFont,"Hiragino Sans","Noto Sans JP",sans-serif}
+.dg-box{fill:var(--panel);stroke:var(--line-2);stroke-width:1.2}
+.dg-t{font-size:13px;font-weight:700;fill:var(--text)}
+.dg-s{font-size:11.5px;fill:var(--muted)}
+.dg-m{font-family:"SF Mono",Menlo,monospace!important;font-size:12px;fill:var(--text)}
+.dg-a{stroke:var(--faint);stroke-width:1.6;fill:none}
+
+/* 手順（大きな番号） */
+.walk{display:grid;gap:0;margin-top:8px}
+.walk .st{display:grid;grid-template-columns:44px minmax(0,1fr);gap:0 18px;position:relative;padding-bottom:34px}
+.walk .st:not(:last-child)::before{content:"";position:absolute;left:21px;top:46px;bottom:4px;width:2px;background:linear-gradient(var(--c),color-mix(in srgb,var(--c) 20%,transparent))}
+.walk .num{width:44px;height:44px;border-radius:50%;display:grid;place-items:center;background:var(--panel);border:2px solid var(--c);color:var(--c);font:700 15px "SF Mono",Menlo,monospace;box-shadow:0 0 0 5px var(--bg)}
+.walk h3{margin:8px 0 6px;font-size:17px;display:block}
+@media (max-width:560px){.walk .st{grid-template-columns:32px minmax(0,1fr);gap:0 12px}.walk .num{width:32px;height:32px;font-size:13px}.walk .st:not(:last-child)::before{left:15px;top:34px}}
+.walk .body>p{font-size:14.5px;color:var(--muted);margin-bottom:6px}
+.walk .body>p b{color:var(--text)}
+
+/* ターミナル */
+.term{border-radius:12px;overflow:hidden;background:#0f1623;border:1px solid #0b1019;box-shadow:var(--shadow);margin:12px 0}
+.term .hd{display:flex;align-items:center;gap:7px;height:34px;padding:0 10px 0 12px;background:#1a2231;border-bottom:1px solid #0b1019}
+.term .hd i{width:10px;height:10px;border-radius:50%;background:#3a4456}
+.term .hd i:nth-child(1){background:#ff5f57}.term .hd i:nth-child(2){background:#febc2e}.term .hd i:nth-child(3){background:#28c840}
+.term .hd span{margin-left:8px;font:500 11.5px "SF Mono",Menlo,monospace;color:#8b93a3}
+.term .copy{margin-left:auto;font:500 11px "SF Mono",Menlo,monospace;color:#c3cad6;background:#263044;border:1px solid #354058;border-radius:6px;padding:3px 10px;cursor:pointer}
+.term .copy:hover{color:#fff}
+.term pre{margin:0;padding:16px 18px;overflow-x:auto;color:#d7dde8;font-size:12.8px;line-height:1.7}
+.term .p{color:#5eead4;user-select:none}
+.term .cmd{color:#fff;font-weight:600}
+.term .c{color:#6b7689}
+.term .ok{color:#4ade80}
+.term .ng{color:#f87171;font-weight:700}
+.term .hl{background:rgba(94,234,212,.14);border-radius:3px;padding:0 2px}
+.term .note{color:#fbbf24}
+
+/* CSV の注釈つき表示 */
+.csvx{width:100%;border-collapse:collapse;font:12.5px/1.5 "SF Mono",Menlo,"Hiragino Sans",monospace;background:var(--panel)}
+.csvx td{border:1px solid var(--line-2);padding:5px 9px;white-space:nowrap}
+.csvx tr.mod td{background:color-mix(in srgb,var(--ch5) 10%,var(--panel))}
+.csvx tr.hdr td{background:color-mix(in srgb,var(--ch2) 10%,var(--panel));font-weight:700}
+.csvx tr.cm td{color:var(--faint)}
+.csvx td.in{color:var(--ch1)}
+.csvx td.out{color:var(--ch2)}
+.csvx td.okc{color:var(--ch4);font-weight:700}
+.csvx td.ngc{color:var(--ch3);font-weight:700;background:color-mix(in srgb,var(--ch3) 8%,var(--panel))}
+.csvx td.add{background:color-mix(in srgb,var(--ch4) 7%,var(--panel))}
+.csvx td.tag2{color:var(--faint);font-family:-apple-system,"Hiragino Sans",sans-serif;font-size:11.5px;border:none;background:none;white-space:normal}
+.scroll{overflow-x:auto;border-radius:10px;border:1px solid var(--line-2)}
+.scroll .csvx td:first-child{border-left:none}
+.legend2{display:flex;flex-wrap:wrap;gap:6px 18px;font-size:12.5px;color:var(--muted);margin:10px 0 0}
+.legend2 span{display:inline-flex;align-items:center;gap:6px}
+.legend2 i{width:12px;height:12px;border-radius:3px;background:var(--c)}
+
+/* 表 */
+.tbl{width:100%;border-collapse:collapse;font-size:13.5px}
+.tbl th{font:600 11.5px "SF Mono",Menlo,monospace;letter-spacing:.06em;color:var(--faint);text-align:left;padding:10px 12px;border-bottom:1px solid var(--line-2);white-space:nowrap}
+.tbl td{padding:10px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+.tbl tr:last-child td{border-bottom:none}
+.tbl td:first-child{white-space:nowrap}
+.tbl code{white-space:nowrap}
+.tblwrap{overflow-x:auto}
+
+/* 動画 */
+.video{position:relative}
+.video video{width:100%;height:auto;display:block;background:#fff}
+.chapters{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
+.chapters button{display:inline-flex;align-items:center;gap:8px;font:600 12.5px -apple-system,"Hiragino Sans",sans-serif;color:var(--text);background:var(--panel);border:1px solid var(--line-2);border-radius:999px;padding:6px 14px 6px 6px;cursor:pointer}
+.chapters button .dot{width:22px;height:22px;line-height:22px}
+.chapters button.on{border-color:var(--c);box-shadow:0 0 0 3px color-mix(in srgb,var(--c) 18%,transparent)}
+.chapters button small{font:500 11px "SF Mono",Menlo,monospace;color:var(--faint)}
+
+/* 折りたたみ */
+details.more{border:1px solid var(--line);border-radius:12px;background:var(--panel);margin:10px 0;box-shadow:0 1px 0 rgba(15,23,42,.03)}
+details.more>summary{cursor:pointer;list-style:none;padding:13px 16px;font-weight:700;font-size:14px;display:flex;align-items:center;gap:10px}
+details.more>summary::-webkit-details-marker{display:none}
+details.more>summary::before{content:"";width:8px;height:8px;border-right:2px solid var(--muted);border-bottom:2px solid var(--muted);transform:rotate(-45deg);transition:.15s;flex:none}
+details.more[open]>summary::before{transform:rotate(45deg)}
+details.more>summary small{font-weight:400;color:var(--muted);font-size:12.5px}
+details.more>.in{padding:0 18px 16px 36px;font-size:13.8px;color:var(--muted)}
+details.more>.in p{margin:6px 0}
+details.more>.in b{color:var(--text)}
+details.more>.in ul{padding-left:18px;margin:6px 0}
+details.more>.in li{margin:4px 0}
+
+.note-list{padding-left:20px;font-size:14px;color:var(--muted)}
+.note-list li{margin:6px 0}
+.note-list b{color:var(--text)}
+p.body{font-size:14.5px;color:var(--muted);margin:8px 0}
+p.body b{color:var(--text)}
+.badge{display:inline-block;font:700 10.5px/1 "SF Mono",Menlo,monospace;letter-spacing:.06em;border-radius:4px;padding:4px 7px;vertical-align:2px;color:#fff;background:var(--c,var(--ch1))}
+.annot{position:relative}
+.annot .hot{cursor:default}
+.codei{font-family:"SF Mono",Menlo,monospace;font-size:12.5px}
+.exit{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+@media (max-width:760px){.exit{grid-template-columns:minmax(0,1fr)}}
+.exit .panel{padding:16px 18px;border-top:3px solid var(--c)}
+.exit b.n2{font:800 28px "SF Mono",Menlo,monospace;color:var(--c)}
+.exit p{font-size:13px;color:var(--muted)}
+.fig{margin:16px 0}
+.fig img{width:100%}
+.cap.blk{display:block}
+.cap.blk::before{margin-right:6px}
+</style>
+</head>
+<body>
+
+<header class="topbar">
+  <a class="brand" href="#top">
+    <svg width="26" height="26" viewBox="0 0 26 26" aria-hidden="true"><rect width="26" height="26" rx="7" fill="#0e8fae"/><path d="M7 8h12v10H7z M10 5v3M13 5v3M16 5v3M10 18v3M13 18v3M16 18v3M4 10h3M4 13h3M4 16h3M19 10h3M19 13h3M19 16h3" fill="none" stroke="#fff" stroke-width="1.6" stroke-linecap="round"/></svg>
+    Simulater
+  </a>
+  <span class="ver">RL78 シミュレータ 使い方ガイド</span>
+  <nav>
+    <a href="#what">概要</a><a href="#prepare">用意</a><a href="#first">はじめての実行</a><a href="#csv">テスト CSV</a><a href="#gui">GUI</a><a href="#xlate">速い実行</a><a href="#cfg">sim.cfg</a><a href="#trouble">困ったとき</a>
+  </nav>
+</header>
+
+<div class="hero" id="top">
+  <svg class="trace" viewBox="0 0 1440 220" preserveAspectRatio="none" aria-hidden="true">
+    <path d="M0 170 H200 V110 H380 V170 H520 V80 H800 V170 H960 V120 H1220 V170 H1440" stroke="#0e8fae"/>
+    <path d="M0 60 H260 V130 H300 V60 H620 V130 H700 V60 H1440" stroke="#c27803" opacity=".6"/>
+    <path d="M0 200 H140 V150 H460 V100 H900 V40 H1440" stroke="#d0306f" opacity=".5"/>
+  </svg>
+  <div class="hero-inner">
+    <div class="eyebrow">RL78 INSTRUCTION SIMULATOR FOR WINAMS TESTS</div>
+    <h1>WinAMS のテストを、<br><span class="grad">PC の上でそのまま速く。</span></h1>
+    <p class="lead">CS+ でビルドした <b>CC-RL の <code>.abs</code></b> や <b>CA78K0R の <code>.lmf</code></b> を、作り直さずに PC で実行するシミュレータです。WinAMS のテスト CSV を読み、同じ書式の結果 CSV を出します。ブラウザの画面で入力を変えながら、波形をリアルタイムに見ることもできます。</p>
+    <div class="specs">
+      <div><b>.abs / .lmf</b><span>そのまま読む</span></div>
+      <div><b>WinAMS CSV</b><span>入力も結果も同じ書式</span></div>
+      <div><b>sim gui</b><span>ブラウザで波形</span></div>
+      <div><b>Windows / macOS / Linux</b><span>動く環境</span></div>
+    </div>
+    <div class="cta">
+      <a class="btn pri" href="#first">5 分で試す →</a>
+      <a class="btn" href="#gui">GUI の動画を見る</a>
+    </div>
+    <div class="window hero-shot">
+      <div class="bar"><i></i><i></i><i></i><span>sim gui — R_Config_ADC_Set_ADChannel（ルネサス公式サンプル）</span></div>
+      <div style="position:relative">
+        <img src="docs/readme/gui_live.png" alt="sim gui の画面。中央に @channel、戻り値、0xFFF31 の 3 本の波形、右に入力パネルと変数モニタ" width="1440" height="860">
+        <span class="hot" style="left:1.6%;top:13.2%;--c:#15924a">1<span class="tip">実行・一時停止・ステップ</span></span>
+        <span class="hot" style="left:60%;top:36%;--c:#0e8fae">2<span class="tip">結果の波形がリアルタイムに流れる</span></span>
+        <span class="hot" style="left:86%;top:45%;--c:#c27803">3<span class="tip">入力パネル（スライダで値を変える）</span></span>
+        <span class="hot" style="left:86%;top:69.6%;--c:#d0306f">4<span class="tip">変数モニタ（監視する変数）</span></span>
+      </div>
+    </div>
+  </div>
+</div>
+<div class="legend-wrap"><div class="legend">
+  <div><span class="dot" style="--c:var(--ch4)">1</span><b>実行の操作</b></div>
+  <div><span class="dot" style="--c:var(--ch2)">2</span><b>波形</b></div>
+  <div><span class="dot" style="--c:var(--ch1)">3</span><b>入力パネル</b></div>
+  <div><span class="dot" style="--c:var(--ch3)">4</span><b>変数モニタ</b></div>
+</div></div>
+
+<div class="shell">
+<aside class="toc" aria-label="目次">
+  <p>CONTENTS</p>
+  <a href="#what"><span>01</span>これは何か</a>
+  <a href="#prepare"><span>02</span>用意するもの</a>
+  <a href="#first"><span>03</span>はじめての実行</a>
+  <a href="#csv"><span>04</span>テスト CSV</a>
+  <a href="#gui"><span>05</span>GUI で動かす</a>
+  <a href="#defines"><span>06</span>ヘッダの直アドレス</a>
+  <a href="#xlate"><span>07</span>速い実行（xlate）</a>
+  <a href="#native"><span>08</span>native（作成中）</a>
+  <a href="#cfg"><span>09</span>sim.cfg</a>
+  <a href="#trouble"><span>10</span>困ったとき</a>
+  <a href="#limits"><span>11</span>制限</a>
+  <a href="#dev"><span>12</span>構成とテスト</a>
+</aside>
+
+<main>
+
+<!-- 01 -->
+<section id="what">
+  <span class="ch" style="--c:var(--ch2)">CH.01 — WHAT IT IS</span>
+  <h2>これは何か</h2>
+  <p class="lead2">RL78 向け組み込みソフトの機械語を、PC の上で 1 命令ずつ実行します。WinAMS で使っているロードモジュールとテスト CSV がそのまま使えるので、準備は「ファイルを置いてコマンドを打つ」だけです。</p>
+  <div class="modes">
+    <div class="panel mode" style="--c:var(--ch2)">
+      <div class="ico"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16v16H4z"/><path d="M8 9l3 3-3 3M13 15h3"/></svg></div>
+      <h4>バッチ実行（<code>sim run</code>）</h4>
+      <p>WinAMS のテスト CSV を読み、同じ書式の結果 CSV を出します。最後に OK / NG / NO Check の件数と速さを表示します。</p>
+    </div>
+    <div class="panel mode" style="--c:var(--ch5)">
+      <div class="ico"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 17h4V9h5v6h4V7h5"/></svg></div>
+      <h4>GUI 実行（<code>sim gui</code>）</h4>
+      <p>ブラウザの画面で入力信号を変えながら、結果を波形でリアルタイムに見ます。記録は WinAMS 形式の CSV で保存できます。</p>
+    </div>
+    <div class="panel mode" style="--c:var(--ch4)">
+      <div class="ico"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="6" width="12" height="12" rx="1.5"/><path d="M9 2v4M15 2v4M9 18v4M15 18v4M2 9h4M2 15h4M18 9h4M18 15h4"/></svg></div>
+      <h4>実機と同じ動き</h4>
+      <p>機械語をそのまま解釈実行するので、<code>int</code> 16 ビット、ポインタ幅、SFR のアドレス、アセンブラで書かれた処理も実機と同じに動きます。</p>
+    </div>
+  </div>
+
+  <h3>全体の流れ</h3>
+  <div class="panel diagram">
+    <svg viewBox="0 0 860 250" width="860" role="img" aria-label="ロードモジュールとテスト CSV を sim run に渡すと結果 CSV ができる。sim gui に渡すとブラウザで波形が見える">
+      <defs><marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5 0 10z" fill="#8b93a3"/></marker></defs>
+      <rect class="dg-box" x="10" y="20" width="210" height="70" rx="10"/>
+      <text class="dg-t" x="26" y="48">ロードモジュール</text>
+      <text class="dg-m" x="26" y="70">project.abs / .lmf</text>
+      <rect class="dg-box" x="10" y="110" width="210" height="70" rx="10"/>
+      <text class="dg-t" x="26" y="138">WinAMS のテスト CSV</text>
+      <text class="dg-m" x="26" y="160">test.csv</text>
+      <rect class="dg-box" x="10" y="196" width="210" height="44" rx="10" stroke-dasharray="4 3"/>
+      <text class="dg-s" x="26" y="223">sim.cfg（設定。なくてもよい）</text>
+      <path class="dg-a" d="M220 55 C 270 55, 270 95, 320 95" marker-end="url(#ar)"/>
+      <path class="dg-a" d="M220 145 C 270 145, 270 105, 320 105" marker-end="url(#ar)"/>
+      <path class="dg-a" d="M220 218 C 280 218, 290 150, 330 140" marker-end="url(#ar)" stroke-dasharray="4 3"/>
+      <rect x="322" y="60" width="200" height="90" rx="14" fill="#0e8fae"/>
+      <text x="422" y="98" text-anchor="middle" style="font:700 18px 'SF Mono',Menlo,monospace;fill:#fff">sim</text>
+      <text x="422" y="122" text-anchor="middle" style="font-size:12px;fill:#dff6fb">RL78 の命令を実行</text>
+      <path class="dg-a" d="M522 90 C 570 90, 570 50, 620 50" marker-end="url(#ar)"/>
+      <path class="dg-a" d="M522 120 C 570 120, 570 165, 620 165" marker-end="url(#ar)"/>
+      <text class="dg-m" x="540" y="40" style="fill:#0e8fae">run</text>
+      <text class="dg-m" x="540" y="190" style="fill:#7044d6">gui</text>
+      <rect class="dg-box" x="622" y="16" width="228" height="74" rx="10"/>
+      <text class="dg-t" x="638" y="44">結果 CSV（result/test.csv）</text>
+      <text class="dg-s" x="638" y="66">実測値と OK / NG を書き足したもの</text>
+      <rect class="dg-box" x="622" y="128" width="228" height="74" rx="10"/>
+      <text class="dg-t" x="638" y="156">ブラウザの画面</text>
+      <text class="dg-s" x="638" y="178">入力を変えて、波形で見る</text>
+    </svg>
+  </div>
+  <p class="body">仕様の詳細は <a href="docs/DESIGN.md">docs/DESIGN.md</a>、テキスト版の説明は <a href="README.md">README.md</a> にあります。</p>
+</section>
+
+<!-- 02 -->
+<section id="prepare">
+  <span class="ch" style="--c:var(--ch5)">CH.02 — PREPARE</span>
+  <h2>用意するもの</h2>
+  <p class="lead2">WinAMS で使っているものが、そのまま使えます。新しく用意するのは <code>sim.exe</code> だけです。</p>
+  <ul class="ticks2">
+    <li><span><b>WinAMS に読み込ませている CC-RL の <code>.abs</code> または CA78K0R の <code>.lmf</code></b> — テストドライバとスタブを含めて CS+ でビルドしたもの。デバッグ情報つき。</span></li>
+    <li><span><b>WinAMS 用のテスト CSV</b> — 今あるものをそのまま使います。</span></li>
+    <li><span><b><code>sim.exe</code></b> — 次の 3 つのどれかで手に入れます。</span></li>
+  </ul>
+
+  <div class="code" data-tabs style="margin-top:18px">
+    <div class="hd">
+      <div class="tabs" role="tablist">
+        <button role="tab" aria-selected="true" data-t="ci">A. GitHub Actions の成果物</button>
+        <button role="tab" aria-selected="false" data-t="dist">B. リポジトリの dist</button>
+        <button role="tab" aria-selected="false" data-t="build">C. 自分でビルド</button>
+      </div>
+    </div>
+<pre data-p="ci"><span class="c"># GitHub の Actions の実行結果から、成果物 sim-windows-x64 をダウンロードして展開する</span>
+sim-windows-x64/
+  sim.exe            <span class="c"># 本体</span>
+  sim_gui.html       <span class="c"># GUI の画面（sim gui が使う）</span>
+  xlate/             <span class="c"># 速い実行方式（exec = xlate）が使う</span>
+  sim.cfg.example    <span class="c"># sim.cfg の見本</span></pre>
+<pre data-p="dist" hidden><span class="c"># CI を使えないときのために、手元でビルドして置いたもの。フォルダごと取り出して使う</span>
+dist/sim-windows-x64/
+
+<span class="c"># ビルド元のコミットと確認の範囲は dist/README.md に書いてある</span></pre>
+<pre data-p="build" hidden><span class="c"># Windows: MinGW-w64 の gcc を PATH に入れてから</span>
+<span class="p">&gt;</span> set CC=gcc
+<span class="p">&gt;</span> build.bat                  <span class="c"># build\sim\sim.exe ができる</span>
+
+<span class="c"># macOS / Linux（CMake、Python、Node は使わない）</span>
+<span class="p">$</span> ./build.sh                 <span class="c"># build/sim/sim ができる</span></pre>
+  </div>
+
+  <details class="more">
+    <summary>ビルドについての補足 <small>コンパイラと速さ</small></summary>
+    <div class="in">
+      <p>Windows の配布物は、速さを優先して MinGW-w64 の gcc でビルドします（gcc のランタイムは静的リンク）。GitHub のランナーの遅い機種で、コア単体のベンチマークは clang が 272、gcc が 350 百万命令/秒です（速い機種ではほぼ同じ）。</p>
+      <p>どちらのビルドにも <code>-O2 -fno-unroll-loops</code> を付けます（<a href="docs/DESIGN.md#41-速度">速度</a> を参照）。</p>
+      <p>LLVM の clang でもビルドできます。<code>CC</code> を設定しないときの既定は、従来どおり clang です（MSVC の C ランタイムと Windows SDK も要ります）。</p>
+    </div>
+  </details>
+</section>
+
+<!-- 03 -->
+<section id="first">
+  <span class="ch" style="--c:var(--ch3)">CH.03 — FIRST RUN</span>
+  <h2>はじめての実行</h2>
+  <p class="lead2">3 つのコマンドで、読み込めるかを確かめ、変数の名前を調べ、テストを実行します。下の出力は、リポジトリに同梱のルネサス公式サンプル（RL78/G22 の A/D 変換、<code>tests/fixtures/renesas/g22_adc</code>）で実際に動かしたものです。</p>
+
+  <div class="walk">
+    <div class="st" style="--c:var(--ch2)">
+      <div class="num">1</div>
+      <div class="body">
+        <h3>ファイルを並べる</h3>
+        <p>ロードモジュールとテスト CSV を、同じフォルダの近くに置きます。<code>sim.cfg</code> は、ロードモジュールと同じフォルダに置くと自動で読みます（最初はなくてかまいません）。</p>
+        <div class="code"><div class="hd"><span class="fname">フォルダの例</span></div>
+<pre>my_test/
+  DefaultBuild/
+    project.abs        <span class="c"># CS+ でビルドしたロードモジュール（.lmf でもよい）</span>
+    sim.cfg            <span class="c"># 設定（任意）</span>
+  test.csv             <span class="c"># WinAMS のテスト CSV</span></pre></div>
+      </div>
+    </div>
+
+    <div class="st" style="--c:var(--ch5)">
+      <div class="num">2</div>
+      <div class="body">
+        <h3>読み込めるかを確かめる — <code>sim info</code></h3>
+        <p>ロードモジュールを読み、<code>main</code> まで（スタートアップを）走らせて、結果と警告を表示します。<b>「初期設定終了: main」の行が出れば準備は完了</b>です。</p>
+        <div class="term"><div class="hd"><i></i><i></i><i></i><span>コマンドプロンプト</span><button class="copy" type="button">コピー</button></div>
+<pre><span class="p">&gt; </span><span class="cmd">sim info --abs DefaultBuild\project.abs -v</span>
+バックエンド: rl78
+ファイル: DefaultBuild/project.abs
+ファイル種類: ELF、ABI: ccrl                         <span class="note">← .abs か .lmf かを自動で見分け、呼び出し規約（ABI）を選ぶ</span>
+設定ファイル: なし                                    <span class="note">← 読んだ sim.cfg（なければ「なし」）</span>
+DWARF: CU 14 個（バージョン 2: 3、バージョン 3: 11）、飛ばした CU 0 個、Renesas Electronics CC-RL Compiler
+コア: auto（S3 の命令 + 乗除算器 SFR）、HALT: 読み飛ばす、STOP: 読み飛ばす
+RAM: 0xFEF00〜0xFFEDF、スタック: 0xFEF02〜0xFFE1F、呼び出し時の SP: 0xFFE1C
+<span class="hl">初期設定終了: main（0x00144）。スタートアップ 14403017 命令、16803549 クロック（525.111 ms @ 32000000 Hz）</span>
+実行方式: 解釈実行（exec = interp）
+スタブ: なし
+<span class="c">…（セクションの一覧など）</span>
+変数: 3 個、関数: 31 個</pre></div>
+        <p><code>--abs</code> は <code>.lmf</code> も受け付けます（<code>project.abs</code> を <code>project.lmf</code> に置き換えるだけ）。種類はファイルの先頭で判定し、ABI を自動で選びます。止まってしまうときは <a href="#trouble">困ったとき</a> を見てください。</p>
+      </div>
+    </div>
+
+    <div class="st" style="--c:var(--ch1)">
+      <div class="num">3</div>
+      <div class="body">
+        <h3>変数と関数の名前を調べる — <code>sim list</code></h3>
+        <p>テスト CSV の列に書く名前を確かめます。名前の一部を付けると、それを含むものだけに絞り込みます。</p>
+        <div class="term"><div class="hd"><i></i><i></i><i></i><span>コマンドプロンプト</span><button class="copy" type="button">コピー</button></div>
+<pre><span class="p">&gt; </span><span class="cmd">sim list --abs DefaultBuild\project.abs ADChannel</span>
+func 0x001DF R_Config_ADC_Set_ADChannel(e_ad_channel_t channel) -&gt; MD_STATUS  [src\smc_gen\Config_ADC\Config_ADC.c]
+<span class="p">&gt; </span><span class="cmd">sim list --abs DefaultBuild\project.abs g_</span>
+var  0xFEF00 g_result_buffer      uint16_t  [main.c]
+var  0x02000 g_fih_hz             const uint32_t[16] (const)  [src\smc_gen\r_bsp\mcu\rl78_g22\mcu_clocks.c]
+var  0x02040 g_fim_hz             const uint32_t[4] (const)  [src\smc_gen\r_bsp\mcu\rl78_g22\mcu_clocks.c]</pre></div>
+      </div>
+    </div>
+
+    <div class="st" style="--c:var(--ch4)">
+      <div class="num">4</div>
+      <div class="body">
+        <h3>テストを実行する — <code>sim run</code></h3>
+        <p>結果 CSV を <code>result</code> フォルダに、入力と同じ名前で作ります。最後に件数（OK / NG / NO Check）と、実行した命令数・所要時間・命令/秒を表示します。</p>
+        <div class="term"><div class="hd"><i></i><i></i><i></i><span>コマンドプロンプト</span><button class="copy" type="button">コピー</button></div>
+<pre><span class="p">&gt; </span><span class="cmd">sim run --abs DefaultBuild\project.abs test.csv -o result</span>
+test.csv
+  mod R_Config_ADC_Set_ADChannel: 総数 12, <span class="ok">OK 12</span>, NG 0, NO Check 0
+  -&gt; result/test.csv
+合計: 総数 12, <span class="ok">OK 12</span>, NG 0, NO Check 0
+実行時間: 0.000 秒（対象関数 0.000 秒）
+実行命令数: 265（スタートアップ 14403017 を除く）、呼び出し 12 回、所要時間 0.000 秒、53.0 百万命令/秒</pre></div>
+      </div>
+    </div>
+
+    <div class="st" style="--c:var(--ch3)">
+      <div class="num">5</div>
+      <div class="body">
+        <h3>結果を見る</h3>
+        <p>結果 CSV は、入力の CSV の右に<b>判定</b>と<b>実行時間</b>を足したものです。期待値と違うセルは <code>実測?(期待)</code> になります。下は、わざと期待値を 1 つ間違えた CSV を実行した例です。</p>
+        <div class="term"><div class="hd"><i></i><i></i><i></i><span>コマンドプロンプト</span></div>
+<pre><span class="p">&gt; </span><span class="cmd">sim run --abs DefaultBuild\project.abs ng.csv -o result</span>
+ng.csv
+  <span class="ng">NG ng.csv:4 0xFFF31 = 7（期待 8）</span>          <span class="note">← どのファイルの何行目の、どの列かが分かる</span>
+  mod R_Config_ADC_Set_ADChannel: 総数 12, OK 11, <span class="ng">NG 1</span>, NO Check 0
+  -&gt; result/ng.csv
+合計: 総数 12, OK 11, <span class="ng">NG 1</span>, NO Check 0</pre></div>
+        <div class="scroll"><table class="csvx">
+          <tr class="mod"><td>mod</td><td>R_Config_ADC_Set_ADChannel</td><td>A/D チャネルの設定</td><td>1</td><td>2</td><td class="tag2">← 対象関数、入力 1 列、出力 2 列</td></tr>
+          <tr class="hdr"><td>#COMMENT</td><td class="in">@channel</td><td class="out">R_Config_ADC_Set_ADChannel@@</td><td class="out">0xFFF31</td><td class="add">判定</td><td class="add">実行時間</td></tr>
+          <tr><td></td><td class="in">5</td><td class="out">0</td><td class="out">5</td><td class="okc add">OK</td><td class="add">0.0011ms</td></tr>
+          <tr><td></td><td class="in">7</td><td class="out">0</td><td class="ngc">7?(8)</td><td class="ngc">NG</td><td class="add">0.0011ms</td></tr>
+          <tr class="cm"><td>;</td><td colspan="5">8〜17 は範囲外（MD_ARGERROR = 0x81）。ADS (0xFFF31) は変わらない</td></tr>
+          <tr><td></td><td class="in">8</td><td class="out">0x81</td><td class="out">7</td><td class="okc add">OK</td><td class="add">0.0006ms</td></tr>
+        </table></div>
+        <div class="legend2">
+          <span><i style="--c:var(--ch1)"></i>入力（関数を呼ぶ前に書く）</span>
+          <span><i style="--c:var(--ch2)"></i>出力（呼んだ後に読んで比べる）</span>
+          <span><i style="--c:color-mix(in srgb,var(--ch4) 30%,#fff)"></i>sim が書き足す列</span>
+          <span><i style="--c:var(--ch3)"></i>期待値との違い</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <h3>終了コード</h3>
+  <div class="exit">
+    <div class="panel" style="--c:var(--ch4)"><b class="n2">0</b><p>すべて OK（NG なし）。</p></div>
+    <div class="panel" style="--c:var(--ch1)"><b class="n2">1</b><p>NG が 1 つでもあった。</p></div>
+    <div class="panel" style="--c:var(--ch3)"><b class="n2">2</b><p>実行できないエラー（ファイルが読めない、設定の値が読めない、など）。</p></div>
+  </div>
+  <div class="callout" style="--c:var(--ch1)">
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 9v4M12 17h.01"/><path d="M10.3 3.9L1.8 18a2 2 0 001.7 3h17a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0z"/></svg>
+    <div><b>結果のファイルを上書きしないための決まり</b><br>
+    複数の入力の出力先が同じ名前になる（ASCII の大小文字の違いや、同じ入力の重複を含む）ときは、何も実行・出力せずにエラー 2 で止まります。別々に実行するか、出力フォルダを分けてください。<br>
+    結果の出力先が入力の CSV そのもの（<code>./</code> や相対パスなど、書き方が違っても同じファイル）になるときも、上書きせずにエラー 2 で止まります。</div>
+  </div>
+</section>
+
+<!-- 04 -->
+<section id="csv">
+  <span class="ch" style="--c:var(--ch1)">CH.04 — TEST CSV</span>
+  <h2>テスト CSV と結果 CSV</h2>
+  <p class="lead2">WinAMS の書式をそのまま使います。1 行が対象関数 1 回の呼び出しで、変数の値は行をまたいで保持されます。</p>
+
+  <div class="scroll"><table class="csvx">
+    <tr class="mod"><td>mod</td><td>func1</td><td>func1単体テスト</td><td>3</td><td>2</td><td></td><td class="tag2">← <b>mod,対象関数,説明,入力の列数,出力の列数</b></td></tr>
+    <tr class="hdr"><td>#COMMENT</td><td class="in">@enable</td><td class="in">@mode</td><td class="in">@input</td><td class="out">gb_result.data</td><td class="out">gb_result.ret_code</td><td class="tag2">← 列の名前（入力が先、出力が後）</td></tr>
+    <tr class="cm"><td>;</td><td colspan="5">自由なコメント</td><td class="tag2">← <code>;</code> で始まる行はコメント</td></tr>
+    <tr><td></td><td class="in">1</td><td class="in">1</td><td class="in">10</td><td class="out">100</td><td class="out">1</td><td class="tag2">← データ行（1 列目はコメント欄）</td></tr>
+  </table></div>
+  <div class="legend2"><span><i style="--c:var(--ch1)"></i>入力の列（3 列）</span><span><i style="--c:var(--ch2)"></i>出力の列（2 列）</span></div>
+
+  <h3>列に書ける名前</h3>
+  <div class="panel tblwrap"><table class="tbl">
+    <tr><th>書き方</th><th>意味</th></tr>
+    <tr><td><code>g_value</code></td><td>グローバル変数</td></tr>
+    <tr><td><code>file.c/name</code></td><td>ファイル内 static の変数</td></tr>
+    <tr><td><code>file.c/func@name</code></td><td>関数内 static の変数</td></tr>
+    <tr><td><code>@引数</code></td><td>対象関数の引数（例: <code>@channel</code>）</td></tr>
+    <tr><td><code>func@@</code></td><td>対象関数の戻り値</td></tr>
+    <tr><td><code>a.b</code>　<code>a[2]</code>　<code>p[0].m</code></td><td>構造体のメンバ、配列の要素、ポインタの先</td></tr>
+    <tr><td><code>$ptr</code></td><td>ポインタの指す実体を確保する</td></tr>
+    <tr><td><code>&amp;arr</code> / <code>*ptr</code></td><td>まとめて書く・比べる（<code>'文字列'</code> や <code>1|2|3</code>）</td></tr>
+    <tr><td><code>0xFFF01:2</code></td><td>アドレスを直接指定（<code>:</code> の後はバイト数）</td></tr>
+  </table></div>
+
+  <h3>値の決まり</h3>
+  <ul class="note-list">
+    <li><b>結果 CSV</b>: 出力のセルに実測値を書き、期待値と違えば <code>実測?(期待)</code>。右に判定（<code>OK</code> / <code>NG</code> / <code>NO Check</code>）と実行時間を足します。</li>
+    <li><b>空のセル</b>: 入力の空セルは「設定しない」、出力の空セルは「期待値なし」。空文字列 <code>''</code> は、入力なら書く（終端の 0）、出力なら比べる（空文字列か）。</li>
+    <li><b>期待値</b>は入力と同じ規則で解釈し、対象のビット幅に収まらない期待値は <code>NG</code> にします。</li>
+    <li><b>文字コード</b>（Shift_JIS / UTF-8。UTF-8 の BOM 付きも可）と改行コードは、入力のまま保ちます。UTF-16 は対応外（エラー）です。</li>
+    <li><b>日本語のフォルダ名・ファイル名</b>を使えます（Windows でも。コマンドラインの引数と <code>sim.cfg</code> の中のパスのどちらも可。<code>sim.cfg</code> は UTF-8 でも Shift_JIS でもよい）。</li>
+    <li><b><code>mod</code> 行がないファイル</b>はエラー（終了コード 2）、実行するデータ行が 0 行のブロックは警告です。<code>mod</code> / <code>#COMMENT</code> の大文字小文字・前後の空白・<code>"mod"</code> のような引用は受け付けます（詳しくは <code>docs/DESIGN.md</code> の 3 節）。</li>
+  </ul>
+
+  <div class="callout" style="--c:var(--ch2)">
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 7h10v10H7z"/><path d="M3 12h4M17 12h4"/></svg>
+    <div><b>WinAMS の結果と突き合わせる</b><br>結果 CSV は、入力として読み直せます。<b>WinAMS の結果 CSV を入力にして <code>--expect-actual</code> を付けると、WinAMS の実測値を期待値として、このシミュレータの結果と比べられます。</b>最初はこれで、WinAMS と同じ結果になることを確かめてください。</div>
+  </div>
+  <div class="term"><div class="hd"><i></i><i></i><i></i><span>コマンドプロンプト</span><button class="copy" type="button">コピー</button></div>
+<pre><span class="p">&gt; </span><span class="cmd">sim run --abs DefaultBuild\project.abs winams_result\test.csv -o compare --expect-actual</span></pre></div>
+
+  <details class="more">
+    <summary><code>modi</code> — 初期化つきのブロック</summary>
+    <div class="in">
+      <p><code>#InitWheneverCall,変数名,...</code> と次の初期値の行（先頭のセルはコメント欄）の後に、<code>#COMMENT</code> と通常のデータ行を置きます。</p>
+      <p><code>csv_init = auto | once | every</code>（既定 <code>auto</code>）か、CLI の <code>--csv-init=...</code> で、初期化する時機を選べます。<code>auto</code> は、<code>#InitWheneverCall</code> なら毎行、それ以外の <code>#Init...</code> なら最初の行の前だけです。</p>
+      <p>書き込みの順は 初期値 → 行の入力 → 関数の呼び出し で、空の初期値は書き込みません。GUI の再生は初期化を独立した入力列へ展開して記録するので、保存した <code>mod</code> の CSV を <code>sim run</code> で再実行しても順序を再現します。</p>
+    </div>
+  </details>
+  <details class="more">
+    <summary><code>%</code> 行 — WinAMS のスタブへの置換</summary>
+    <div class="in">
+      <p><code>%,スタブ関数,元の関数</code>（例: <code>%,"AMSTB_read_adc","read_adc"</code>）の行は、WinAMS が書く置換（スタブ）の指定です。<code>mod</code> / <code>modi</code> の行から最初のデータ行までの間（<code>#COMMENT</code> の前でも後でも可）に置けます。</p>
+      <p>そのブロックを実行する間だけ元の関数をスタブへ置き換え、ブロックが終われば解除します。<code>sim.cfg</code> の <code>stub</code> / <code>skip</code> と同じ関数なら <code>%</code> 行を優先します。</p>
+      <p>関数は <code>ファイル名/関数名</code>（例: <code>%,"AMSTB_xx","XXX.c/xx"</code>）でも書けます。ファイル名の大文字小文字は区別しません。関数がロードモジュールに見つからなければ、そのブロックはエラーにして実行しません。</p>
+      <p>GUI で読み込んだ CSV の <code>%</code> 行も同じく有効になり、保存する CSV に書き出します。</p>
+    </div>
+  </details>
+</section>
+
+<!-- 05 -->
+<section id="gui">
+  <span class="ch" style="--c:var(--ch5)">CH.05 — GUI</span>
+  <h2>GUI で動かす</h2>
+  <p class="lead2">周期関数を決まった間隔で呼び続け、入力を変えたときの変化を波形で見ます。まずは 30 秒の動画で流れをつかんでください。</p>
+
+  <div class="term"><div class="hd"><i></i><i></i><i></i><span>コマンドプロンプト</span><button class="copy" type="button">コピー</button></div>
+<pre><span class="p">&gt; </span><span class="cmd">sim gui --abs DefaultBuild\project.abs --func &lt;周期関数&gt; --period-ms 5</span>
+sim gui: http://127.0.0.1:8765/ で待ち受けています（周期 5 ms、関数 R_Config_ADC_Set_ADChannel）。止めるには Ctrl+C</pre></div>
+  <p class="body">既定のブラウザ（Chrome / Edge）で画面が開きます。1 周期ごとに、指定した関数を 1 回呼びます。対象関数が決まっていない間は、実行・ステップと、記録していない CSV の保存はできません。画面で対象関数を選ぶか、<code>--func</code> で指定してください。</p>
+
+  <div class="frame video" style="margin-top:20px">
+    <div class="bar"><i></i><i></i><i></i><span>操作の動画（約 30 秒）— 入力の追加 → 監視の追加 → 実行 → スライダで入力を変える</span></div>
+    <video id="guiVideo" src="docs/readme/gui_live.mp4" poster="docs/readme/gui_first.png" controls muted playsinline preload="metadata" width="1280" height="764"></video>
+  </div>
+  <div class="chapters" id="chapters">
+    <button type="button" data-t="0.8" style="--c:var(--ch1)"><span class="dot" style="--c:var(--ch1)">1</span>入力を追加 <small>0:01</small></button>
+    <button type="button" data-t="5.6" style="--c:var(--ch3)"><span class="dot" style="--c:var(--ch3)">2</span>監視を追加 <small>0:06</small></button>
+    <button type="button" data-t="11.2" style="--c:var(--ch4)"><span class="dot" style="--c:var(--ch4)">3</span>実行 <small>0:11</small></button>
+    <button type="button" data-t="13.3" style="--c:var(--ch2)"><span class="dot" style="--c:var(--ch2)">4</span>入力を変える <small>0:13</small></button>
+  </div>
+  <p class="cap blk">チャネル（<code>@channel</code>）を 8〜17 にすると戻り値が <code>0x81</code>（範囲外）になり、ADS レジスタ（<code>0xFFF31</code>）は前の値のまま変わらないことが、波形で分かります。</p>
+
+  <h3>動画と同じことを、手順で</h3>
+  <div class="split side">
+    <div class="frame"><img src="docs/readme/gui_panel.png" alt="入力・監視のパネル。入力パネルに @channel のスライダ、変数モニタに戻り値と 0xFFF31" width="360"></div>
+    <ol class="steps" style="--c:var(--ch5)">
+      <li><span><b>入力パネル</b>の検索欄に変数の名前（の一部）を入れ、<b>「入力に追加」</b>を押します。引数は <code>@channel</code> のように <code>@</code> 付きで出ます。</span></li>
+      <li><span>入力の形を<b>数値・スライダ・トグル・ボタン・状態</b>から選びます。スライダなら、左右の欄で下限と上限を決めます。</span></li>
+      <li><span><b>変数モニタ</b>の検索欄で、見たい変数・戻り値（<code>関数名@@</code>）・番地（<code>0xFFF31:1</code>）を探し、<b>「監視」</b>を押します。チェックの付いたものが波形に出ます。</span></li>
+      <li><span>上の <b>「実行」</b> を押すと周期実行が始まります。入力を変えると、次の周期から波形に表れます。</span></li>
+      <li><span><b>「一時停止」</b>すると、全区間をズームやカーソルで調べられます。<b>「記録を CSV 保存」</b>で WinAMS 形式の CSV に保存できます。</span></li>
+    </ol>
+  </div>
+
+  <h3>テスト CSV を再生する</h3>
+  <p class="body">右上の <b>「テスト CSV 再生」</b> でテスト CSV を選ぶと、その入力を順に書きながら実行し、波形にします。下は、上の <code>test.csv</code> を再生したところです。</p>
+  <div class="frame fig"><div class="bar"><i></i><i></i><i></i><span>テスト CSV 再生 — test.csv（12 行）</span></div><img src="docs/readme/gui_csv.png" alt="テスト CSV を再生した画面。@channel、戻り値、0xFFF31 が CSV の行ごとに階段状に変わる" width="1440" height="860"></div>
+
+  <h3>画面の各部</h3>
+  <details class="more" open>
+    <summary>実行の操作と入力パネル</summary>
+    <div class="in"><ul>
+      <li>実行 / 一時停止 / ステップ実行 / リセット、速度の倍率。</li>
+      <li><b>入力パネル</b>: 左のつまみをドラッグして並べ替え、順番を保存します。数値・スライダ・トグル・状態の新しい入力は、既定で<b>固定 ON</b>（最初に値を入れると毎周期書き、リセット後も維持）。ボタンと既存の固定の設定は従来どおりです。</li>
+      <li>波形の lsb・offset・単位（yaml を含む）を数値とスライダに当てはめ、物理値で入力・表示します。整数型は逆換算の後に四捨五入し、実際の物理値を欄へ戻します。保存は生の値で、表示の印にマウスを置くと生の値を確かめられます。</li>
+      <li>状態名のある変数は「状態」が既定になり、値と名前の一覧から選んで設定できます（既存のカードも切り替え可）。</li>
+      <li>書いた値は、一時停止中でもすぐにはメモリに入らず、<b>次の周期（ステップ）の初めに入ります</b>。それまでは「反映待ち」と表示し、同じ変数に書き直せば最後の値だけが入ります。</li>
+    </ul></div>
+  </details>
+  <details class="more">
+    <summary>変数モニタと波形</summary>
+    <div class="in"><ul>
+      <li><b>変数モニタ</b>: 現在値を 10 進 / 16 進で表示します。構造体や配列は展開して選べます。</li>
+      <li><b>波形</b>: 実行中も、左の信号設定の並び・グループ・チェックに従って直近の点を流し、状態表示（ツールバーの「状態」）にも従います。一時停止すると、全区間をズームやカーソルで調べられます。</li>
+    </ul></div>
+  </details>
+  <details class="more">
+    <summary>記録の保存とテスト CSV の再生の細かい決まり</summary>
+    <div class="in"><ul>
+      <li>記録を WinAMS 形式の CSV で保存し、テスト CSV を読み込んで再生できます。保存した CSV は <code>sim run</code> でそのまま再実行できます（入力は書いた値の表記のまま残します）。</li>
+      <li>1 周期の入力は、<code>sim run</code> が CSV の 1 行を処理するのと同じく、周期の初めに、保存する CSV の入力列の順に、列ごとに最後の 1 個だけ書きます。そのため、同じメモリを指す固定と単発の書き込みを併用しても、停止中に何度か書き直しても、再実行と合います。</li>
+      <li>監視も入力もない周期の行は、1 列目（コメント欄）に <code>step N</code> を入れて保存するので、再実行でも同じ回数だけ関数を呼びます。</li>
+      <li>テスト CSV の再生は、読み込んだ CSV の入力列の順に書きます。<code>#Init...</code> にだけ現れる変数は監視に自動で足さず、通常の入力列・出力列にもある名前は一度だけ足します。</li>
+      <li>同じ名前の入力列が複数あるテスト CSV は、GUI では読み込めません（<code>sim run</code> で実行してください）。<code>mod</code> ブロックが複数あれば、<b>先頭のブロックだけを再生</b>します。</li>
+      <li>周期関数を切り替えると、リセットして記録を始め直します。切り替えた先の関数にない引数（<code>@rpm</code> など）や、前の関数の戻り値の固定・監視は外します。</li>
+    </ul></div>
+  </details>
+
+  <h3 id="variants">仕向（ライブモードの初期化の値）</h3>
+  <p class="body">テスト CSV の <code>#InitWheneverCall</code> などで書いている初期化の値（コンフィグ値）を、仕向（出荷先）ごとに登録しておき、CSV を再生しないライブモードでも入れられます。右側の<b>「仕向」</b>で選ぶと、その値を sim に送ります。</p>
+  <div class="callout" style="--c:var(--ch1)">
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 8v5M12 16h.01"/></svg>
+    <div>仕向を選んでいないときは、上のバーと「仕向」に <b>「仕向が選ばれていません」</b> と出ます（上の画像の赤い文字）。初期化の値を書かないので、入力が効かないことがあります。</div>
+  </div>
+  <ul class="note-list">
+    <li>書き方は値ごとに<b>「最初だけ」</b>（リセット後の最初の周期の前に 1 回）か<b>「毎回」</b>（毎周期の初め）を選びます。<code>csv_init = once</code> / <code>every</code> で CSV を再生したときと同じです。同じ変数に入力パネルの書き込み・固定・CSV の再生があれば、そちらが勝ちます。</li>
+    <li>「最初だけ」の値を変えたときや仕向を切り替えたときは、<b>「リセットして反映」</b>を押します（次のリセットまで書きません）。</li>
+    <li>仕向を選ぶと、その選択を仕向ファイルにも保存します（次に起動したときも同じ仕向を使います）。</li>
+    <li>値の表で、変数の検索の「行を追加」、値の入力（Enter か欄を離れると送る）、書き方の選択、行の削除ができます。</li>
+    <li><b>「CSV から取り込み」</b>で選んだテスト CSV の <code>#Init...</code> の見出しと次の 1 行から、仕向を 1 つ作ります（名前はファイル名）。テスト CSV の再生（「テスト CSV 再生」）では仕向を変えません。</li>
+    <li><b>「ファイルに保存」</b>で、<code>sim.cfg</code> と同じフォルダの <code>sim_gui_variants.json</code> に保存し、次に <code>sim gui</code> を起動すると自動で読み込みます。保存先は sim.cfg の <code>gui_variants = パス</code>（相対なら sim.cfg のフォルダから）で変えられます。ファイルが読めないときは表示だけして、勝手に上書きしません。</li>
+  </ul>
+  <div class="code"><div class="hd"><span class="fname">sim_gui_variants.json（手で書いてもよい）</span><button class="copy" type="button">コピー</button></div>
+<pre>{
+  <span class="k">"version"</span>: <span class="v">1</span>,
+  <span class="k">"selected"</span>: <span class="s">"国内"</span>,
+  <span class="k">"variants"</span>: [
+    { <span class="k">"name"</span>: <span class="s">"国内"</span>, <span class="k">"values"</span>: [ { <span class="k">"name"</span>: <span class="s">"g_cfg_dest"</span>, <span class="k">"value"</span>: <span class="s">"1"</span>, <span class="k">"mode"</span>: <span class="s">"once"</span> } ] },
+    { <span class="k">"name"</span>: <span class="s">"北米"</span>, <span class="k">"values"</span>: [ { <span class="k">"name"</span>: <span class="s">"g_cfg_dest"</span>, <span class="k">"value"</span>: <span class="s">"2"</span>, <span class="k">"mode"</span>: <span class="s">"once"</span> } ] }
+  ]
+}</pre></div>
+
+  <h3 id="signals">信号情報ファイル（ライブモードの lsb・状態名・グループなど）</h3>
+  <p class="body">信号の意味（lsb・offset・単位・状態名）と見た目（グループ・高さ・色）は、<code>sim gui</code> の起動時に信号情報ファイルから自動で読み込み、変えてから 1 秒後に自動で保存します。仕向で違う信号だけ、その仕向の差分を同じファイルに書けます（右の「仕向」で選んだものが使われます）。</p>
+  <p class="body">保存先は <code>sim.cfg</code> の <code>gui_signals</code>（省略時は同じフォルダの <code>sim_gui_signals.yaml</code>）。読めないときは自動保存を止めて理由を表示します。形式と、古い YAML からの移し方は <a href="gui/README.html#formats">GUI の使い方ガイド（信号情報ファイル）</a> を見てください。</p>
+
+  <div class="callout" style="--c:var(--ch2)">
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M14 3h7v7M10 14L21 3M21 14v7H3V3h7"/></svg>
+    <div>画面は <a href="https://github.com/hironoa/SignalViewer2">SignalViewer2</a> を取り込んで作っています。<code>sim_gui.html</code> を直接開けば、従来どおり CSV を読む波形ビューアとして使えます。波形の操作（ズーム、カーソル、比較、画像のコピーなど）は <a href="gui/README.html">GUI の使い方ガイド</a> にまとめてあります。</div>
+  </div>
+</section>
+
+<!-- 06 -->
+<section id="defines">
+  <span class="ch" style="--c:var(--ch4)">CH.06 — HEADER DEFINES</span>
+  <h2>ヘッダからの直アドレス定義</h2>
+  <p class="lead2">製品のヘッダにある <code>#define REG (*(volatile u1*)0xFFFA4)</code> のような定義を読み取り、ロードモジュールに載らない SFR のマクロも名前で使えるようにします。</p>
+  <div class="panel diagram">
+    <svg viewBox="0 0 820 150" width="820" role="img" aria-label="ヘッダの define を読み、名前と番地と型の表を作り、CSV や GUI で名前を使う">
+      <defs><marker id="ar2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5 0 10z" fill="#8b93a3"/></marker></defs>
+      <rect class="dg-box" x="10" y="20" width="290" height="110" rx="10"/>
+      <text class="dg-s" x="26" y="44">product/inc/regs.h</text>
+      <text class="dg-m" x="26" y="72">#define P1 (*((volatile u1*)0xFFF01))</text>
+      <text class="dg-m" x="26" y="96">#define B4 (((volatile typeBit*)</text>
+      <text class="dg-m" x="26" y="114">            0xFFFA4)-&gt;b4)</text>
+      <path class="dg-a" d="M300 75 H350" marker-end="url(#ar2)"/>
+      <rect x="352" y="40" width="160" height="70" rx="12" fill="#15924a"/>
+      <text x="432" y="72" text-anchor="middle" style="font:700 14px 'SF Mono',Menlo,monospace;fill:#fff">sim が読む</text>
+      <text x="432" y="92" text-anchor="middle" style="font-size:11.5px;fill:#e6f6ec">型と #if を解決</text>
+      <path class="dg-a" d="M512 75 H562" marker-end="url(#ar2)"/>
+      <rect class="dg-box" x="564" y="20" width="246" height="110" rx="10"/>
+      <text class="dg-s" x="580" y="44">CSV・GUI・sim list で使える</text>
+      <text class="dg-m" x="580" y="72">P1  → 0xFFF01  u8</text>
+      <text class="dg-m" x="580" y="96">B4  → 0xFFFA4  bit 4</text>
+    </svg>
+  </div>
+  <ul class="note-list">
+    <li><code>exec = native</code> では、<code>defines_scope</code> を明示しなければ、コンパイルするソースとそのヘッダの直アドレス定義を自動で読み、CSV で名前を使えます。</li>
+    <li><code>defines =</code> / <code>--defines</code> で追加のフォルダも読め、<code>defines_auto = off</code> で自動の読み込みを止められます（既定 on）。<code>defines_scope</code> を明示した場合はその指定に従い、<code>interp</code> / <code>xlate</code> の動きは変わりません。</li>
+    <li>ロードモジュールに載らない SFR のマクロも、CSV の初期化・入出力、GUI の検索・監視・入力、<code>sim list</code> で使えます。</li>
+  </ul>
+  <div class="code"><div class="hd"><span class="fname">sim.cfg</span><button class="copy" type="button">コピー</button></div>
+<pre><span class="c"># sim.cfg からの相対パス。既定でサブフォルダの .h / .c / .inc も読む</span>
+<span class="k">defines</span> = <span class="s">../product</span>
+<span class="k">defines_exclude</span> = <span class="s">.git</span>
+<span class="k">ctype</span> = <span class="s">u1 : u8</span>
+<span class="k">ctype</span> = <span class="s">typeBit : bits8</span></pre></div>
+  <details class="more">
+    <summary>型の決め方と、取り込む範囲</summary>
+    <div class="in">
+      <p><code>--defines パス</code> でも追加できます。<code>(*((volatile u1*)0xFFFA4))</code> や <code>(((volatile typeBit*)0xFFFA4)-&gt;b4)</code> を取り込みます。基本型・ヘッダの typedef と限定的な構造体の宣言・デバッグ情報のタグ・<code>ctype</code> の順に型を解決します。</p>
+      <p>解決できない型の <code>b4</code> などは、既定で 8 ビット内のビット番号と推定します（<code>defines_guess_bits = off</code> で止める）。推定・未解決・重複・値の式の対象外（<code>value-excluded</code>）の件数を <code>sim info</code> で確かめてください。</p>
+      <p>直アドレスの左辺値だけを登録し、マスク・シフト・比較など値を加工するマクロは登録しません。定数の添字は要素のサイズを掛けて番地を求め、<code>const</code> 付きの型は読み取り専用にします。キャストの外側のポインタの加減算は対象外です。番地の計算は <code>(型*)(BASE + 2)</code> のように括弧の中へ書いてください。</p>
+      <p><b>SFR の周辺機能は模擬しません。</b>通常の SFR のメモリで監視できるのはプログラムが書いた値で、入力として書けばプログラムが読む値になります。PSW・SP・乗除算器など、CPU コアが模擬するレジスタは例外です。</p>
+      <p>明示の定義は <code>var = P1 : u8 @ 0xFFF01</code>、<code>varfile = registers.txt</code> でも足せます。<code>u8[16]</code> の配列や <code>u8.4-6</code> のビット範囲も指定でき、明示の定義が同名のシンボルより優先します。対応する構文と制限は <a href="docs/HEADER_DEFINES.md">ヘッダ取り込み</a> を見てください。</p>
+    </div>
+  </details>
+  <details class="more">
+    <summary><code>#if</code> / <code>#ifdef</code> で切り替えているヘッダ</summary>
+    <div class="in">
+      <p>品種やビルド構成を <code>#if</code> / <code>#ifdef</code> で切り替えているヘッダは、コンパイル時と同じ定義マクロを与えると、有効な枝だけを取り込みます。</p>
+<div class="code"><div class="hd"><span class="fname">sim.cfg</span></div><pre><span class="k">cdef</span> = <span class="s">PRODUCT=2</span>                 <span class="c"># 名前=値（複数行可。値を省くと 1）。コマンドラインは --cdef PRODUCT=2</span>
+<span class="k">cundef</span> = <span class="s">OLD_SWITCH</span>              <span class="c"># 定義を外す</span>
+<span class="k">mtpj</span> = <span class="s">../product/project.mtpj</span>   <span class="c"># CS+ のプロジェクトファイルの「定義マクロ」を読む（--mtpj でも可）</span>
+<span class="k">mtpj_mode</span> = <span class="s">DefaultBuild</span>         <span class="c"># ビルド・モード（省くと CS+ で選択中のモード）</span>
+<span class="k">defines_cond</span> = <span class="s">on</span>                <span class="c"># off なら #if を評価せず、すべての枝を読む</span></pre></div>
+      <p><code>sim info</code> に、読み取った定義マクロ、評価した <code>#if</code> の数、判定できなかった数、<b>条件に使われたがどこにも定義がなく 0 とみなした識別子</b>（スイッチの指定漏れの候補）を表示します。<code>mtpj</code> の定義マクロの書式は実例からの推定を含むので、表示された一覧を CS+ のコンパイル・オプションの画面と見比べてください。<code>sim list --where</code> は、取り込んだ定義ごとに定義元のファイル名と行番号を表示します。評価の規則と限界は <a href="docs/HEADER_DEFINES.md">docs/HEADER_DEFINES.md</a> を見てください。</p>
+    </div>
+  </details>
+  <details class="more">
+    <summary>読むファイルをプロジェクトに合わせる（<code>defines_scope = mtpj</code>）</summary>
+    <div class="in">
+      <p>既定では <code>defines =</code> のフォルダの下をすべて読みます。品種ごとに同じ名前のファイルをフォルダで切り替えているプロジェクトでは、ビルドしない品種のファイルまで読んで「異なる重複」になります。次の設定で、読む範囲を CS+ のプロジェクトと同じにできます（<code>defines =</code> のフォルダの指定は外してください。残すとその下も読みます）。</p>
+<div class="code"><div class="hd"><span class="fname">sim.cfg</span></div><pre><span class="k">mtpj</span> = <span class="s">../product/project.mtpj</span>
+<span class="k">mtpj_mode</span> = <span class="s">DefaultBuild</span>         <span class="c"># 省くと CS+ で選択中のモード</span>
+<span class="k">defines_scope</span> = <span class="s">mtpj</span>             <span class="c"># 既定は folder（defines のフォルダの下すべて）</span>
+<span class="k">defines_include</span> = <span class="s">../product/inc</span> <span class="c"># インクルード・パスを足す（複数行可。mtpj から読めなかったとき用）</span></pre></div>
+      <ul>
+        <li>起点にするのは、プロジェクトに登録されていて、選んだビルド・モードでビルド対象の <code>.h</code> / <code>.c</code> / <code>.inc</code> だけです。</li>
+        <li><code>#include</code> は、インクルード元のフォルダ、インクルード・パス（mtpj の「追加のインクルード・パス」、<code>defines_include</code>）の順に探し、見つけたファイルを読みます。登録されていないヘッダも、インクルードされていれば読みます。無効な <code>#if</code> の枝の <code>#include</code> は読みません。</li>
+        <li><code>sim info</code> に、登録ファイルの数（読んだ数、ビルド対象外、見つからないもの）、使ったインクルード・パス、上の順で見つからなかった <code>#include</code> の数を表示します。<b>ビルド対象の判定とインクルード・パスの書式は実例からの推定</b>なので、CS+ の画面と見比べ、足りないパスは <code>defines_include</code> で足してください。</li>
+      </ul>
+    </div>
+  </details>
+  <details class="more">
+    <summary>LMF の未対応の型の表示</summary>
+    <div class="in">
+      <p>LMF の未対応の型は、<code>sim info</code> または <code>--verbose</code> で、記憶クラス・型コード・派生型・セクションの種別ごとの件数を、名前なしの表にまとめます。<code>-v -v</code> / <code>--lmf-names</code> では、各組み合わせの名前を最大 3 個表示します。</p>
+      <p>型の情報がないアセンブラなどのシンボルは、別の件数で表示します。有効な絶対アドレスの未知の型も <code>名前:バイト数</code> で使えます。</p>
+    </div>
+  </details>
+</section>
+
+<!-- 07 -->
+<section id="xlate">
+  <span class="ch" style="--c:var(--ch2)">CH.07 — FAST MODE</span>
+  <h2>速い実行方式（C への変換）</h2>
+  <p class="lead2">既定では命令を 1 つずつ解釈して実行します（解釈実行）。<code>exec = xlate</code> にすると、ロードモジュールの機械語を C に変換し、PC 用にコンパイルしたもので実行します。<b>結果は解釈実行と同じで、数倍速くなります。</b></p>
+  <div class="term"><div class="hd"><i></i><i></i><i></i><span>コマンドプロンプト</span><button class="copy" type="button">コピー</button></div>
+<pre><span class="p">&gt; </span><span class="cmd">sim run --exec xlate --abs X.lmf テスト.csv</span>      <span class="c">（または sim.cfg に exec = xlate）</span></pre></div>
+  <div class="panel diagram">
+    <svg viewBox="0 0 820 190" width="820" role="img" aria-label="初回は解釈実行で動かし、通った関数を記録して終了後に変換する。2 回目以降は変換したコードで実行し、変換していない関数だけ解釈実行する">
+      <defs><marker id="ar3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5 0 10z" fill="#8b93a3"/></marker></defs>
+      <text class="dg-t" x="10" y="30" style="fill:#c27803">初回</text>
+      <rect class="dg-box" x="70" y="10" width="228" height="34" rx="8"/><text class="dg-s" x="84" y="32">解釈実行で動かす（今と同じ速さ）</text>
+      <path class="dg-a" d="M298 27 H326" marker-end="url(#ar3)"/>
+      <rect class="dg-box" x="328" y="10" width="140" height="34" rx="8"/><text class="dg-s" x="342" y="32">結果 CSV を出す</text>
+      <path class="dg-a" d="M468 27 H496" marker-end="url(#ar3)"/>
+      <rect class="dg-box" x="498" y="10" width="312" height="34" rx="8"/><text class="dg-s" x="512" y="32">通った関数だけ変換・コンパイル → .simxl/</text>
+      <path class="dg-a" d="M657 44 C 657 80, 400 70, 400 104" marker-end="url(#ar3)" stroke-dasharray="4 3"/>
+      <text class="dg-t" x="10" y="130" style="fill:#15924a">2 回目</text>
+      <rect x="70" y="108" width="260" height="40" rx="8" fill="#15924a"/><text x="84" y="133" style="font-size:12px;fill:#fff;font-weight:700">変換したコードで実行（数倍速い）</text>
+      <path class="dg-a" d="M330 128 H370" marker-end="url(#ar3)"/>
+      <rect class="dg-box" x="372" y="108" width="210" height="40" rx="8"/><text class="dg-s" x="386" y="133">まだの関数だけ解釈実行</text>
+      <path class="dg-a" d="M582 128 H622" marker-end="url(#ar3)"/>
+      <rect class="dg-box" x="624" y="108" width="186" height="40" rx="8"/><text class="dg-s" x="638" y="133">新しい関数を追加で変換</text>
+      <text class="dg-s" x="70" y="178">変換していない関数に入っても結果は同じです。ロードモジュールや sim を作り直すと、変換結果は自動で作り直します。</text>
+    </svg>
+  </div>
+  <div class="keys">
+    <div class="key plain"><p><b>必要なもの</b>: clang（LLVM の配布物 <code>clang+llvm-…-x86_64-pc-windows-msvc.tar.xz</code> を展開したもので可。インストールも Windows SDK も要りません）。<code>sim.cfg</code> に <code>xlate_cc = C:\tools\clang+llvm-18.1.8-x86_64-pc-windows-msvc\bin\clang.exe</code> のように書くか、<code>clang</code> に PATH を通します。<code>sim</code> の実行ファイルの隣の <code>xlate</code> フォルダも必要です（配布物に入っています）。</p></div>
+    <div class="key plain"><p><b>初回</b>: 変換結果がまだないので、解釈実行で動かします（速さは今までどおり）。このとき通った関数を記録し、実行が終わってからその関数だけを変換・コンパイルします（結果の CSV はその前に出ています）。</p></div>
+    <div class="key plain"><p><b>2 回目以降</b>: 変換結果を読み込んで実行します。変換していない関数に入ったら、そこだけ解釈実行します（結果は同じ）。新しく通った関数は、実行が終わってから追加で変換します。</p></div>
+    <div class="key plain"><p><b>変換結果の置き場所</b>: ロードモジュールの隣の <code>.simxl</code> フォルダ。ロードモジュールや <code>sim</code> を作り直すと自動で作り直し、古いものは消します。フォルダごと消してもかまいません（次の実行で作り直します）。</p></div>
+    <div class="key plain"><p><b>先に全部変換しておく</b>: <code>sim xlate --abs X.lmf</code>（関数が多いと数分かかります）。GUI（<code>sim gui</code>）は終了時に変換しないので、GUI で速い方式を使うときは、先に <code>sim xlate</code> か <code>sim run --exec xlate</code> で変換しておいてください。</p></div>
+    <div class="key plain"><p><b>コンパイルの進み具合</b>: 長くかかるときは、完了したファイル数・経過秒数・実行中のファイルを表示します（<code>--quiet</code> では非表示）。キャッシュ内の <code>cc_times.txt</code> に、今回コンパイルしたファイルの秒数を長い順に記録し、30 秒以上かかったものは終了後にも表示します。</p></div>
+    <div class="key plain"><p><b>確かめる</b>: <code>--exec verify</code>（<code>exec = verify</code>）は、呼び出しごとに変換したコードと解釈実行の両方で実行し、レジスタ・命令数・クロック数・メモリ全体が一致することを確かめます（遅くなります）。食い違ったら、その行をエラーにします。</p></div>
+    <div class="key plain"><p><b>表示</b>: 実行の最後に <code>変換したコードで実行: N 命令（P%）</code> と表示します。<code>sim info --exec xlate</code> で、変換済みの関数の数が分かります。</p></div>
+    <div class="key plain"><p><b>失敗したとき</b>: clang を起動できない、コンパイルに失敗した、といった場合は、理由を表示して解釈実行のまま続けます（結果には影響しません）。</p></div>
+    <div class="key plain"><p><b>コードフラッシュ</b>: <code>rom_size</code> を指定していなければ、0xF0000 より下（コードフラッシュ）を書き込み禁止として扱います（プログラムからの書き込みを無視）。</p></div>
+  </div>
+</section>
+
+<!-- 08 -->
+<section id="native">
+  <span class="ch" style="--c:var(--ch3)">CH.08 — NATIVE (WIP)</span>
+  <h2>製品の C ソースを PC 用にコンパイルして実行する方式 <span class="badge" style="--c:var(--ch3)">作成中</span></h2>
+  <p class="lead2">ロードモジュールの命令を使わず、製品の C のソースを clang で PC 用にコンパイルした DLL を呼ぶ方式（<code>exec = native</code>）です。RL78 の命令を再現しないので速い代わりに、<b>実機と同じ結果にはなりません</b>（下の「変わること」）。<b>段階 3（スタブへの置換まで）は完了し、Windows でだけ動きます。</b>GUI は、これから足します。</p>
+  <div class="panel tblwrap"><table class="tbl">
+    <tr><th></th><th>解釈実行（interp・既定）</th><th>変換（xlate）</th><th>native（作成中）</th></tr>
+    <tr><td>実行するもの</td><td>ロードモジュールの命令</td><td>ロードモジュールの命令を C に変換したもの</td><td>製品の C のソースを PC 用にコンパイルした DLL</td></tr>
+    <tr><td>結果</td><td>実機と同じ動き</td><td>解釈実行と同じ</td><td>PC の規則になる部分がある</td></tr>
+    <tr><td>速さ</td><td>基準</td><td>数倍</td><td>速い（RL78 の命令を再現しない）</td></tr>
+    <tr><td>要るもの</td><td>sim だけ</td><td>clang と xlate フォルダ</td><td>clang と native フォルダ。Windows でだけ動く</td></tr>
+  </table></div>
+  <p class="body">番地を書いた <code>#define</code>（レジスタなど）の名前は、コンパイルするソースとそのヘッダから自動で読み、CSV で使えます。<code>defines =</code> を足せば追加のフォルダも読め、<code>defines_auto = off</code> で自動の読み込みを止められます。<code>defines_scope</code> を明示した場合はその指定に従います。</p>
+  <div class="code"><div class="hd"><span class="fname">sim.cfg（ドライバやスタブの側に置く）</span><button class="copy" type="button">コピー</button></div>
+<pre><span class="k">exec</span> = <span class="s">native</span>
+<span class="k">mtpj</span> = <span class="s">../product/project.mtpj</span>          <span class="c"># 製品のプロジェクト。入れ替えるときはここだけ変える</span>
+<span class="k">native_src</span> = <span class="s">.</span>                          <span class="c"># 製品とは別に管理する .c（ドライバ、スタブ）。ファイルかフォルダ。複数行可</span>
+<span class="k">native_opt</span> = <span class="s">0</span>                          <span class="c"># 最適化。0（既定）または 2</span>
+<span class="k">native_near</span> = <span class="s">on</span>                        <span class="c"># 1〜0xFFFF の整数をポインタにするとき 0xF0000 を足す。on（既定）または off</span>
+<span class="k">native_layout</span> = <span class="s">../product/DefaultBuild/project.lmf</span>   <span class="c"># 変数のマイコンでの番地を読む（RAM の範囲のクリアに使う）</span>
+<span class="k">native_cc</span> = <span class="s">C:\tools\clang+llvm-18.1.8-x86_64-pc-windows-msvc\bin\clang.exe</span></pre></div>
+  <div class="term"><div class="hd"><i></i><i></i><i></i><span>コマンドプロンプト</span><button class="copy" type="button">コピー</button></div>
+<pre><span class="p">&gt; </span><span class="cmd">sim info --cfg sim.cfg</span>                  <span class="c">ソースの数、アセンブラの一覧、DLL の場所、呼べる関数</span>
+<span class="p">&gt; </span><span class="cmd">sim run --cfg sim.cfg テスト.csv -o result</span></pre></div>
+
+  <details class="more">
+    <summary>必要なものと、コンパイルするもの</summary>
+    <div class="in"><ul>
+      <li><b>必要なもの</b>: clang（変換方式と同じく、LLVM の配布物を展開したもので可。Windows SDK は要りません）と、<code>sim</code> の実行ファイルの隣の <code>native</code> フォルダ（配布物に入っています）。<code>native_cc</code> を書かなければ <code>xlate_cc</code>、環境変数 <code>SIM_XLATE_CC</code>、PATH の <code>clang</code> の順に探します。</li>
+      <li><b>コンパイルするもの</b>: mtpj の登録ファイルのうちビルド対象の <code>.c</code> と、<code>native_src</code> の <code>.c</code>。インクルード・パスと定義マクロは mtpj から取ります（<code>native_include</code>、<code>cdef</code>、<code>cundef</code> で足せます）。<code>.asm</code> はコンパイルせず、<code>sim info</code> に一覧を出します。</li>
+    </ul></div>
+  </details>
+  <details class="more">
+    <summary>どの .c にも定義がない関数・変数（アセンブラの中にあるものなど）</summary>
+    <div class="in"><ul>
+      <li>sim が代わりを自動で作ってリンクします。関数は何もせず 0 を返し、変数は 0 で埋めた領域（C の宣言の大きさ。<code>extern u1 t[];</code> のように大きさが分からないものは 4096 バイト）になります。関数か変数かは、その名前を使っているソースの宣言から決めます。</li>
+      <li>代わりを作った名前は <code>sim info</code> に一覧で出ます。本来ならリンクでエラーになる打ち間違いもリンクが通るので、一覧で確かめてください。</li>
+      <li>動きが必要なものは、同じ名前の関数（変数）を C で書いたファイルを <code>native_src</code> に置くと、そちらが使われます。</li>
+      <li>C の識別子にできない名前は代わりを作らず、リンクでエラーになります。代わりはデバッグ情報を持たないので、CSV の対象関数には指定できません。</li>
+      <li><code>float</code> / <code>double</code> を返す関数の代わりは 0.0 を返します。構造体を返す関数など、代わりが 0 を返せないものは警告を出し、一覧に「（戻り値は 0 になりません）」と添えます。</li>
+    </ul></div>
+  </details>
+  <details class="more">
+    <summary>初回と 2 回目以降（<code>.simnative</code> フォルダ）</summary>
+    <div class="in">
+      <p>初回に全部コンパイルして DLL を作ります。結果は <code>sim.cfg</code> の隣の <code>.simnative</code> フォルダに置き、次からは、変わったソース（インクルードしているヘッダが変わったものを含む）だけコンパイルし直します。</p>
+      <p>コンパイルし直すときは、ソース名と理由を最大 20 件表示します。依存ファイルが変わったときや読めないときは、そのパスも表示します。<code>--verbose</code> を付けると初回の理由も表示し、<code>sim info</code> では理由ごとの件数を確かめられます。</p>
+      <p>コンパイルの後に依存ファイルや依存の一覧を読めないか、署名を保存できないときは、警告を出し、次回もそのソースをコンパイルし直します。旧書式の署名は一度コンパイルし直して更新します。</p>
+      <p>フォルダごと消してもかまいません。場所は <code>native_dir</code>、並列数は <code>native_jobs</code> で変えられます。</p>
+    </div>
+  </details>
+  <details class="more">
+    <summary>変数と関数、スタブへの置換</summary>
+    <div class="in"><ul>
+      <li><b>変数と関数</b>: 型は DLL のデバッグ情報から取ります。static の関数も呼べます。変数はグローバル名、<code>file.c/name</code>（ファイル内 static）、<code>file.c/func@name</code>（関数内 static）で読み書きできます。構造体の <code>a.b</code>、配列の <code>a[2]</code> / <code>a[1][2]</code>、ビットフィールドのメンバも指定できます。ポインタは 64 ビットで読みます。</li>
+      <li><code>native_opt</code> は既定 0。2 にすると速くなりますが、書き換えない static 変数などが定数に畳まれ、CSV から読み書きできなくなることがあります。どこからも使われない static 変数は、0 でも DLL に入りません。</li>
+      <li><b>スタブへの置換</b>: <code>stub</code>、<code>stub_auto</code>、<code>skip</code>、CSV の <code>%</code> 行が使え、書き方とブロックごとの切り替えは今の方式と同じです。DLL 内の元の関数の入口を書き換え、スタブへの分岐または戻り値を返す処理に置き換えます。</li>
+      <li><code>ファイル名/関数名</code> で static 関数も指定でき、アセンブラの関数（sim が代わりを作ったもの）も置き換えられます。浮動小数を返す関数の <code>skip</code> は、戻り値 0（省略可）だけ指定できます。</li>
+      <li><code>native_opt = 2</code> では、同じファイルの中から呼ぶ関数が呼び出し元に埋め込まれて置換が効かなかったり、static 関数が DLL に残らず見つからない（エラーになる）ことがあります。置換を使うときは <code>native_opt = 0</code>（既定）にしてください。</li>
+      <li><b>CA78K0R 独自の書き方</b>: <code>__far</code>、<code>sreg</code>、<code>callt</code>、<code>norec</code>、<code>boolean</code>、<code>bit</code>、<code>DI()</code> などは、sim が各ソースの先頭に差し込むヘッダで吸収します。<code>__asm("…")</code> は関数の内外とも空にし、数を <code>sim info</code> に表示します。製品のソースは書き換えません。</li>
+    </ul></div>
+  </details>
+  <details class="more">
+    <summary>番地と、整数からポインタへの変換（near の番地）</summary>
+    <div class="in">
+      <p><b>番地</b>: 0xF0000〜0xFFFFF は同じ番地にメモリを確保するので、<code>#define REG (*(volatile unsigned char *)0xFFF01)</code> の形のレジスタや、番地を直接書いた RAM がそのまま動きます。CSV では <code>0xFFF01:1</code> の形で読み書きできます。<b>0x10000 より下の番地は再現できません</b>（読み書きすると、その番地を表示してその行がエラーになり、次の行へ進みます）。</p>
+      <p><b>整数からポインタへの変換</b>: RL78 の near のポインタは 16 ビットで、実際の番地は 0xF0000 を補ったものです。そこで、整数をポインタに変えるときは、値が 1〜0xFFFF なら 0xF0000 を足した番地として扱います（<code>native_near = on</code>、既定）。0（NULL）と 0x10000 以上（5 桁で書いた番地や、PC の本物のポインタ）は変えません。次のように 16 ビットに切り詰めてからポインタにする書き方も、0xFFFD4 を読み書きします。</p>
+<div class="code"><div class="hd"><span class="fname">例</span></div><pre><span class="k">#define</span> BASE_ADR   <span class="v">0x0FFFD4u</span>
+<span class="k">#define</span> ADDR(v)    ((unsigned int)(v))          <span class="c">/* マイコンでは 16 ビット */</span>
+<span class="k">#define</span> BLK        ((volatile tBlk __near *) ADDR(BASE_ADR))
+BLK-&gt;reg = <span class="v">1</span>;                                   <span class="c">/* 0xFFFD4 に書く */</span></pre></div>
+      <p>番地が実行時に決まるもの（表に入れた 16 ビットの番地など）も同じ規則で読み替えます。関数へのポインタに変える場合（<code>((void (*)(void))0x1234)()</code> など）にも同じ規則がかかります（PC ではどのみち呼べない番地です）。PC の変数の番地を <code>unsigned short</code> に入れて戻したものは、上位が失われているので直せません。読み替えた数は <code>sim info</code> の「整数からポインタへの変換」に出ます。<code>native_near = off</code> で読み替えをやめられます。</p>
+    </div>
+  </details>
+  <details class="more">
+    <summary>実行中のエラーと、止まった場所</summary>
+    <div class="in">
+      <p><b>実行中のエラー</b>: 0 での割り算は、マイコンとは異なり PC では例外になります。例外が起きた行は NG になり、次の行へ進みます。戻ってこない関数は <code>native_timeout_ms</code>（既定 10000 ミリ秒 = 10 秒）で止めます。0 なら無効、0〜86400000 を指定できます。周辺機能は模擬しないので、レジスタのビットが変わるのを待つループには、CSV で値を入れるかスタブを用意してください。例外や時間切れの後、DLL の変数は途中の状態のまま残ります。次の行もその状態から実行し、mod のブロックが変わればリセットします。</p>
+      <p><b>止まった場所</b>: 例外の行と時間切れの行には、止まったソースのファイル名と行番号を表示します（例: <code>止まった場所: io.c の 24 行目（C:\proj\src\io.c:24）</code>。時間切れは「止めたときに実行していた場所」）。呼んだ関数の先の関数で止まったときはその関数名、<code>native_opt = 2</code> でインライン展開された関数の中ならその呼び出し元も出ます。ヘッダのマクロ（レジスタの定義など）の中で止まったときは、マクロを使った行になります。<code>native_opt = 2</code> では行が少しずれることがあります。</p>
+      <p>調べるのに LLVM の配布物の <code>llvm-symbolizer</code> を使います。clang と同じフォルダにあれば（LLVM の配布物には入っています）追加の設定は要りません。別の場所なら <code>native_symbolizer = &lt;パス&gt;</code> で指定します。見つからないときは DLL の中の位置だけを出します。場所を調べるのは 1 回の実行で 20 件までです（1 件に数十ミリ秒かかり、その行の実行時間に含まれます）。</p>
+      <p><b>番地の小さい読み書き（0x10000 より下）で止まるときの主な原因</b>: 4 桁で書いた near の番地（<code>0xFE00</code> など）は、上の読み替えで 0xF0000 台になるので止まりません（<code>native_near = off</code> では止まります）。残る主な原因は、ポインタが 0 のまま（0 は NULL のままにします。番地 0 からの小さなずれ、たとえば NULL の構造体のメンバを読むと止まります。マイコンではスタートアップや別の初期化の関数で設定されます）と、PC の変数の番地を 16 ビットの整数（<code>unsigned short</code> など）に入れたもの（PC のポインタは 64 ビットなので、下位だけが残り、読み替えても別の番地になります）です。</p>
+      <p>スタックの使い切りだけは復帰できず、sim が終了コード 2 で終了します。呼び出しに失敗した行は既存の方式と同じ NG の集計で、終了コードは 1 です。</p>
+    </div>
+  </details>
+  <details class="more">
+    <summary>マイコンの番地の範囲で RAM をクリアする処理（<code>native_layout</code>）</summary>
+    <div class="in">
+      <p>native では、C の変数はマイコンの RAM の番地ではなく、DLL の中の別の場所に置かれます。そのため、番地を数字で渡して範囲をクリアする関数（<code>ram_clear((u2 *)0xFD700, (u2 *)0xFD7FF)</code> など。アセンブラで書かれていれば、sim が「何もせず 0 を返す」代わりを作ります）を呼んでも、C の変数は 0 になりません。</p>
+      <p><code>native_layout = &lt;ロードモジュール&gt;</code>（CA78K0R の <code>.lmf</code> か CC-RL の <code>.abs</code>。<code>sim.cfg</code> のフォルダからの相対パス可）を書くと、sim がロードモジュールから変数のマイコンでの番地と大きさを読み（今の方式と同じ読み取り）、DLL の変数と名前で対応づけます。</p>
+      <p>グローバルの変数は名前だけで、static の変数（ファイル内、関数内）は関数名と、ファイルのパスの末尾から同じ部分がいくつ続くか（区切りの / と \ の違いと、Windows では大文字小文字の違いは吸収）で相手を選びます。製品と <code>native_src</code> の両方の変数から、一致の強いものを先に決め、同じ強さの相手が複数あるときは、どれとも対応づけません（あいまい）。</p>
+      <p>CA78K0R の <code>.lmf</code> は、変数のファイルをパスなしの名前（<code>app.c</code>）で持つので、<b>同じファイル名のソースが製品とテストドライバ（<code>native_src</code>）の両方にあり、同じ名前の static の変数があると、その変数は対応づけられず、クリアされません</b>（<code>sim info -v</code> の「あいまい」の一覧に候補のファイルと一緒に出ます）。</p>
+      <p>そのうえで、関数の代わりから DLL に入っている部品を呼ぶと、範囲の中の変数と、毎回クリアする native_src の変数を 0 にします。</p>
+<div class="code"><div class="hd"><span class="fname">DLL に入っている部品</span></div><pre><span class="k">void</span> sim_native_clear_range(<span class="k">unsigned long long</span> first, <span class="k">unsigned long long</span> end);       <span class="c">/* [first, end)。end は含まない */</span>
+<span class="k">void</span> sim_native_clear_range_incl(<span class="k">unsigned long long</span> first, <span class="k">unsigned long long</span> last); <span class="c">/* [first, last]。last の 1 バイトまで */</span></pre></div>
+      <p>宣言は sim が各ソースの先頭に差し込むヘッダにあるので、<code>#include</code> は要りません。ひな形 <a href="example/native_ram_clear.c">example/native_ram_clear.c</a>（配布物では <code>sim</code> の隣の <code>native_ram_clear.c</code>）を <code>native_src</code> のフォルダにコピーし、関数名と引数を製品のアセンブラの関数に合わせて書き換え、終わりの番地を含むかどうかで 2 つのどちらかを使ってください。番地は <code>(unsigned long long)(unsigned long)first</code> のように整数にして渡します。呼ぶ側が <code>(u2 *)0xD700</code> と 16 ビットで書いていても、上の読み替え（<code>native_near</code>）で 0xFD700 になっています（<code>native_near = off</code> でも、部品が 1〜0xFFFF に 0xF0000 を足します）。</p>
+      <div class="tblwrap"><table class="tbl">
+        <tr><th>変数・データ</th><th>クリアする条件</th></tr>
+        <tr><td style="white-space:normal">ロードモジュールと対応づいた C の変数（製品のプロジェクト（mtpj）と <code>native_src</code>）</td><td>番地が範囲に入るとき</td></tr>
+        <tr><td style="white-space:normal">番地を直接書いたデータ（0xF0000〜0xFFFFF。製品のソースの <code>#define</code> でも、<code>native_src</code> のテストドライバの <code>#define</code> でも、CSV の <code>0xF….:1</code> でも）</td><td>番地が範囲に入るとき</td></tr>
+        <tr><td style="white-space:normal">ロードモジュールと対応づかなかった <code>native_src</code> の C の変数</td><td>範囲にかかわらず、有効な呼び出しのたび</td></tr>
+        <tr><td style="white-space:normal">const の変数・読み取り専用の変数</td><td>クリアしない</td></tr>
+      </table></div>
+      <ul>
+        <li>毎回クリアするのは、対応づけに使われず、あいまいな組の候補にもならなかった、大きさが分かる書き込み可能な <code>native_src</code> の変数です。</li>
+        <li>対応づいた変数のうち範囲に全部入っているものは、PC の側の大きさで全体を 0 にします。配列や構造体が範囲の境界をまたぐときは、マイコンと PC で大きさが同じなら、重なっているバイトだけを 0 にします。大きさが違う（ポインタを含む構造体、<code>long</code> を含む構造体のすき間、<code>enum</code>、<code>double</code> など）ときはクリアせず、変数の名前を添えて警告を 1 度出します。</li>
+        <li>番地を直接書いたデータのためのメモリ（0xF0000〜0xFFFFF）は、範囲に入っていればどこでも 0 にします。テストドライバが番地の指定で読み書きする領域も、範囲に入っていれば 0 になります。</li>
+        <li><code>native_layout</code> がないときに呼ばれると、番地を直接書いたデータだけを 0 にし、C の変数はクリアできない旨の警告を 1 度出します。先頭 ≧ 終わり、0x100000 を超える範囲などは、何もせず警告を 1 度出します。</li>
+        <li>ロードモジュールは、<b>製品のソースと同じビルドのもの</b>を使ってください。違うと番地がずれて、別の変数をクリアします。製品だけをビルドしたものでも、テストドライバを含めてビルドしたものでもかまいません。WinAMS の結果と比べるなら、WinAMS に読み込ませているもの（製品の変数の番地が、比べる相手と同じになる）を勧めます。読めなければエラー（終了コード 2）です。</li>
+        <li><code>sim info</code> に対応づけの数が出ます（<code>native layout vars=… matched=… unmatched=… size_diff=… dll_only=… src_always=… ambiguous=…</code>）。<code>matched</code> には <code>native_src</code> の変数との対応も含みます。<code>unmatched</code> はロードモジュールにだけある変数（アセンブラで確保した RAM、PC 側で使われずに消えた変数など）、<code>dll_only</code> は製品のソースにあってロードモジュールと対応づかなかった変数、<code>src_always</code> は毎回クリアする <code>native_src</code> の変数、<code>ambiguous</code> は同じ強さの相手が複数あって対応づけなかったものです。<code>-v</code> を付けると、それぞれの名前を 50 個まで出します（関数内 static は <code>ファイル名/関数名@変数名</code>）。</li>
+        <li><code>native_opt = 2</code> では、書き換えない static 変数（関数の中の static を含む）が最適化で消えたり定数に畳まれたりして、対応なし（<code>unmatched</code>）になることがあります。対応なしの変数は、DLL に実体がないのでクリアもされません。</li>
+        <li>アセンブラで確保した RAM の変数は、sim が作る代わり（どの .c にも定義がない変数）にデバッグ情報がないので、対応づけられず、クリアされません。</li>
+      </ul>
+    </div>
+  </details>
+  <details class="more">
+    <summary>変わることと、まだできないこと</summary>
+    <div class="in">
+      <p><b>変わること</b>: プリプロセス後の書き直しで <code>int</code> を 16 ビットにします。<code>long int</code> / <code>short int</code> や、<code>unsigned</code> / <code>signed</code> だけの宣言にも対応します。計算の途中の桁は PC の規則（32 ビット）になります。<code>unsigned short</code> の 40000 + 40000 を比較に使うと、マイコンでは 14464、PC では 80000 です。ポインタは 64 ビット、構造体のすき間とビットフィールドの並びは clang のものです。実行クロック数は出ません。</p>
+      <p><b>まだできないこと</b>: <code>#asm</code>〜<code>#endasm</code> と <code>__asm { … }</code> の形には対応しません。型を書かない宣言（<code>static x;</code>、戻り値の型を省いた関数）は PC の <code>int</code>（32 ビット）のままです。標準ヘッダは clang に付いてくるもの（<code>stdint.h</code>、<code>stddef.h</code>、<code>limits.h</code> など）だけが読めます（<code>string.h</code> など C ライブラリのヘッダはありません）。システムヘッダは書き直さないので、<code>uint32_t</code> などは正しい幅になりますが、<code>INT_MAX</code> など標準ヘッダの値は PC のものです。コンパイルのエラーのときはコンパイラの出力の場所（<code>cc.log</code>）を表示して、終了コード 2 で止まります（解釈実行には切り替えません）。</p>
+    </div>
+  </details>
+  <p class="body">仕組みは <a href="docs/DESIGN.md#43-pc-用-dll-の方式exec--native">docs/DESIGN.md</a> を見てください。</p>
+</section>
+
+<!-- 09 -->
+<section id="cfg">
+  <span class="ch" style="--c:var(--ch4)">CH.09 — SIM.CFG</span>
+  <h2>設定ファイル sim.cfg</h2>
+  <p class="lead2"><code>キー = 値</code> を 1 行に 1 つ書くテキストです（<code>#</code> から後はコメント）。見本は <a href="example/sim.cfg">example/sim.cfg</a>。</p>
+  <h3>どの sim.cfg を読むか</h3>
+  <div class="flow" style="grid-template-columns:repeat(3,minmax(0,1fr))">
+    <div class="s" style="--c:var(--ch2)"><div class="n">1</div><h4><code>--cfg</code> で指定</h4><p>指定したファイルを優先します。</p></div>
+    <div class="s" style="--c:var(--ch5)"><div class="n">2</div><h4>ロードモジュールの隣</h4><p><code>.abs</code> / <code>.lmf</code> と同じフォルダの <code>sim.cfg</code>。</p></div>
+    <div class="s" style="--c:var(--ch3)"><div class="n">3</div><h4>実行したフォルダ</h4><p>カレントフォルダの <code>sim.cfg</code>。</p></div>
+  </div>
+  <p class="body">この順に探し、<b>最初に開けたもの 1 つだけ</b>を読みます。<code>sim info</code> の「設定ファイル:」の行で、読まれたファイルが分かります（読んでいなければ「なし」）。読めない値（数値でない、範囲外など）は、既定値に置き換えずにエラー（終了コード 2）で止まります。</p>
+  <h3>主な項目</h3>
+  <div class="panel tblwrap"><table class="tbl">
+    <tr><th>キー</th><th>内容</th></tr>
+    <tr><td><code>char_unsigned = on | off</code></td><td>LMF の char / signed char を unsigned にする（既定 off、-qu 相当）</td></tr>
+    <tr><td><code>abi = auto | ccrl | ca78k0r</code></td><td>呼び出し規約。auto は ELF → CC-RL、LMF → CA78K0R</td></tr>
+    <tr><td><code>stub = 元の関数:スタブ関数</code></td><td>元の関数が呼ばれたらスタブへ飛ばす（WinAMS の「置換」）。複数書ける</td></tr>
+    <tr><td><code>skip = 関数名[:戻り値]</code></td><td>中身を実行せず、通常の RET と同じように戻る。複数指定可</td></tr>
+    <tr><td><code>poke = 番地:値[:バイト数]</code></td><td>リセット直後に物理番地へ初期値を書く。バイト数は既定 1、1〜4。複数指定可</td></tr>
+    <tr><td><code>stub_auto = on</code></td><td><code>AMSTB_&lt;関数名&gt;</code> がある関数をすべて置換する</td></tr>
+    <tr><td><code>core = auto | S1 | S2 | S3</code></td><td>CPU コアの種別。品種が分からなければ <code>auto</code>（既定）</td></tr>
+    <tr><td><code>cpu_hz</code></td><td>CPU のクロック。結果 CSV の実行時間の換算に使う</td></tr>
+    <tr><td><code>exec</code></td><td>実行方式。<code>interp</code>（既定）/ <code>xlate</code> / <code>verify</code> / <code>native</code>（作成中）</td></tr>
+    <tr><td><code>init_end</code></td><td>初期設定の終了アドレス（既定 <code>main</code>）</td></tr>
+    <tr><td><code>func</code></td><td>GUI の既定の周期関数</td></tr>
+    <tr><td><code>halt</code> / <code>stop</code></td><td>HALT / STOP 命令を読み飛ばすか、エラーにするか</td></tr>
+    <tr><td><code>max_insns</code></td><td>1 回の呼び出しの命令数の上限（暴走の検出）</td></tr>
+  </table></div>
+</section>
+
+<!-- 10 -->
+<section id="trouble">
+  <span class="ch" style="--c:var(--ch3)">CH.10 — TROUBLESHOOTING</span>
+  <h2>困ったとき</h2>
+  <p class="lead2">いちばん多いのは「スタートアップが <code>main</code> まで進まない」ことです。周辺機能（タイマや A/D など）を模擬しないため、実機では立つビットが 0 のままで、待ち続けたりリセット処理へ進んだりすることがあります。</p>
+
+  <h3>スタートアップが止まったら</h3>
+  <div class="term"><div class="hd"><i></i><i></i><i></i><span>コマンドプロンプト</span><button class="copy" type="button">コピー</button></div>
+<pre><span class="p">&gt; </span><span class="cmd">sim info --abs project.lmf --trace-startup</span>       <span class="c">（ELF の .abs でも同じ）</span></pre></div>
+  <p class="body">呼び出し履歴、停止位置と直前の命令、推定バックトレース、ループ候補と読んだ番地、書き込み前に読んだ SFR が出ます。それを見て、<code>sim.cfg</code> で次のどれかを足します。</p>
+  <div class="grid3">
+    <div class="panel mini-card" style="--c:var(--ch2)"><h4><code>poke</code> — 初期値を与える</h4><p>待っているビットに値を入れておく。<br><code>poke = 0xFFFA2:1</code></p></div>
+    <div class="panel mini-card" style="--c:var(--ch5)"><h4><code>skip</code> — 待ち関数を飛ばす</h4><p>中身を実行せずにすぐ戻す。<br><code>skip = 関数名[:戻り値]</code></p></div>
+    <div class="panel mini-card" style="--c:var(--ch1)"><h4><code>stub</code> / <code>init_end</code></h4><p>処理そのものを置き換えるなら <code>stub</code>、起動を止める位置を変えるなら <code>init_end</code>。</p></div>
+  </div>
+  <ul class="note-list" style="margin-top:16px">
+    <li>ブレークポイントは先頭のオペコードのフェッチ時だけ検出し、ROM / RAM のバイト列を変更しません。ROM のチェックサム、ミラーや <code>ES:</code> 経由のデータの読み出しにも、元の値が見えます。</li>
+    <li>プログラム自身の <code>FFH</code> を実行したときは停止し、実機では不正命令による内部リセットになることと、ソフトが意図的にリセットした可能性を表示します（自動的なリセット・再実行はしません）。</li>
+    <li>具体的な読み方と制限は <a href="docs/DESIGN.md#スタートアップが通らないときの調べ方">スタートアップが通らないときの調べ方</a> を見てください。</li>
+  </ul>
+
+  <h3>よくある症状</h3>
+  <div class="panel tblwrap"><table class="tbl">
+    <tr><th>症状</th><th>見るところ・直し方</th></tr>
+    <tr><td style="white-space:normal">sim.cfg の設定が効かない</td><td><code>sim info</code> の「設定ファイル:」の行で、読まれたファイルを確かめる。<a href="#cfg">探す順</a>に注意。</td></tr>
+    <tr><td style="white-space:normal">CSV の変数名がエラーになる</td><td><code>sim list --abs … 名前の一部</code> で正しい名前を調べる。static は <code>file.c/name</code>。</td></tr>
+    <tr><td style="white-space:normal">SFR のマクロ名が使えない</td><td><code>defines =</code> でヘッダのフォルダを読ませ、<code>sim info</code> の件数と <code>sim list --where</code> を見る（<a href="#defines">CH.06</a>）。</td></tr>
+    <tr><td style="white-space:normal">GUI で入力が効かない</td><td>「仕向が選ばれていません」と出ていないか（<a href="#variants">仕向</a>）。書いた値は次の周期の初めに入る。</td></tr>
+    <tr><td style="white-space:normal">エラー 2 で何も出力されない</td><td>出力先の名前が重なっていないか、入力の CSV を上書きしようとしていないか（<a href="#first">CH.03</a> の終わり）。</td></tr>
+    <tr><td style="white-space:normal">WinAMS と結果が違う</td><td>WinAMS の結果 CSV を <code>--expect-actual</code> で突き合わせ、違う行を探す（<a href="#csv">CH.04</a>）。</td></tr>
+  </table></div>
+</section>
+
+<!-- 11 -->
+<section id="limits">
+  <span class="ch" style="--c:var(--ch1)">CH.11 — LIMITATIONS</span>
+  <h2>制限</h2>
+  <div class="callout" style="--c:var(--ch3)">
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 9v4M12 17h.01"/><path d="M10.3 3.9L1.8 18a2 2 0 001.7 3h17a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0z"/></svg>
+    <div>CPU コアは、ルネサスのソフトウェアマニュアルと GNU の RL78 シミュレータとの差分テストで検証しています。<b>実機や WinAMS との突き合わせはしていないので、最初は WinAMS の結果 CSV と比べて確かめてください。</b>マニュアルの解釈が分かれる点は <a href="rl78/README.md">rl78/README.md</a> にまとめてあります。</div>
+  </div>
+  <ul class="note-list">
+    <li><b>周辺機能</b>（タイマ、シリアル、A/D など）は模擬しません。SFR は読み書きできるメモリとして扱います。割り込みは、テストドライバがハンドラ関数を直接呼ぶ前提です。</li>
+    <li><b>対象関数の引数</b>は整数 / ポインタ 8 個まで。浮動小数や構造体の値渡しの引数は使えません。</li>
+    <li><b>結果 CSV の実行時間</b>は、実行したクロック数からの換算値です。WinAMS の値と一致するとは限りません。</li>
+  </ul>
+  <details class="more">
+    <summary>CA78K0R の LMF で復元できる型</summary>
+    <div class="in">
+      <p>基本型（float / double は 4 バイト）、構造体・共用体・enum・ビットフィールド、最大 4 次元の配列、near / far・多重ポインタ・関数ポインタ、static、関数の引数と戻り値の型を復元します。typedef 名は展開されます。</p>
+      <p>signed int のビットフィールドは unsigned と区別できず、unsigned として扱います。char / signed char も同じコードで、既定は signed、<code>char_unsigned = on</code> で両方 unsigned に切り替えます。</p>
+      <p>bit 変数、5 次元以上の配列、関数の派生型の戻り値など、不明な形は型不明として警告します。構造体の値渡し・戻り値と浮動小数の引数は対応外です。関数ポインタの引数の型は LMF に残りません。</p>
+      <p>ミディアムモデルの 4 バイトの第 1 引数（AX/BC）と 4 バイトの戻り値（BC/DE）に対応します。スモール / ラージモデルは未確認です。</p>
+      <p>同名の <code>.sym</code> は照合用、およびデバッグ情報が全くない LMF のアドレスの補助として読みます。HEX 単独の入力は未対応です。</p>
+    </div>
+  </details>
+</section>
+
+<!-- 12 -->
+<section id="dev">
+  <span class="ch" style="--c:var(--ch5)">CH.12 — FOR DEVELOPERS</span>
+  <h2>構成とテスト</h2>
+  <div class="split">
+    <div class="code"><div class="hd"><span class="fname">リポジトリの構成</span></div>
+<pre>rl78/      <span class="c">RL78 CPU コア（単体でテストできる）</span>
+runtime/   <span class="c">CSV の実行、変数名の解決、GUI サーバ、</span>
+           <span class="c">.abs（ELF / DWARF）と .lmf の読み込み</span>
+gui/       <span class="c">GUI のソース（ビルド済みの gui/dist/sim_gui.html を同梱）</span>
+tests/     <span class="c">自動テスト</span>
+docs/      <span class="c">設計書（README.html の画像と動画は docs/readme/）</span></pre></div>
+    <div class="code"><div class="hd"><span class="fname">テスト</span><button class="copy" type="button">コピー</button></div>
+<pre><span class="c"># 全体（Windows は tests\run_tests.bat）</span>
+<span class="p">$</span> tests/run_tests.sh
+<span class="c"># CPU コア</span>
+<span class="p">$</span> rl78/tests/run_tests.sh
+<span class="c"># GUI（gui フォルダで）</span>
+<span class="p">$</span> npm test</pre></div>
+  </div>
+  <p class="body">ルネサス公式サンプル（BSD-3-Clause）の CC-RL 製の <code>.abs</code> と、<code>tests/tools/mkabs.c</code> が作るテスト用の <code>.abs</code> で確かめます。このページの画像と動画は、<code>./build.sh</code> の後に <code>node tools/readme_media/capture.mjs</code> で撮り直せます（Google Chrome と ffmpeg を使います）。</p>
+</section>
+
+</main>
+</div>
+
+<footer><div class="in">
+  <span>Simulater — RL78 シミュレータ 使い方ガイド</span>
+  <span>テキスト版は <a href="README.md">README.md</a>　·　GUI の詳しい使い方は <a href="gui/README.html">gui/README.html</a></span>
+</div></footer>
+
+<script>
+(function () {
+  // コードのタブ切り替え
+  document.querySelectorAll('[data-tabs]').forEach(function (box) {
+    box.querySelectorAll('[role=tab]').forEach(function (tab) {
+      tab.addEventListener('click', function () {
+        box.querySelectorAll('[role=tab]').forEach(function (t) { t.setAttribute('aria-selected', String(t === tab)); });
+        box.querySelectorAll('pre[data-p]').forEach(function (p) { p.hidden = p.dataset.p !== tab.dataset.t; });
+      });
+    });
+  });
+  // コピー: プロンプト（$ / >）のある行があれば、そのコマンドだけを写す
+  document.querySelectorAll('.copy').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      var box = btn.closest('.code,.term');
+      var pre = box.querySelector('pre:not([hidden])');
+      var lines = pre.innerText.split('\n');
+      var cmds = lines.filter(function (l) { return /^(\$|>) /.test(l); });
+      var text = cmds.length
+        ? cmds.map(function (l) { return l.replace(/^(\$|>) /, '').replace(/\s{2,}.*$/, '').trimEnd(); }).join('\n')
+        : pre.innerText;
+      var done = function () { btn.textContent = 'コピーしました'; setTimeout(function () { btn.textContent = 'コピー'; }, 1500); };
+      if (navigator.clipboard) navigator.clipboard.writeText(text).then(done, function () {});
+    });
+  });
+  // 動画の章
+  var v = document.getElementById('guiVideo');
+  var chap = document.querySelectorAll('#chapters button');
+  chap.forEach(function (b) {
+    b.addEventListener('click', function () { v.currentTime = parseFloat(b.dataset.t); v.play(); });
+  });
+  if (v) v.addEventListener('timeupdate', function () {
+    var cur = null;
+    chap.forEach(function (b) { if (v.currentTime >= parseFloat(b.dataset.t) - 0.05) cur = b; });
+    chap.forEach(function (b) { b.classList.toggle('on', b === cur); });
+  });
+  // 目次の現在位置
+  var links = {};
+  document.querySelectorAll('.toc a').forEach(function (a) { links[a.getAttribute('href').slice(1)] = a; });
+  if ('IntersectionObserver' in window) {
+    var io = new IntersectionObserver(function (entries) {
+      entries.forEach(function (e) {
+        if (!e.isIntersecting || !links[e.target.id]) return;
+        Object.keys(links).forEach(function (k) { links[k].classList.toggle('on', k === e.target.id); });
+      });
+    }, { rootMargin: '-30% 0px -60% 0px' });
+    document.querySelectorAll('main section[id]').forEach(function (s) { io.observe(s); });
+  }
+})();
+</script>
+</body>
+</html>
