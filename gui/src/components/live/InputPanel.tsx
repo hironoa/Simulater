@@ -95,7 +95,8 @@ function InputCard({ item, names, current, pending, held, base }: InputCardProps
   const writeDisplay = async (value: string | number, hold?: boolean) => {
     if (!physical) { await live.write(item.name, value, hold); return; }
     // 応答を待つ間に利用者が欄やスライダを動かしていたら、その値を古い書き込みで上書きしない
-    const sentText = latest.current.text, sentSlider = latest.current.slider;
+    // スライダから送ったときは今回の値そのものと比べる（setSlider がまだ描画に反映されていないことがある）
+    const sentText = latest.current.text, sentSlider = typeof value === "number" ? value : latest.current.slider;
     const raw = await live.writePhysical(item.name, value, hold);
     if (raw !== null) {
       const shownValue = physicalInputText(raw, { lsb, offset });
@@ -114,6 +115,7 @@ function InputCard({ item, names, current, pending, held, base }: InputCardProps
     touched.current = true;
     lastSlide.current = performance.now();
     setSlider(v);
+    latest.current.slider = v; // 描画を待たずに、今回送るスライダの値を応答の比較に使う
     const now = performance.now();
     if (trailing.current) clearTimeout(trailing.current);
     if (now - lastSent.current >= 50) {
