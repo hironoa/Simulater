@@ -1,5 +1,6 @@
-import { buildDisplayBlocks, layoutBlocks } from "./displayBlocks";
 import { displaySignalName } from "./displaySignalName";
+import { buildDisplayBlocks, layoutBlocks } from "./displayBlocks";
+import { FONT_MONO, maxTitleWidth, truncateTitle, signalTitle, getTextWidth, leftMargin as getLeftMargin, rightMargin, rightAxisWidth, visibleRightAxes, RIGHT_AXIS_WIDTH, laneLabelTop, laneSplitNumber, signalLineType } from "./laneLabels";
 import * as echarts from "echarts";
 import { addCompareRendering, CompareRendering } from "./compareRendering";
 import { YBreak } from "../types";
@@ -49,6 +50,7 @@ export function buildChartOptions(
   valueDisplayMode: "physical" | "raw" = "physical",
   inactive?: InactiveResult,
   comparison?: CompareRendering,
+  containerWidth = 0,
 ) {
   const rangeCache = new Map<string, (number | null)[]>();
   const rangeData = (sig: string) => {
@@ -67,8 +69,6 @@ export function buildChartOptions(
   const breakLeaders: Record<string, string> = {};
   const displayConversion = (sig: string) =>
     getDisplayConversion(sig, lsbMapping, offsetMapping, valueDisplayMode);
-  const displayUnit = (sig: string) =>
-    getDisplayUnit(sig, unitMapping, modeMapping, valueDisplayMode);
   const fromPhysical = (sig: string, value: number) => {
     if (!isRaw) return value;
     const conv = getConversion(sig, lsbMapping, offsetMapping);
@@ -258,7 +258,6 @@ export function buildChartOptions(
 
   const FONT_SANS =
     '"BIZ UDGothic", "Inter", "Helvetica Neue", Arial, sans-serif';
-  const FONT_MONO = '"BIZ UDGothic", "JetBrains Mono", monospace';
 
   // Build Option
   const option = {
@@ -306,16 +305,10 @@ export function buildChartOptions(
       if (numRight > maxRightAxesNum) maxRightAxesNum = numRight;
     }
   });
-  const rightAxisWidth = 35;
-  const globalRightMargin = 15 + maxRightAxesNum * rightAxisWidth;
-
-  const getTextWidth = (t: string, fontSize: number) => {
-    let w = 0;
-    for (let i = 0; i < t.length; i++) {
-      w += t.charCodeAt(i) > 255 ? fontSize * 1.5 : fontSize * 0.6;
-    }
-    return w;
-  };
+  const globalRightMargin = rightMargin(maxRightAxesNum);
+  const titleWidthLimit = containerWidth > 0 ? maxTitleWidth(containerWidth) : Infinity;
+  const titleFor = (sig: string) => signalTitle(sig, activeSignals, signalSettings[sig],
+    { showAlias, unitMapping, modeMapping, valueDisplayMode });
 
   let maxGridTitleWidths: Record<number, number> = {};
   let overlapSignalCounts: Record<number, number> = {};
@@ -325,9 +318,7 @@ export function buildChartOptions(
       const gridIdx = sigToGridIndex[sig];
       if (gridIdx === undefined) return;
 
-      const displayName = (showAlias && set.alias) || displaySignalName(sig, activeSignals);
-      const unit = displayUnit(sig);
-      const titleText = unit ? `${displayName} [${unit}]` : displayName;
+      const titleText = titleFor(sig);
 
       const textWidth = getTextWidth(titleText, 10);
 
@@ -345,8 +336,11 @@ export function buildChartOptions(
     if (w > globalMaxTitleWidth) globalMaxTitleWidth = w;
   });
 
-  // 5px from edge to title + globalMaxTitleWidth + 5px spacing
-  const leftMargin = showSignalNames ? 5 + globalMaxTitleWidth + 5 : 50;
+  globalMaxTitleWidth = Math.min(globalMaxTitleWidth, titleWidthLimit);
+
+  // 軸の範囲が確定した後で目盛り幅を加える
+  let maxTickCharacters = 0, maxRightTickCharacters = 0;
+  const leftMargin = getLeftMargin(showSignalNames, globalMaxTitleWidth, maxTickCharacters);
 
   gridGroups.forEach((g, gIdx) => {
     option.grid.push({
@@ -380,9 +374,8 @@ export function buildChartOptions(
     if (gridIdx === undefined) return;
 
     const color = set.color;
-    const isExp = sig.toLowerCase().includes("exp") || sig.includes("期待値");
     const conv = displayConversion(sig);
-    const unit = displayUnit(sig);
+    const unit = getDisplayUnit(sig, unitMapping, modeMapping, valueDisplayMode);
 
     let rawDataZOH: (number | null)[] = [];
     let lastRaw: number | null = null;
@@ -573,8 +566,7 @@ export function buildChartOptions(
     }
 
     if (showSignalNames) {
-      const displayName = (showAlias && set.alias) || displaySignalName(sig, activeSignals);
-      let titleText = unit ? `${displayName} [${unit}]` : displayName;
+      const titleText = truncateTitle(titleFor(sig), titleWidthLimit);
 
       if (overlapTitleOffsets[gridIdx] === undefined) {
         overlapTitleOffsets[gridIdx] = 0;
@@ -584,15 +576,8 @@ export function buildChartOptions(
       const currentIndex = overlapTitleOffsets[gridIdx];
       overlapTitleOffsets[gridIdx] = currentIndex + 1;
 
-      const LABEL_HEIGHT_PX = 14;
-      const LABEL_GAP_PX = 4;
-      const gridCenterYPx =
-        (containerHeight * (set.top + set.height / 2)) / 100;
-      const totalLabelsHeightPx =
-        totalInGrid * LABEL_HEIGHT_PX + (totalInGrid - 1) * LABEL_GAP_PX;
-      const startYPx = gridCenterYPx - totalLabelsHeightPx / 2;
-      const titleYPx =
-        startYPx + currentIndex * (LABEL_HEIGHT_PX + LABEL_GAP_PX);
+      const titleYPx = laneLabelTop(containerHeight * set.top / 100,
+        containerHeight * set.height / 100, totalInGrid, currentIndex);
 
       option.title.push({
         id: sig,
@@ -605,6 +590,7 @@ export function buildChartOptions(
         padding: 0,
         textBaseline: "top",
         textStyle: {
+          ...(containerWidth > 0 ? { width: titleWidthLimit, overflow: "truncate" as const, ellipsis: "…" } : {}),
           fontSize: 10,
           color: color,
           fontWeight: "bold",
@@ -615,10 +601,7 @@ export function buildChartOptions(
     }
 
     const laneHeightPx = containerHeight * (set.height / 100);
-    let splitNum = 5;
-    if (laneHeightPx < 30) splitNum = 1;
-    else if (laneHeightPx < 60) splitNum = 2;
-    else if (laneHeightPx < 100) splitNum = 3;
+    const splitNum = laneSplitNumber(laneHeightPx);
 
     let myIdxInGrid = Object.keys(sigToGridIndex)
       .filter((k) => sigToGridIndex[k] === gridIdx)
@@ -634,7 +617,7 @@ export function buildChartOptions(
       gridIndex: gridIdx,
       type: "value",
       position: isFirstInGrid ? "left" : "right",
-      offset: isFirstInGrid ? 0 : (myIdxInGrid - 1) * rightAxisWidth,
+      offset: isFirstInGrid ? 0 : (myIdxInGrid - 1) * RIGHT_AXIS_WIDTH,
       show: !hideYAxis,
       splitLine: { show: false },
       axisLine: {
@@ -672,6 +655,15 @@ export function buildChartOptions(
       yAxisConfig.breakArea = { show: true, zigzagZ: 100 };
     }
 
+    if (isFirstInGrid) {
+      maxTickCharacters = Math.max(maxTickCharacters,
+        String(Math.round(Number(yAxisConfig.min))).length,
+        String(Math.round(Number(yAxisConfig.max))).length);
+    } else {
+      maxRightTickCharacters = Math.max(maxRightTickCharacters,
+        String(Math.round(Number(yAxisConfig.min))).length,
+        String(Math.round(Number(yAxisConfig.max))).length);
+    }
     option.yAxis.push(yAxisConfig);
 
     if (customStateData.length > 0) {
@@ -766,7 +758,7 @@ export function buildChartOptions(
     }
 
     const baseWidth = set.lineWidth ?? 1.5;
-    const baseType = set.lineType ?? (isExp ? "dashed" : "solid");
+    const baseType = signalLineType(sig, set.lineType);
 
     if (hiddenRanges(sig).length) {
       option.visualMap.push({
@@ -1089,5 +1081,22 @@ export function buildChartOptions(
     },
   ];
 
+  const axisWidth = rightAxisWidth(maxRightTickCharacters);
+  const rightAxes = visibleRightAxes(maxRightAxesNum, axisWidth, containerWidth);
+  option.grid.forEach(grid => {
+    grid.left = getLeftMargin(showSignalNames, globalMaxTitleWidth, maxTickCharacters);
+    grid.right = rightMargin(rightAxes, maxRightTickCharacters);
+  });
+  option.yAxis.forEach(axis => {
+    if (axis.position === "right") {
+      const rightIndex = Number(axis.offset ?? 0) / RIGHT_AXIS_WIDTH;
+      axis.offset = rightIndex * axisWidth;
+      if (rightIndex >= rightAxes) {
+        axis.show = false;
+        axis.axisLine = { ...axis.axisLine, show: false };
+        axis.axisLabel = { ...axis.axisLabel, show: false };
+      }
+    }
+  });
   return option;
 }

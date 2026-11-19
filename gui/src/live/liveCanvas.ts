@@ -1,4 +1,7 @@
-import type { AppState } from "../types";
+import { FONT_MONO, RIGHT_AXIS_WIDTH, laneLabelTop, laneSplitNumber, signalLineType } from "../utils/laneLabels";
+import { fitLabel } from "../utils/fitLabel";
+import { getDarkerColor } from "../utils/helpers";
+import type { AppState, SignalSetting } from "../types";
 import { getStateColor, type StateMapping } from "../utils/stateNames";
 import type { LiveRecord } from "./liveRecord";
 
@@ -21,6 +24,7 @@ export interface LiveCanvasSeries {
   yMin: number | null;
   yMax: number | null;
   lineWidth: number;
+  lineType?: SignalSetting["lineType"];
   modeMapping?: StateMapping;
 }
 
@@ -29,7 +33,7 @@ export interface LiveCanvasLane {
   height: number;
   series: LiveCanvasSeries[];
   /**
-   * 重ね表示で縦軸をそろえるか（グループの syncRange）。偽なら系列ごとに自分の範囲で描き、目盛りは先頭の系列の範囲で描く。
+   * 重ね表示で縦軸をそろえるか（グループの syncRange）。偽なら系列ごとに自分の範囲で描き、各系列の目盛りを左右に描く。
    * 省略時は真（共通の範囲）。止まっているときの表示（chartOptionsBuilder）と同じ規則。
    */
   syncRange?: boolean;
@@ -62,6 +66,11 @@ export function liveLaneRange(record: LiveRecord, lane: LiveCanvasLane, start: n
 }
 
 export interface LiveCanvasStyle {
+  dark?: boolean;
+  /** 右軸1本の幅。省略時は35px。 */
+  rightAxisWidth?: number;
+  /** 描く右軸の最大本数。省略時は全軸。波形の系列数は制限しない。 */
+  rightAxes?: number;
   stateOpacity?: number;
   axisColor: string;
   splitColor: string;
@@ -72,7 +81,7 @@ export interface LiveCanvasStyle {
 
 /** 描画に必要な Canvas 2D の機能だけ（テストで差し替えられるようにする）。 */
 export type LiveCanvasContext = Pick<CanvasRenderingContext2D,
-  "fillRect" | "globalAlpha" | "beginPath" | "moveTo" | "lineTo" | "stroke" | "fillText" | "measureText" | "clearRect" | "save" | "restore" | "rect" | "clip" | "setTransform"
+  "strokeText" | "setLineDash" | "fillRect" | "globalAlpha" | "beginPath" | "moveTo" | "lineTo" | "stroke" | "fillText" | "measureText" | "clearRect" | "save" | "restore" | "rect" | "clip" | "setTransform"
 > & {
   strokeStyle: string | CanvasGradient | CanvasPattern;
   fillStyle: string | CanvasGradient | CanvasPattern;
@@ -108,9 +117,9 @@ export function niceTicks(min: number, max: number, target: number): number[] {
 
 /**
  * 目盛りの値の表記。step（目盛りの間隔）が分かれば、隣の目盛りと区別できる桁数まで出す
- * （小数 6 桁で切ると、1e-6 未満の間隔の目盛りがすべて同じ表記になる）。大きな値は桁区切りを付ける。
+ * （小数 6 桁で切ると、1e-6 未満の間隔の目盛りがすべて同じ表記になる）。既定では大きな値に桁区切りを付ける。
  */
-export function formatTick(v: number, step?: number): string {
+export function formatTick(v: number, step?: number, useGrouping = true): string {
   const r = v;
   const a = Math.abs(r);
   // 間隔から決まる小数の桁数（間隔 0.5 → 1 桁、0.0000002 → 7 桁）
@@ -120,13 +129,13 @@ export function formatTick(v: number, step?: number): string {
     const sig = step && step > 0 && a > 0 ? Math.min(15, Math.max(1, Math.ceil(Math.log10(a / step) + 1e-9) + 1)) : 4;
     return r.toExponential(sig - 1);
   }
-  return r.toLocaleString("en-US", { maximumFractionDigits: Math.min(20, digits) });
+  return r.toLocaleString("en-US", { maximumFractionDigits: Math.min(20, digits), useGrouping });
 }
 
 /** 目盛りの並びをまとめて表記にする（間隔は並びから取る）。 */
-export function formatTicks(ticks: readonly number[]): string[] {
+export function formatTicks(ticks: readonly number[], useGrouping = true): string[] {
   const step = ticks.length > 1 ? Math.abs(ticks[1] - ticks[0]) : undefined;
-  return ticks.map((t) => formatTick(t, step));
+  return ticks.map((t) => formatTick(t, step, useGrouping));
 }
 
 /** 縦軸の範囲。固定の指定がなければ、窓の中の値に少し余白を付ける。値がなければ null。 */
@@ -220,7 +229,7 @@ export function traceStepLine(
   return segs;
 }
 
-export interface LiveDrawResult { points: number; xMin: number; xMax: number }
+export interface LiveDrawResult { points: number; xMin: number; xMax: number; maxTickCharacters: number; maxRightTickCharacters: number }
 
 /**
  * 記録の直近 n 点を描く。width / height は CSS px、dpr は devicePixelRatio。
@@ -246,7 +255,7 @@ export function drawLive(
   ctx.lineJoin = "round";
 
   const xTicks = niceTicks(xMin, xMax, Math.max(2, Math.floor(plotW / 110)));
-  let points = 0;
+  let points = 0, maxTickCharacters = 0, maxRightTickCharacters = 0;
 
   // syncGroup の範囲は、まとまりごとに 1 フレームで 1 回だけ求める
   const groupRanges = new Map<string, { lo: number; hi: number } | null>();
@@ -266,45 +275,60 @@ export function drawLive(
       return (p: number) => bottom - ((p - lo) / span) * lane.height;
     };
     const yPhys = toY(range);
-    const lo = range ? range.lo : 0, hi = range ? range.hi : 1;
 
-    // 枠と目盛り線
-    ctx.strokeStyle = style.splitColor;
+    // 範囲は軸と波形で使い回し、同期しない系列も 1 回だけ走査する。
+    const ranges = lane.series.map((series, k) => perSeries && k > 0
+      ? liveSeriesRange(record, series, start, end) : range);
+    ctx.setLineDash([]);
+    ctx.globalAlpha = 1;
+    ctx.strokeStyle = style.axisColor;
     ctx.lineWidth = 1;
     ctx.beginPath();
-    for (const t of xTicks) {
-      const x = Math.round(plotL + ((t - xMin) / xSpan) * plotW) + 0.5;
-      ctx.moveTo(x, top); ctx.lineTo(x, bottom);
-    }
-    const yTicks = range ? niceTicks(lo, hi, lane.height >= 60 ? 3 : 2) : [];
-    for (const t of yTicks) {
-      const y = Math.round(yPhys(t)) + 0.5;
-      ctx.moveTo(plotL, y); ctx.lineTo(plotR, y);
-    }
-    ctx.moveTo(plotL + 0.5, top); ctx.lineTo(plotL + 0.5, bottom);
     ctx.moveTo(plotL, Math.round(bottom) + 0.5); ctx.lineTo(plotR, Math.round(bottom) + 0.5);
     ctx.stroke();
 
-    // 縦軸の値
-    ctx.fillStyle = style.axisColor;
-    ctx.font = "10px sans-serif";
-    ctx.textAlign = "right";
-    ctx.textBaseline = "middle";
-    let tickW = 0;
-    const yLabels = formatTicks(yTicks);
-    yTicks.forEach((t, k) => {
-      tickW = Math.max(tickW, ctx.measureText(yLabels[k]).width);
-      ctx.fillText(yLabels[k], plotL - 5, yPhys(t));
+    lane.series.forEach((series, k) => {
+      if (k > 0 && (!perSeries || k - 1 >= (style.rightAxes ?? Infinity))) return;
+      const axisX = k === 0 ? plotL : plotR + (k - 1) * (style.rightAxisWidth ?? RIGHT_AXIS_WIDTH);
+      ctx.strokeStyle = series.color;
+      ctx.lineWidth = 2;
+      ctx.globalAlpha = 0.4;
+      ctx.beginPath();
+      ctx.moveTo(axisX, top); ctx.lineTo(axisX, bottom);
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+      const own = ranges[k];
+      const ticks = own ? niceTicks(own.lo, own.hi, laneSplitNumber(lane.height)) : [];
+      const labels = formatTicks(ticks, false);
+      let axisCharacters = own ? Math.max(
+        String(Math.round(own.lo)).length, String(Math.round(own.hi)).length) : 0;
+      const yAxis = toY(own);
+      ctx.fillStyle = series.color;
+      ctx.font = `10px ${FONT_MONO}`;
+      ctx.textAlign = k === 0 ? "right" : "left";
+      ctx.textBaseline = "middle";
+      ticks.forEach((t, i) => {
+        axisCharacters = Math.max(axisCharacters, labels[i].length);
+        ctx.fillText(labels[i], axisX + (k === 0 ? -4 : 4), yAxis(t));
+      });
+      if (k === 0) maxTickCharacters = Math.max(maxTickCharacters, axisCharacters);
+      else maxRightTickCharacters = Math.max(maxRightTickCharacters, axisCharacters);
     });
 
-    // レーン名（値の左。重ならない幅に切り詰める）
-    ctx.font = "bold 11px sans-serif";
-    const labelRight = plotL - 5 - tickW - 8;
-    const labels = lane.series.slice(0, Math.floor(lane.height / 12));
-    labels.forEach((series, i) => {
+    // 信号名の束を中央に置く。停止時と同じ幅の余白に全文を描く。
+    ctx.font = "bold 10px sans-serif";
+    ctx.textAlign = "left";
+    ctx.textBaseline = "top";
+    lane.series.forEach((series, i) => {
+      if (!series.label) return;
+      const y = laneLabelTop(top, lane.height, lane.series.length, i);
       ctx.fillStyle = series.color;
-      ctx.fillText(fitText(ctx, series.label, Math.max(20, labelRight - 4)), labelRight,
-        (top + bottom) / 2 + (i - (labels.length - 1) / 2) * 12);
+      if (!style.dark) {
+        ctx.strokeStyle = "#ffffff";
+        ctx.lineWidth = 2;
+        ctx.strokeText(series.label, 5, y);
+      }
+      ctx.fillText(series.label, 5, y);
     });
 
     // 横軸の値（いちばん下のレーンだけ）
@@ -345,9 +369,23 @@ export function drawLive(
           ctx.globalAlpha = style.stateOpacity ?? 0.15;
           ctx.fillRect(left, top, bandWidth, lane.height);
           ctx.globalAlpha = 1;
-          if (showMode === "full" && ctx.measureText(name).width <= bandWidth - 8) {
-            ctx.fillStyle = style.axisColor;
-            ctx.fillText(name, (left + right) / 2, (top + bottom) / 2);
+          const fitted = showMode === "full" ? fitLabel(name, bandWidth - 8, lane.height - 4) : null;
+          if (fitted) {
+            const color = getStateColor(value);
+            ctx.fillStyle = style.dark ? color : getDarkerColor(color, 0.6);
+            ctx.font = `600 ${fitted.fontSize}px ${FONT_MONO}`;
+            ctx.textBaseline = "top";
+            const lines = fitted.text.split("\n");
+            const textTop = (top + bottom - lines.length * fitted.lineHeight) / 2;
+            lines.forEach((line, k) => {
+              const y = textTop + k * fitted.lineHeight;
+              if (!style.dark) {
+                ctx.strokeStyle = "#ffffff";
+                ctx.lineWidth = 2;
+                ctx.strokeText(line, (left + right) / 2, y);
+              }
+              ctx.fillText(line, (left + right) / 2, y);
+            });
           }
         }
         i = j;
@@ -358,7 +396,7 @@ export function drawLive(
     // 波形
     for (const [k, series] of lane.series.entries()) {
       const col = record.column(series.sig);
-      const own = perSeries && k > 0 ? liveSeriesRange(record, series, start, end) : range;
+      const own = ranges[k];
       if (!col || !own || count === 0) continue;
       const { lsb, offset } = series.conv;
       const ySeries = own === range ? yPhys : toY(own);
@@ -369,6 +407,9 @@ export function drawLive(
       ctx.clip();
       ctx.strokeStyle = series.color;
       ctx.lineWidth = series.lineWidth;
+      const lineType = signalLineType(series.sig, series.lineType);
+      ctx.setLineDash((lineType === "dashed" ? [5, 5] : lineType === "dotted" ? [1, 3] : [])
+        .map(length => length * series.lineWidth));
       ctx.beginPath();
       traceStepLine(ctx, steps, col, start, end, xOf, yOf);
       ctx.stroke();
@@ -376,5 +417,5 @@ export function drawLive(
       points += count;
     }
   });
-  return { points, xMin, xMax };
+  return { points, xMin, xMax, maxTickCharacters, maxRightTickCharacters };
 }
