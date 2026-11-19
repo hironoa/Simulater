@@ -196,3 +196,33 @@ describe("仕向 API", () => {
     expect(parseState({ inits, dropped: [{ name: "a", kind: "init", message: "なし" }] })).toMatchObject({ inits, dropped: [{ name: "a", kind: "init", message: "なし" }] });
   });
 });
+
+describe("信号情報 API", () => {
+  it("GET のテキスト・未作成・読み取りエラーを保持する", async () => {
+    for (const result of [
+      { path: "signals.yaml", exists: false, text: null, error: "" },
+      { path: "signals.yaml", exists: true, text: '状態: "停止"\n\tC:\\signals', error: "" },
+      { path: "signals.yaml", exists: true, text: null, error: "信号情報ファイルを読めません" },
+    ]) {
+      const f = fakeFetch(() => ({ body: result }));
+      expect(await createApi("", f).getSignals()).toEqual(result);
+      expect(f.mock.calls[0]).toEqual(["/api/signals", undefined]);
+    }
+  });
+  it("YAML と空本文を JSON 化せずそのまま送る", async () => {
+    const f = fakeFetch(() => ({ body: { ok: true, path: "signals.yaml" } }));
+    const api = createApi("", f);
+    for (const text of ['状態: "停止"\n\tC:\\signals', ""]) {
+      expect(await api.saveSignals(text)).toEqual({ ok: true, path: "signals.yaml" });
+      expect(f.mock.calls.at(-1)).toEqual(["/api/signals", {
+        method: "POST", headers: { "Content-Type": "text/yaml; charset=utf-8" }, body: text,
+      }]);
+    }
+  });
+  it("保存の 400・500 エラーを保持する", async () => {
+    for (const [status, error] of [[400, "信号情報はテキストで送ってください"], [500, "信号情報ファイルを保存できません"]] as const) {
+      const api = createApi("", fakeFetch(() => ({ status, body: { error } })));
+      await expect(api.saveSignals("a\0b")).rejects.toMatchObject({ status, message: error });
+    }
+  });
+});

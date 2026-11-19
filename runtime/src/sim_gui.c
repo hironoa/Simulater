@@ -56,6 +56,7 @@ typedef struct {
     int *init_every;
     int ninits;
     int init_stale;          /* 実行後に once の一覧が変わり、リセット待ち */
+    const char *signals_path;
     const char *variants_path;
     pend_t *pend;
     int npend;
@@ -1115,6 +1116,55 @@ static void api_init(sim_sock sock, req_t *r)
     sim_buf_free(&errors); sj_free(doc);
 }
 
+/* 固定保存先へ一時ファイル経由で書く。呼び出し元で G.mu を保持する。 */
+static int save_file_atomic(const char *path, const void *data, size_t len)
+{
+    char *tmp = sim_xmalloc(strlen(path) + 5);
+    sprintf(tmp, "%s.tmp", path);
+    int rc = sim_write_file(tmp, data, len);
+    if (!rc) {
+#ifdef _WIN32
+        wchar_t *from = sim_win_wide(tmp), *to = sim_win_wide(path);
+        rc = (!from || !to || !MoveFileExW(from, to, MOVEFILE_REPLACE_EXISTING)) ? -1 : 0;
+        free(from); free(to);
+#else
+        rc = rename(tmp, path);
+#endif
+    }
+    if (rc) sim_remove_file(tmp);
+    free(tmp);
+    return rc;
+}
+
+static void api_signals(sim_sock sock, req_t *r)
+{
+    sim_buf out;
+    char *text = NULL;
+    sim_buf_init(&out);
+    sim_mutex_lock(G.mu);
+    if (!strcmp(r->method, "POST")) {
+        if (memchr(r->body, 0, r->body_len)) {
+            sim_mutex_unlock(G.mu); send_error(sock, 400, "信号情報はテキストで送ってください"); return;
+        }
+        if (save_file_atomic(G.signals_path, r->body, r->body_len)) {
+            sim_mutex_unlock(G.mu); send_error(sock, 500, "信号情報ファイルを保存できません"); return;
+        }
+        sim_buf_adds(&out, "{\"ok\":true,\"path\":"); sim_buf_json_str(&out, G.signals_path); sim_buf_addc(&out, '}');
+    } else {
+        size_t len = 0;
+        errno = 0;
+        text = sim_read_file(G.signals_path, &len);
+        int exists = text != NULL || errno != ENOENT;
+        sim_buf_adds(&out, "{\"path\":"); sim_buf_json_str(&out, G.signals_path);
+        sim_buf_printf(&out, ",\"exists\":%s,\"text\":", exists ? "true" : "false");
+        if (text) sim_buf_json_strn(&out, text, len); else sim_buf_adds(&out, "null");
+        sim_buf_adds(&out, ",\"error\":");
+        sim_buf_json_str(&out, !text && exists ? "信号情報ファイルを読めません" : ""); sim_buf_addc(&out, '}');
+    }
+    sim_mutex_unlock(G.mu);
+    send_json(sock, 200, &out); sim_buf_free(&out); free(text);
+}
+
 static void api_variants(sim_sock sock, req_t *r)
 {
     sim_buf out;
@@ -1129,20 +1179,9 @@ static void api_variants(sim_sock sock, req_t *r)
         if (!doc || doc->type != SJ_OBJ || !sj_get(doc, "variants") || sj_get(doc, "variants")->type != SJ_ARR) {
             sj_free(doc); sim_mutex_unlock(G.mu); send_error(sock, 400, "variants 配列を持つ JSON オブジェクトが必要です"); return;
         }
-        char *tmp = sim_xmalloc(strlen(G.variants_path) + 40);
-        sprintf(tmp, "%s.tmp", G.variants_path);
-        int rc = sim_write_file(tmp, r->body, r->body_len);
-        if (!rc) {
-#ifdef _WIN32
-            wchar_t *from = sim_win_wide(tmp), *to = sim_win_wide(G.variants_path);
-            rc = (!from || !to || !MoveFileExW(from, to, MOVEFILE_REPLACE_EXISTING)) ? -1 : 0;
-            free(from); free(to);
-#else
-            rc = rename(tmp, G.variants_path);
-#endif
+        if (save_file_atomic(G.variants_path, r->body, r->body_len)) {
+            sj_free(doc); sim_mutex_unlock(G.mu); send_error(sock, 500, "仕向ファイルを保存できません"); return;
         }
-        if (rc) { sim_remove_file(tmp); free(tmp); sj_free(doc); sim_mutex_unlock(G.mu); send_error(sock, 500, "仕向ファイルを保存できません"); return; }
-        free(tmp);
         sim_buf_adds(&out, "{\"ok\":true,\"path\":"); sim_buf_json_str(&out, G.variants_path); sim_buf_addc(&out, '}');
     } else {
         errno = 0;
@@ -1894,6 +1933,7 @@ static void handle_conn(void *arg)
     else if (strcmp(r.method, "POST") == 0 && strcmp(r.path, "/api/control") == 0) api_control(s, &r);
     else if (strcmp(r.method, "POST") == 0 && strcmp(r.path, "/api/watch") == 0) api_watch(s, &r);
     else if ((!strcmp(r.method, "GET") || !strcmp(r.method, "POST")) && !strcmp(r.path, "/api/variants")) api_variants(s, &r);
+    else if ((!strcmp(r.method, "GET") || !strcmp(r.method, "POST")) && !strcmp(r.path, "/api/signals")) api_signals(s, &r);
     else if (!strcmp(r.method, "POST") && !strcmp(r.path, "/api/init")) api_init(s, &r);
     else if (strcmp(r.method, "POST") == 0 && strcmp(r.path, "/api/write") == 0) api_write(s, &r);
     else if (strcmp(r.method, "POST") == 0 && strcmp(r.path, "/api/load-csv") == 0) api_load_csv(s, &r);
@@ -1914,6 +1954,7 @@ int sim_gui_run(sim_ctx *c, const sim_gui_opts *o)
     sim_sock ls;
     memset(&G, 0, sizeof G);
     G.c = c;
+    G.signals_path = o->signals_path ? o->signals_path : "sim_gui_signals.yaml";
     G.variants_path = o->variants_path ? o->variants_path : "sim_gui_variants.json";
     G.b = sim_ctx_backend(c);
     G.mu = sim_mutex_new();

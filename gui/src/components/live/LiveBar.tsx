@@ -1,3 +1,4 @@
+import { useSignalsPersistStore } from "../../store/signalsPersist";
 import { useEffect, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { Play, Pause, StepForward, RotateCcw, Download, Upload, AlertTriangle, PlugZap, Unplug } from "lucide-react";
@@ -17,6 +18,7 @@ const field = "px-1.5 py-0.5 text-xs rounded border border-gray-300 dark:border-
 
 /** 接続バー: 実行/一時停止/ステップ/リセット、速度、周期、現在ステップ、オーバーラン、対象関数、CSV。 */
 export function LiveBar() {
+  const signalsError = useSignalsPersistStore(s => s.error);
   const live = liveController();
   const { sim, connected, functions, windowSize, maxSamples } = useLiveStore(useShallow((s) => ({
     sim: s.sim, connected: s.connected, functions: s.info?.functions ?? [], windowSize: s.windowSize, maxSamples: s.maxSamples,
@@ -107,6 +109,8 @@ export function LiveBar() {
           <AlertTriangle size={13} /> オーバーラン
         </span>
       )}
+
+      {signalsError && <span role="alert" className="text-red-700 dark:text-red-300" title={signalsError}>{signalsError}</span>}
 
       {sim.error && (
         <span role="alert" className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-red-100 dark:bg-red-900/50 text-red-700 dark:text-red-300 font-bold max-w-[420px] truncate"

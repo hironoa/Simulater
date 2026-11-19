@@ -614,7 +614,7 @@ if ! command -v curl > /dev/null 2>&1; then
 else
     PORT=$((20000 + $$ % 20000))
     mkdir -p "$WORK/nohtml"
-    printf 'defines = %s/defines/contracts/type_contract.h\ndefines_near_base = 0\ngui_variants = variants.json\n' "$T" > "$WORK/gui.cfg"
+    printf 'defines = %s/defines/contracts/type_contract.h\ndefines_near_base = 0\ngui_variants = variants.json\ngui_signals = signals.yaml\n' "$T" > "$WORK/gui.cfg"
     "$SIM" gui --no-browser --cfg "$WORK/gui.cfg" --port "$PORT" --period-ms 2 --html-dir "$WORK/nohtml" > "$WORK/gui.log" 2>&1 &
     GUI_PID=$!
     U="http://127.0.0.1:$PORT"
@@ -641,6 +641,22 @@ else
     check "仕向の保存先は cfg からの相対" contains "$WORK/variants.out" "$WORK/variants.json"
     check "保存した仕向を読み直す" contains "$WORK/variants.out" '"selected":"国内"'
     check "仕向の値の表記を保つ" contains "$WORK/variants.out" '"value":"0x20"'
+
+    curl -s "$U/api/signals" > "$WORK/signals.out"
+    check "信号情報ファイルなしは exists:false, text:null" contains "$WORK/signals.out" '"exists":false,"text":null'
+    CODE=$(post signals.yaml signals_save.out /api/signals)
+    check "信号情報ファイル保存は 200" test "$CODE" = 200
+    check "信号情報の保存先は cfg からの相対" test -f "$WORK/signals.yaml"
+    check "信号情報の保存はバイト列を保つ" cmp -s "$T/gui/signals.yaml" "$WORK/signals.yaml"
+    curl -s "$U/api/signals" > "$WORK/signals.out"
+    check "信号情報の日本語を読み直す" contains "$WORK/signals.out" '停止'
+    check "信号情報の引用符をエスケープ" contains "$WORK/signals.out" '\"quoted\"'
+    check "信号情報の改行をエスケープ" contains "$WORK/signals.out" '\n'
+    check "信号情報のタブをエスケープ" contains "$WORK/signals.out" '\t'
+    check "信号情報のバックスラッシュをエスケープ" contains "$WORK/signals.out" '\\'
+    printf 'a\0b' > "$WORK/signals_nul.bin"
+    CODE=$(curl -s -o "$WORK/signals_nul.out" -w '%{http_code}' -X POST --data-binary "@$WORK/signals_nul.bin" "$U/api/signals")
+    check "NUL を含む信号情報は 400" test "$CODE" = 400
 
     CODE=$(post init_values.json init.out /api/init)
     check "初期化一覧を設定" test "$CODE" = 200

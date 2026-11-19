@@ -673,6 +673,8 @@ RL78 の命令は再現しない。目的は速さで、解釈実行・変換方
 | `POST /api/watch` | `{"names":["変数",...]}` 監視する変数の一覧を置き換える。解決できなかった名前は `{"errors":[{"name","message"}]}` で返す |
 | `GET /api/variants` | `{"path","exists":bool,"doc":JSON または null,"error"}`。ファイルなしは exists:false。壊れた JSON は exists:true, doc:null と理由を返す（HTTP 200） |
 | `POST /api/variants` | variants 配列を持つ JSON オブジェクトをサーバの固定保存先に一時ファイル経由で保存。JSON・オブジェクト・配列の違反は 400。応答は `{"ok":true,"path"}`。既定は sim.cfg 基準の sim_gui_variants.json、gui_variants 設定も同じ基準で解決 |
+| `GET /api/signals` | `{"path","exists":bool,"text":文字列 または null,"error"}`。ファイルなしは exists:false、読めない場合は exists:true, text:null と理由を返す（HTTP 200） |
+| `POST /api/signals` | 生のテキストを固定保存先へ一時ファイル経由で保存。空本文は可、NUL を含む本文は 400、保存失敗は 500。成功は `{"ok":true,"path"}`。Content-Type は問わない |
 | `POST /api/init` | `{"values":[{"name","value":文字列,"mode":"once"または"every"}]}` で初期化一覧を置換。空で解除。write と共通の検査を行い、1 件でも不正なら何も変えず 400 `{"errors":[{"name","message"}]}`。要リセット中も 400 |
 | `POST /api/write` | `{"name":"変数","value":数値または文字列,"hold":bool}` 要リセット中は単発・固定・解除とも 400（直前の失敗理由とリセットの案内）。次の周期の開始時に書き込む（止まっているときもすぐには書かない）。`hold` が偽なら単発（反映待ち。同じ名前に書き直すと置き換わる）、真なら毎周期書き続ける（入力の固定。同じ名前の反映待ちは捨てる）。`{"name","release":true}` で固定を解除し、その名前の反映待ちも捨てる。`value` の整数は書いた表記のまま読む（2^53 を超える整数を double に丸めない）。名前が解決できない・書き込めない、型に収まらない、`$` の値が 0 以上の整数でない、要素数を超える、改行を含む、などの値はこの時点で 400（ポインタの先のようにその時のメモリで決まるものは、書くときに `state` の `error` になる） |
 | `GET /api/stream` | Server-Sent Events。下記 |
@@ -733,6 +735,14 @@ RL78 の命令は再現しない。目的は速さで、解釈実行・変換方
 仕向のファイル（`GET`/`POST /api/variants`）は `{"version":1,"selected":名前,"variants":[{"name","values":[{"name","value","mode"}]}]}`。
 保存先はサーバが起動時に決めた 1 か所だけで（sim.cfg の `gui_variants`、既定は sim.cfg と同じフォルダの `sim_gui_variants.json`）、
 要求からパスを受け取らない。一時ファイルに書いてから置き換える。中身の検査は `variants` が配列であることまでで、残りは GUI が読むときに捨てる。
+
+信号情報ファイル（`GET`/`POST /api/signals`）も起動時に決めた 1 か所に保存する。
+`sim.cfg` の `gui_signals` で指定し、相対パスは `sim.cfg` のフォルダから解決する。
+既定は同じフォルダの `sim_gui_signals.yaml`。要求からパスは受け取らない。
+中身は YAML の生テキストで、サーバは解析せず、GUI が信号の意味（lsb・offset・単位・状態名）と見た目（グループ・高さ・色）を解釈する。
+GET は日本語・改行・タブ・引用符・バックスラッシュを JSON 文字列として返し、POST は本文をそのまま保存する。
+ファイルがなければ `exists:false,text:null,error:""`、読めなければ `exists:true,text:null,error:"信号情報ファイルを読めません"`。
+保存は仕向と共通の処理で `<path>.tmp` を書いてから置き換え、NUL を含む本文は拒否する。
 
 ### 記録と CSV 保存
 

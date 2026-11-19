@@ -227,6 +227,8 @@ static int cmd_gui(int argc, char **argv)
     sim_cfg_load(&cfg, cfgpath, err, sizeof err);
     const char *path = sim_cfg_get(&cfg, "gui_variants");
     o.variants_path = sim_cfg_path(&cfg, path ? path : "sim_gui_variants.json");
+    path = sim_cfg_get(&cfg, "gui_signals");
+    o.signals_path = sim_cfg_path(&cfg, path ? path : "sim_gui_signals.yaml");
     sim_cfg_free(&cfg); free(cfgpath);
     return sim_gui_run(c, &o);
 }

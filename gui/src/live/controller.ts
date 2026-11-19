@@ -1,3 +1,4 @@
+import { createSignalsPersistence } from "../store/signalsPersist";
 import { sanitizeVariants, type InitValue } from "./variants";
 import { setVariantsApplyError, useVariantsStore } from "./variantsStore";
 // ライブモードの制御。サーバ検出、SSE の取り込み、監視一覧・入力の同期、構成の保存をまとめて持つ。
@@ -293,11 +294,15 @@ export function createLiveController(deps: LiveControllerDeps = {}) {
     error: (m) => console.warn("[sim stream]", m),
   };
 
+  let signalsPersistence: ReturnType<typeof createSignalsPersistence> | undefined;
   async function start(): Promise<boolean> {
+    signalsPersistence?.stop();
+    signalsPersistence = createSignalsPersistence(api);
     set({ mode: "detecting" });
     const info = await detectServer(api, deps.protocol);
     if (!info) {
       set({ mode: "offline" });
+      await signalsPersistence.start("offline");
       return false;
     }
     let initValues: InitValue[] = [];
@@ -308,6 +313,7 @@ export function createLiveController(deps: LiveControllerDeps = {}) {
       useVariantsStore.setState({ doc, saved: JSON.stringify(doc), path: result.path, error, loaded: true });
       if (!error) initValues = doc.variants.find(v => v.name === doc.selected)?.values ?? [];
     } catch (e) { useVariantsStore.setState({ loaded: true, error: (e as Error).message }); }
+    await signalsPersistence.start("live");
     // 選択なし・取得失敗でも、サーバに残った仕向の初期化を解除する。
     useVariantsStore.setState({ errors: {} });
     try { await api.setInit(initValues); }
@@ -359,6 +365,7 @@ export function createLiveController(deps: LiveControllerDeps = {}) {
   }
 
   function stop() {
+    signalsPersistence?.stop();
     closeStream?.();
     closeStream = null;
     if (flushTimer) clearInterval(flushTimer);

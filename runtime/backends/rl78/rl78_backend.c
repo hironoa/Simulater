@@ -1194,7 +1194,7 @@ static void check_map(be_t *z)
 }
 
 static const char *const KNOWN_KEYS[] = {
-    "gui_variants",
+    "gui_variants", "gui_signals",
     "var", "varfile", "defines", "defines_recursive", "defines_exclude", "defines_near_base", "defines_guess_bits", "ctype",
     "defines_cond", "defines_auto", "cdef", "cundef", "mtpj", "mtpj_mode", "defines_scope", "defines_include",
     "abs", "abi", "map", "core", "mdu", "mirror", "rom_size", "ram", "heap", "sentinel", "call_sp", "init_end", "func",

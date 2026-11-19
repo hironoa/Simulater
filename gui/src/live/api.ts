@@ -1,6 +1,13 @@
 import type { InitValue, VariantsDoc, VariantsResult } from "./variants";
 // `sim gui` の HTTP API クライアント（docs/DESIGN.md「5. GUI モード」）。
 
+export interface SignalsResult {
+  path: string;
+  exists: boolean;
+  text: string | null;
+  error: string;
+}
+
 export interface SimState {
   running: boolean;
   /** 失敗後、ターゲットを初期状態に戻すまで実行・書き込みを拒否する */
@@ -203,6 +210,12 @@ export function createApi(base = "", fetchImpl: FetchLike = (input, init) => fet
   return {
     getVariants: () => json<VariantsResult>("/api/variants"),
     saveVariants: (doc: VariantsDoc) => post<{ ok: boolean; path: string }>("/api/variants", doc),
+    getSignals: () => json<SignalsResult>("/api/signals"),
+    saveSignals: (text: string) => json<{ ok: boolean; path: string }>("/api/signals", {
+      method: "POST",
+      headers: { "Content-Type": "text/yaml; charset=utf-8" },
+      body: text,
+    }),
     setInit: (values: InitValue[]) => post<{ ok: boolean }>("/api/init", { values }),
     info: (signal?: AbortSignal) => json<SimInfo>("/api/info", { signal }),
     symbols: (q: string, limit = 200, signal?: AbortSignal) =>
