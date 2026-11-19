@@ -201,13 +201,21 @@ function InputCard({ item, names, current, pending, held, base }: InputCardProps
 
       {item.holdPending && item.hold && held === undefined && <span className="text-[11px] text-amber-700 dark:text-amber-300">値を入れると固定します</span>}
       {held !== undefined && <span className="text-[11px] text-amber-700 dark:text-amber-300" title={`生の値: ${held}`}>固定値: {display(held)}{physical && unit ? ` ${unit}` : ""}</span>}
-      {item.widget === "state" && (
-        <select className={field} aria-label={`${item.name} の状態`} value={String(base.value ?? cellNumber(item.value) ?? "")}
-          onChange={e => void live.write(item.name, e.target.value)}>
-          {!states.some(s => Number(s.value) === (base.value ?? cellNumber(item.value))) && <option value={String(base.value ?? cellNumber(item.value) ?? "")}>（値 {base.value ?? item.value ?? "—"}）</option>}
-          {states.map(s => <option key={s.value} value={s.value}>{s.value}: {s.name}</option>)}
-        </select>
-      )}
+      {item.widget === "state" && (() => {
+        const cur = base.value ?? cellNumber(item.value);
+        // まだ値を書いていない固定のカードは「選んでください」を選んだ状態にする。
+        // 今の値と同じ状態を選んでも onChange が起き、その値で固定できるようにするため
+        const unwritten = item.holdPending === true && held === undefined;
+        const curName = states.find(s => Number(s.value) === cur)?.name;
+        return (
+          <select className={field} aria-label={`${item.name} の状態`} value={unwritten ? "" : String(cur ?? "")}
+            onChange={e => { if (e.target.value !== "") void live.write(item.name, e.target.value); }}>
+            {unwritten && <option value="">（選んでください。今は {cur ?? "—"}{curName ? `: ${curName}` : ""}）</option>}
+            {!unwritten && !states.some(s => Number(s.value) === cur) && <option value={String(cur ?? "")}>（値 {base.value ?? item.value ?? "—"}）</option>}
+            {states.map(s => <option key={s.value} value={s.value}>{s.value}: {s.name}</option>)}
+          </select>
+        );
+      })()}
       {item.widget === "number" && (
         <div className="flex items-center gap-1">
           <input ref={textRef} className={cn(field, "flex-1 font-mono")} value={text} placeholder={physical ? "物理値" : "値（テスト CSV のセルと同じ書式）"}

@@ -34,6 +34,12 @@ describe("入力カードの表示", () => {
     Object.assign(wave, { lsbMapping: { temperature: "0.1" }, offsetMapping: { temperature: "-40" } });
     expect(render(item({ value: 651 }), 650, undefined, "652")).toContain('value="25.2"');
   });
+  it("まだ書いていない状態のカードは『選んでください』を選び、今の値と同じ状態も選べる", () => {
+    Object.assign(wave, { modeMapping: { temperature: { 0: "停止", 1: "運転" } } });
+    const html = render(item({ widget: "state", holdPending: true }), 0);
+    expect(html).toContain('<option value="" selected="">（選んでください。今は 0: 停止）</option>');
+    expect(html).toContain('<option value="0">0: 停止</option>');
+  });
   it("まだ書いていない固定には案内を表示する", () => {
     expect(render(item({ holdPending: true }))).toContain("値を入れると固定します");
   });
