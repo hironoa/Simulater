@@ -13,3 +13,12 @@ export function setVariantsApplyError(error: unknown) {
     ...(error instanceof ApiError ? Object.fromEntries(error.errors.map(row => [row.name, row.message])) : {}),
   } });
 }
+
+/**
+ * 仕向を選んでいないときの警告。選ばないと初期化の値（#InitWheneverCall など）を書かないので、
+ * 対象プログラムの初期化の処理が動いて入力が効かないことがある。仕向ファイルを読めなかったときは、そちらのエラーを出す。
+ */
+export function variantWarning(state: { doc: VariantsDoc; loaded: boolean; error: string }): string {
+  if (!state.loaded || state.error || state.doc.selected) return "";
+  return "仕向が選ばれていません（初期化の値を書きません）";
+}
