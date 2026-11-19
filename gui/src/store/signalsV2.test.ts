@@ -5,6 +5,7 @@ import { useWaveformStore as store } from "./useWaveformStore";
 import { useLiveStore } from "../live/liveStore";
 import { useVariantsStore } from "../live/variantsStore";
 import { emptyDefs, emptyView } from "./signalDefs";
+import { LiveRecord } from "../live/liveRecord";
 
 const initial = store.getState();
 const csv = (names: string[]) => `#COMMENT,${names.join(",")}\n1,${names.map(() => 1).join(",")}\n`;
@@ -132,6 +133,29 @@ describe("信号情報 v2", () => {
     state().ensureLiveSignals(["MODE", "SPEED"], new Set(["MODE"]));
     expect(state().signalGroups[0].signals).toEqual(["MODE"]);
     expect(state().signalSettings.SPEED.checked).toBe(false);
+  });
+  it("停止済み記録があっても追加したライブ信号の一覧・グループを保持する", () => {
+    const record = new LiveRecord();
+    record.append(1, ["X"], [[1]]);
+    state().commitLiveRecord({ record });
+    read();
+    state().ensureLiveSignals(["X", "MODE", "SPEED"], new Set(["X", "MODE"]));
+    expect(state().signalGroups.find(g => g.name === "車速")?.signals).toEqual(["MODE"]);
+    expect(state().unassignedSignals).toEqual(["X", "SPEED"]);
+    expect(state().signalSettings.MODE.color).toBe("#00f");
+    expect(state().signalSettings.SPEED.checked).toBe(false);
+    record.append(2, ["X", "MODE", "SPEED"], [[2, 1, 10]]);
+    state().commitLiveRecord({ record });
+    expect(state().signalGroups.find(g => g.name === "車速")?.signals).toEqual(["MODE"]);
+    expect(state().unassignedSignals).toEqual(["X", "SPEED"]);
+    expect(Object.keys(state().chartData!.seriesMap)).toEqual(["X", "MODE", "SPEED"]);
+  });
+  it("別の CSV を開くと前の CSV だけにある信号は一覧に残さない", () => {
+    state().parseWaveformCSV(csv(["MODE", "SPEED", "X"]), "one.csv"); read();
+    state().parseWaveformCSV(csv(["OTHER", "Y"]), "next.csv");
+    expect(state().signalGroups.flatMap(g => g.signals)).toEqual(["OTHER"]);
+    expect(state().unassignedSignals).toEqual(["Y"]);
+    expect(state().signalView.signals.MODE.group).toBe("車速");
   });
   it("手で読む YAML は意味を置き換え、未指定の見た目を保持する", () => {
     state().parseWaveformCSV(csv(["SPEED"]), "a.csv"); read();

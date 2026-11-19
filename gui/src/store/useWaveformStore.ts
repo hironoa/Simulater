@@ -109,7 +109,7 @@ interface WaveformStore extends AppState {
     text: string,
     format: "csv" | "yaml",
     keepExisting?: boolean,
-    options?: { reapply?: boolean },
+    options?: { reapply?: boolean; keepListed?: boolean },
   ) => void;
   getConfigYAML: (includeViewState?: boolean) => string;
   loadWcpProject: (file: File) => Promise<void>;
@@ -514,7 +514,7 @@ export const useWaveformStore = create<WaveformStore>((set, get) => ({
       signalSettings: settings,
       ...(additions.length ? { unassignedSignals: [...state.unassignedSignals, ...additions] } : {}),
     });
-    if (additions.some(name => state.signalView.signals[name])) get().parseMappingData(config, "yaml", false, { reapply: true });
+    if (additions.some(name => state.signalView.signals[name])) get().parseMappingData(config, "yaml", false, { reapply: true, keepListed: true });
   },
 
   parseWaveformCSV: (text, filename, options) => {
@@ -766,11 +766,12 @@ export const useWaveformStore = create<WaveformStore>((set, get) => ({
       });
     }
 
-    // 並べ直す対象は今のデータの信号。ライブの実行中はデータ（chartData）がないので、左に並んでいる信号を使う
-    // （空にすると、実行中に yaml を読んだだけで左の一覧とグループが空になる）
-    let unassignedSignals = get().chartData?.seriesMap
-      ? Object.keys(get().chartData!.seriesMap)
-      : listedSignals(get());
+    // ライブ追加時は停止済み記録にまだない信号も残す。CSV 切替時は新しいデータだけを対象にする。
+    const state = get();
+    const dataSignals = state.chartData ? Object.keys(state.chartData.seriesMap) : null;
+    let unassignedSignals = dataSignals
+      ? options?.keepListed ? [...new Set([...dataSignals, ...listedSignals(state)])] : dataSignals
+      : listedSignals(state);
 
     // Preserve yaml order for unassigned signals
     let yamlSignalOrder: string[] = [];
