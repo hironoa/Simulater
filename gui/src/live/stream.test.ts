@@ -220,6 +220,21 @@ describe("ライブ制御（SSE の取り込み）", () => {
       live.stop();
     });
 
+    it("型を調べている間に換算の設定が変わっても、入力したときの換算で送る", async () => {
+      let resolve!: (v: { name: string; kind: string }[]) => void;
+      const symbols = vi.fn().mockReturnValue(new Promise(r => { resolve = r; }));
+      const live = makeController({ symbols });
+      await live.start();
+      useWaveformStore.setState({ lsbMapping: { temperature: "0.1" }, offsetMapping: { temperature: "-40" } });
+      live.addInput("temperature");
+      const pending = live.writePhysical("temperature", "25.06");
+      useWaveformStore.setState({ offsetMapping: { temperature: "0" } });
+      resolve([{ name: "temperature", kind: "int" }]);
+      expect(await pending).toBe(651);
+      expect(posted.filter(p => p.url === "/api/write").at(-1)?.body).toMatchObject({ name: "temperature", value: 651 });
+      live.stop();
+    });
+
     it("型が取得できない物理値は送らず、誤りを通知する", async () => {
       const live = makeController({ symbols: vi.fn().mockResolvedValue([]) });
       await live.start(); live.addInput("unknown");

@@ -536,6 +536,9 @@ export function createLiveController(deps: LiveControllerDeps = {}) {
   async function writePhysical(name: string, value: number | string, hold?: boolean): Promise<number | null> {
     try {
       const func = store.getState().sim.func;
+      // 換算は入力したときの設定で行う（型を待つ間に yaml などで設定が変わっても、利用者が見ていた換算のまま送る）
+      const settings = waveform.getState();
+      const conversion = getConversion(name, settings.lsbMapping, settings.offsetMapping);
       const key = `${func}:${name}`;
       let request = symbolKinds.get(key);
       if (!request) {
@@ -547,8 +550,7 @@ export function createLiveController(deps: LiveControllerDeps = {}) {
       // 型を待つ間に対象関数が変わったら、前の関数の型で換算した値を新しい関数へ書かない
       if (store.getState().sim.func !== func) throw new Error("型を調べている間に対象関数が変わったため、書き込みを取り消しました");
       if (!symbol) { symbolKinds.delete(key); throw new Error("型を取得できません"); }
-      const settings = waveform.getState();
-      const raw = physicalInputValue(String(value), getConversion(name, settings.lsbMapping, settings.offsetMapping), symbol.kind);
+      const raw = physicalInputValue(String(value), conversion, symbol.kind);
       if (raw === null) throw new Error("物理値または換算・型が不正です");
       if (!await write(name, raw, hold)) return null;
       if (hold !== undefined) { momentary.delete(name); updateInput(name, { hold, holdPending: undefined }); }
