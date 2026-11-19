@@ -109,6 +109,25 @@ describe("信号情報 v2", () => {
     expect(state().lsbMapping.SPEED).toBeUndefined();
     expect(state().undefinedMapping.SPEED).toBeUndefined();
   });
+  it.each(["YAML", "CSV"])("共通の定義がない仕向だけの単位を %s の再読込で共通へコピーしない", (source) => {
+    state().parseWaveformCSV(csv(["X"]), "first.csv");
+    state().setSelectedVariant("EU");
+    state().setVariantOverride("X", true);
+    state().setSignalConversion("X", { unit: "A" });
+    expect(state().signalDefs.base.X).toBeUndefined();
+    expect(output().signals.X).toEqual({ variants: { EU: { unit: "A" } } });
+
+    if (source === "YAML") read(state().getConfigYAML());
+    else state().parseWaveformCSV(csv(["X"]), "next.csv");
+
+    expect(state().unitMapping.X).toBe("A");
+    expect(state().signalDefs.base.X).toEqual({});
+    state().setSelectedVariant("");
+    expect(state().unitMapping.X).toBeUndefined();
+    expect(output().signals.X).toEqual({ variants: { EU: { unit: "A" } } });
+    state().setSelectedVariant("EU");
+    expect(state().unitMapping.X).toBe("A");
+  });
   it("一覧にない意味・見た目・空グループを残し、現在の一覧順を先にする", () => {
     state().parseWaveformCSV(csv(["SPEED"]), "one.csv"); read();
     const doc = output();

@@ -1057,8 +1057,8 @@ export const useWaveformStore = create<WaveformStore>((set, get) => ({
     for (const sig of order) {
       const flat = current.has(sig) ? doc[sig] ?? {} : state.signalView.signals[sig];
       if (flat) viewSignals[sig] = Object.fromEntries(Object.entries(flat).filter(([key]) => !["lsb", "offset", "unit", "undefined"].includes(key) && !Number.isFinite(Number(key))));
-      const def = { ...(defs.base[sig] ?? defFromMappings(state, sig)) };
       const variants = Object.fromEntries(Object.entries(defs.variants).filter(([, signals]) => signals[sig] !== undefined).map(([name, signals]) => [name, signals[sig]]));
+      const def = { ...(defs.base[sig] ?? (Object.keys(variants).length ? {} : defFromMappings(state, sig))) };
       if (Object.keys(def).length || Object.keys(variants).length) {
         meanings[sig] = { ...def, ...(Object.keys(variants).length ? { variants } : {}) };
       }
