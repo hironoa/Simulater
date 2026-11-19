@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { Play, Pause, StepForward, RotateCcw, Download, Upload, AlertTriangle, PlugZap, Unplug } from "lucide-react";
 import { useLiveStore } from "../../live/liveStore";
+import { useVariantsStore, variantWarning } from "../../live/variantsStore";
 import { liveController } from "../../live/controller";
 import { cn } from "../../utils/helpers";
 
@@ -20,6 +21,7 @@ export function LiveBar() {
   const { sim, connected, functions, windowSize, maxSamples } = useLiveStore(useShallow((s) => ({
     sim: s.sim, connected: s.connected, functions: s.info?.functions ?? [], windowSize: s.windowSize, maxSamples: s.maxSamples,
   })));
+  const variantAlert = useVariantsStore(variantWarning);
   const [steps, setSteps] = useState(1);
   const [period, setPeriod] = useState(String(sim.periodMs));
   const [win, setWin] = useState(String(windowSize));
@@ -114,6 +116,8 @@ export function LiveBar() {
       )}
 
       {!sim.func && <span role="status" className="font-bold text-amber-800 dark:text-amber-300">対象関数を選択してください</span>}
+
+      {variantAlert && <span role="status" className="font-bold text-amber-800 dark:text-amber-300" title="右の「仕向」で選ぶと、その初期化の値を書きます。選択はファイルに保存され、次の起動でも使います">{variantAlert}</span>}
 
       {sim.needReset && <span role="status" className="font-bold text-amber-800 dark:text-amber-300">リセットが必要です</span>}
 
