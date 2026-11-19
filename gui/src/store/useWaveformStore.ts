@@ -1,3 +1,5 @@
+import { useVariantsStore } from "../live/variantsStore";
+import { emptyDefs, emptyView, readSignalDocument, readDefs, legacyView, effectiveMappings, writeEffective, defFromMappings, dumpSignals, unique, type SignalDefs, type SignalView } from "./signalDefs";
 import { useLiveStore } from "../live/liveStore";
 import { listedSignals } from "../utils/displaySignalName";
 import { saveLayout } from "../live/persist";
@@ -41,6 +43,11 @@ type SignalConversionPatch = {
 };
 
 interface WaveformStore extends AppState {
+  signalDefs: SignalDefs;
+  signalView: SignalView;
+  selectedVariant: string;
+  setSelectedVariant: (variant: string) => void;
+  setVariantOverride: (sig: string, enabled: boolean) => void;
   setInactive: (config: InactiveConfig) => void;
   inactiveEditorOpen: boolean;
   openInactiveEditor: (open: boolean) => void;
@@ -102,6 +109,7 @@ interface WaveformStore extends AppState {
     text: string,
     format: "csv" | "yaml",
     keepExisting?: boolean,
+    options?: { reapply?: boolean },
   ) => void;
   getConfigYAML: (includeViewState?: boolean) => string;
   loadWcpProject: (file: File) => Promise<void>;
@@ -244,6 +252,28 @@ const initialState: AppState = {
 
 export const useWaveformStore = create<WaveformStore>((set, get) => ({
   ...initialState,
+  signalDefs: emptyDefs(),
+  signalView: emptyView(),
+  selectedVariant: "",
+  setSelectedVariant: (selectedVariant) => {
+    const state = get();
+    if (selectedVariant === state.selectedVariant) return;
+    set({ selectedVariant, ...effectiveMappings(state.signalDefs, selectedVariant), autoAdjustTrigger: state.autoAdjustTrigger + 1 });
+    if (useLiveStore.getState().mode !== "live") {
+      try { localStorage.setItem("sim-gui:signals-variant:v1", selectedVariant); } catch { /* unavailable */ }
+    }
+  },
+  setVariantOverride: (sig, enabled) => {
+    const { selectedVariant: variant, signalDefs } = get();
+    if (!variant) return;
+    const overrides = { ...signalDefs.variants[variant] };
+    if (enabled) {
+      if (overrides[sig] !== undefined) return;
+      overrides[sig] = {};
+    } else delete overrides[sig];
+    const next = { ...signalDefs, variants: { ...signalDefs.variants, [variant]: overrides }, variantNames: unique([...signalDefs.variantNames, variant]) };
+    set({ signalDefs: next, ...effectiveMappings(next, variant) });
+  },
   loadWcpProject: async (file) => {
     const { csvContent, csvName, yamlContent, compareContent, compareName } = await readWcpProject(file);
     if (!csvContent) {
@@ -479,10 +509,12 @@ export const useWaveformStore = create<WaveformStore>((set, get) => ({
     const known = new Set(state.unassignedSignals);
     const additions = names.filter((n) => !assigned.has(n) && !known.has(n));
     if (!changed && additions.length === 0) return;
+    const config = get().getConfigYAML();
     set({
       signalSettings: settings,
       ...(additions.length ? { unassignedSignals: [...state.unassignedSignals, ...additions] } : {}),
     });
+    if (additions.some(name => state.signalView.signals[name])) get().parseMappingData(config, "yaml", false, { reapply: true });
   },
 
   parseWaveformCSV: (text, filename, options) => {
@@ -504,6 +536,8 @@ export const useWaveformStore = create<WaveformStore>((set, get) => ({
 
     warnings.forEach((warning) => toast(warning, { duration: 10_000 }));
 
+    // Capture all settings before narrowing the current CSV's list.
+    const savedConfig = !options?.preserveView ? get().getConfigYAML() : null;
     // Existing settings
     const existingSettings = get().signalSettings;
     const newSettings: Record<string, SignalSetting> = {};
@@ -549,10 +583,33 @@ export const useWaveformStore = create<WaveformStore>((set, get) => ({
       rawCSVText: text,
       ...(!options?.preserveView ? { waveformHandle: null, waveformFileVersion: null, autoReload: false } : {}),
     });
+    if (savedConfig) get().parseMappingData(savedConfig, "yaml", false, { reapply: true });
     return true;
   },
 
-  parseMappingData: (text, format, keepExisting = false) => {
+  parseMappingData: (text, format, keepExisting = false, options) => {
+    let importedDefs: SignalDefs | null = null;
+    let importedView: SignalView | null = null;
+    let selectedVariant = useLiveStore.getState().mode === "live" ? useVariantsStore.getState().doc.selected : get().selectedVariant;
+    if (format === "yaml") {
+      try {
+        const original = readSignalDocument(text);
+        if (original.version === 2) {
+          importedDefs = readDefs(original);
+          importedView = { signals: original.view?.signals ?? {}, groups: original.view?.groups ?? {} };
+          if (!options?.reapply && useLiveStore.getState().mode !== "live" && typeof original.viewState?.variant === "string") selectedVariant = original.viewState.variant;
+          text = yaml.dump(legacyView(original, importedDefs, selectedVariant));
+        } else {
+          importedView = { signals: Object.fromEntries(Object.entries(original).filter(([k]) => !["groups", "inactive", "viewState", "layoutMode"].includes(k))), groups: original.groups ?? {} };
+          // v1 has no variants; it becomes a common definition.
+          importedDefs = emptyDefs();
+          importedDefs.order = Object.keys(importedView.signals);
+        }
+      } catch (e) {
+        toast.error(`YAML を読めません: ${e instanceof Error ? e.message : String(e)}`);
+        return;
+      }
+    }
     let modeMapping = keepExisting ? { ...get().modeMapping } : {};
     let lsbMapping = keepExisting ? { ...get().lsbMapping } : {};
     let offsetMapping = keepExisting ? { ...get().offsetMapping } : {};
@@ -571,7 +628,7 @@ export const useWaveformStore = create<WaveformStore>((set, get) => ({
         const doc = yaml.load(text) as Record<string, Record<string, unknown>>;
         if (!doc) return;
 
-        if (doc.viewState && typeof doc.viewState === "object") {
+        if (!options?.reapply && doc.viewState && typeof doc.viewState === "object") {
           viewStateConfig = doc.viewState;
         }
 
@@ -778,6 +835,7 @@ export const useWaveformStore = create<WaveformStore>((set, get) => ({
     }
 
     const nextState: Partial<WaveformStore> = {
+      ...(!keepExisting && format === "yaml" ? { layoutMode: (yaml.load(text) as Record<string, any>).layoutMode ?? "uniform" } : {}),
       modeMapping,
       lsbMapping,
       offsetMapping,
@@ -785,7 +843,7 @@ export const useWaveformStore = create<WaveformStore>((set, get) => ({
       undefinedMapping,
       inactive,
       signalSettings,
-      showMode: viewStateConfig?.showMode ?? "full",
+      ...(!options?.reapply ? { showMode: viewStateConfig?.showMode ?? "full" } : {}),
     };
 
     if (viewStateConfig) {
@@ -812,13 +870,36 @@ export const useWaveformStore = create<WaveformStore>((set, get) => ({
       }
     }
 
+    if (importedDefs) {
+      if (!Object.keys(importedDefs.base).length) {
+        for (const sig of importedDefs.order) importedDefs.base[sig] = defFromMappings(nextState as AppState, sig);
+      }
+      if (keepExisting) {
+        const previous = get().signalDefs;
+        const variants = { ...previous.variants };
+        for (const [name, overrides] of Object.entries(importedDefs.variants)) variants[name] = { ...variants[name], ...overrides };
+        importedDefs = { base: { ...previous.base, ...importedDefs.base }, variants,
+          variantNames: unique([...previous.variantNames, ...importedDefs.variantNames]), order: unique([...previous.order, ...importedDefs.order]) };
+        importedView = { signals: { ...get().signalView.signals, ...importedView!.signals }, groups: { ...get().signalView.groups, ...importedView!.groups } };
+      }
+      nextState.signalDefs = importedDefs;
+      nextState.signalView = importedView!;
+      nextState.selectedVariant = selectedVariant;
+      Object.assign(nextState, effectiveMappings(importedDefs, selectedVariant));
+    } else {
+      const names = unique([...Object.keys(modeMapping), ...Object.keys(lsbMapping), ...Object.keys(offsetMapping), ...Object.keys(unitMapping), ...Object.keys(undefinedMapping)]);
+      nextState.signalDefs = writeEffective(keepExisting ? get().signalDefs : emptyDefs(), nextState as AppState, keepExisting ? selectedVariant : "", names);
+    }
     set(nextState);
+    if (useLiveStore.getState().mode !== "live" && typeof viewStateConfig?.variant === "string") {
+      try { localStorage.setItem("sim-gui:signals-variant:v1", selectedVariant); } catch { /* unavailable */ }
+    }
 
     // Apply theme to DOM
     const currentTheme = get().theme;
-    if (currentTheme === "dark") {
+    if (typeof document !== "undefined" && currentTheme === "dark") {
       document.documentElement.classList.add("dark");
-    } else {
+    } else if (typeof document !== "undefined") {
       document.documentElement.classList.remove("dark");
     }
 
@@ -832,7 +913,7 @@ export const useWaveformStore = create<WaveformStore>((set, get) => ({
 
   getConfigYAML: (includeViewState = false) => {
     const state = get();
-    const doc: Record<string, unknown> = {};
+    const doc: Record<string, any> = {};
     const groupsOutput: Record<string, unknown> = {};
 
     // Save View State
@@ -844,6 +925,7 @@ export const useWaveformStore = create<WaveformStore>((set, get) => ({
       if (state.cursors && state.cursors.length > 0) {
         viewState.markers = state.cursors.map(c => ({ time: c.time, index: c.index }));
       }
+      viewState.variant = state.selectedVariant;
       viewState.showMode = state.showMode;
       viewState.showSignalNames = state.showSignalNames;
       viewState.showAlias = state.showAlias;
@@ -876,7 +958,10 @@ export const useWaveformStore = create<WaveformStore>((set, get) => ({
         syncRange: g.syncRange,
       };
     });
-      if (Object.keys(groupsOutput).length > 0) {
+    for (const [name, config] of Object.entries(state.signalView.groups)) {
+      if (!Object.prototype.hasOwnProperty.call(groupsOutput, name)) groupsOutput[name] = config;
+    }
+    if (Object.keys(groupsOutput).length > 0) {
       doc.groups = groupsOutput;
     }
 
@@ -963,7 +1048,26 @@ export const useWaveformStore = create<WaveformStore>((set, get) => ({
       }
     });
 
-    return yaml.dump(doc);
+    const current = new Set(orderedSignals);
+    const viewSignals: Record<string, unknown> = {};
+    const meanings: Record<string, unknown> = {};
+    const defs = state.signalDefs;
+    const order = unique([...orderedSignals, ...Object.keys(state.signalView.signals), ...defs.order, ...Object.keys(defs.base)]);
+    for (const sig of order) {
+      const flat = current.has(sig) ? doc[sig] ?? {} : state.signalView.signals[sig];
+      if (flat) viewSignals[sig] = Object.fromEntries(Object.entries(flat).filter(([key]) => !["lsb", "offset", "unit", "undefined"].includes(key) && !Number.isFinite(Number(key))));
+      const def = { ...(defs.base[sig] ?? defFromMappings(state, sig)) };
+      const variants = Object.fromEntries(Object.entries(defs.variants).filter(([, signals]) => signals[sig] !== undefined).map(([name, signals]) => [name, signals[sig]]));
+      if (Object.keys(def).length || Object.keys(variants).length) {
+        meanings[sig] = { ...def, ...(Object.keys(variants).length ? { variants } : {}) };
+      }
+    }
+    const variantNames = unique([...defs.variantNames, ...Object.keys(defs.variants), ...(useLiveStore.getState().mode === "live" ? useVariantsStore.getState().doc.variants.map(v => v.name) : [])]);
+    return dumpSignals({ version: 2, variants: variantNames, signals: meanings,
+      ...(doc.inactive ? { inactive: doc.inactive } : {}),
+      view: { ...(doc.layoutMode ? { layoutMode: doc.layoutMode } : {}), groups: groupsOutput, signals: viewSignals },
+      ...(doc.viewState ? { viewState: doc.viewState } : {}),
+    });
   },
 
   toggleSignalSettingsSection: (key) =>
@@ -1048,7 +1152,9 @@ export const useWaveformStore = create<WaveformStore>((set, get) => ({
           signalSettings[sig] = { ...signalSettings[sig], yMin: null, yMax: null };
         }
       }
-      return { lsbMapping, offsetMapping, unitMapping, undefinedMapping, modeMapping, signalSettings };
+      const effective = { ...state, lsbMapping, offsetMapping, unitMapping, undefinedMapping, modeMapping };
+      const signalDefs = writeEffective(state.signalDefs, effective, state.selectedVariant, Object.keys(patches));
+      return { lsbMapping, offsetMapping, unitMapping, undefinedMapping, modeMapping, signalSettings, signalDefs };
     }),
 
   updateSignalSetting: (sig, updates) =>

@@ -1,3 +1,4 @@
+import { SignalsVariantSelect } from "./SignalsVariantSelect";
 import { displaySignalName, listedSignals } from "../utils/displaySignalName";
 import React, { useRef, useState, useEffect } from "react";
 import { useWaveformStore } from "../store/useWaveformStore";
@@ -518,6 +519,7 @@ export function Toolbar() {
           >B を A にする</button>
       </div>}
 
+      <SignalsVariantSelect />
       <div className={cn("flex gap-2 items-center flex-shrink-0", comparison.data && "mr-2")}>
         <div className="flex bg-white/10 rounded overflow-hidden border border-white/20">
           <button

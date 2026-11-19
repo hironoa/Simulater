@@ -304,42 +304,54 @@ HTML ファイルを直接開いたとき（`file://`）やサーバが答えな
 1,6150,101,1
 ```
 
-### 信号定義 YAML
+### 信号情報ファイル
 
-グループ分け、物理値変換、単位、状態名、見た目などを定義します。すべての項目は省略できます。
+設定の保存と `.wcp` 内の YAML は形式 v2 です。信号の意味を `signals`、見た目を `view` に分けます。古い平らな YAML（v1）と CSV の対応表も読み込めます。意味の項目も仕向の上書きもない信号は `signals` に書かず、見た目は `view.signals` に残します。`variants: {EU: {}}` のような空の上書きは保存します。
 
 ```yaml
-groups:
-  パワートレイン:        # グループ名
-    expanded: true      # サイドバーで開いた状態にするか
-    visible: true       # グループを表示するか
-    layout: overlap     # lane: 信号ごとのレーン / overlap: 重ね表示
-    syncRange: true     # グループ内の Y 軸レンジを揃えるか
-
-layoutMode: optimized   # レーン高さ: uniform / optimized / manual
-
-EngineSpeed:            # 波形 CSV の信号名
-  alias: エンジン回転数   # 別名（信号名: 別名 のときに表示）
-  group: パワートレイン
-  lsb: 2^-2             # 物理値 = 生値 × lsb + offset（式も可）
-  offset: 0
-  unit: rpm
-  undefined: [65535]    # 無効値。単一の数値でも可
-  color: "#f59e0b"
-  lineWidth: 2          # 線の太さ（既定 1.5）
-  lineType: solid       # solid / dashed / dotted
-  weight: 2             # レーン高さの比率（既定 1）
-  yMin: 0               # Y 軸を固定する場合の最小値
-  yMax: 8000            # Y 軸を固定する場合の最大値
-  checked: true         # 表示するか
-
-CurrentGear:
-  alias: ギア段
-  group: 状態
-  1: 1st                # 数値をキーにすると状態名になる
-  2: 2nd
-  3: 3rd
+version: 2
+variants: [国内, EU]          # 上書きのない仕向も選択候補にできます
+signals:
+  EngineSpeed:
+    lsb: 2^-2                # 物理値 = 生値 × lsb + offset（式も可）
+    offset: 0
+    unit: rpm
+    undefined: [65535]       # 生値の除外値
+  CurrentGear:
+    states: {0: 停止, 1: 走行}
+    variants:
+      EU:
+        states: {2: 回生, 1: null}
+        unit: "-"
+view:
+  layoutMode: manual         # uniform のときは省略
+  groups:
+    パワートレイン: {expanded: true, visible: true, layout: overlap, syncRange: true}
+  signals:                   # この順番で表示
+    EngineSpeed:
+      group: パワートレイン
+      alias: エンジン回転数
+      color: "#f59e0b"
+      lineWidth: 2            # 線の太さ（既定 1.5）
+      lineType: solid         # solid / dashed / dotted
+      weight: 2              # レーン高さの比率
+      yMin: 0                # Y 軸を固定する場合の範囲
+      yMax: 8000
+      checked: true
+    CurrentGear: {group: 状態, alias: ギア段}
 ```
+
+`states` は数値キーごとに共通の定義へ重ね、`null` でその状態名を消します。`lsb`・`offset`・`unit`・`undefined` は項目全体を置き換えます。仕向を選ぶと実効値が画面全体に反映されます。
+
+信号設定の「仕向「V」だけの設定にする」をオンにすると、その信号の以後の意味の編集は仕向の差分に入ります（上書き項目には •）。オフにすると上書きを削除して共通へ戻ります。上書きのない信号の編集は共通を変更します。共通と同じ値になった項目は差分から消えますが、空の上書きエントリは残ります。
+
+ライブモードでは、起動時に仕向ファイルの直後に `/api/signals` から読み込み、変更を最後の操作から1秒後にまとめて自動保存します。同じテキストは再保存しません。保存先は `sim.cfg` の `gui_signals`、省略時は同じフォルダの `sim_gui_signals.yaml` です。相対パスは `sim.cfg` のフォルダから解決します。空・空白とコメントだけのファイルはファイルなしと同じ扱いで、次の編集から自動保存します。読み込みに失敗したら自動保存を止め、上のバーに理由とパスを表示します。保存だけの失敗は次の変更で再試行します。仕向は右の「仕向」パネルで選び、候補は仕向ファイルと信号情報ファイルの名前を合わせます。信号情報だけにある名前を選ぶと、初期化の値が空の仕向として仕向ファイルにも保存します。
+
+サーバのないビューアでは、`localStorage` の `sim-gui:signals:v1` から読み込み、編集結果を同じキーに自動保存します。ツールバーの「仕向」で「（共通）」または各仕向を選べます。選択は `sim-gui:signals-variant:v1` に覚えます。ブラウザや開く場所が変わると保存領域は別になり、利用禁止の環境では保存できません。`.wcp` の表示状態は最上位の `viewState` に置き、`variant` に仕向を保存します（ビューアで復元）。
+
+新しく CSV を開くと、保持している意味・見た目・グループ・並びを当て直します。今の CSV にない信号の意味や見た目、空のグループも保存に残ります。保存順は今の一覧を先に、残りを読み込み時の順番で後ろにします。CSV を開いたときやライブの監視信号を追加したときも、生値・物理値などの表示モードやテーマを保持します。自動再読み込みも表示を保持します。
+
+古い YAML を移行するには、起動後に「開く」またはドロップで一度読み込んでください。意味やグループ・並びを読み込み、YAML に指定のない信号の色・線の太さ・高さなどは保持します。不正な手動 YAML は「YAML を読めません: 理由」と通知し、設定を変更しません。ライブでは信号情報ファイルへ、ビューアでは localStorage へ v2 で自動保存します。「設定ファイルのみ保存」でも v2 を書き出せます。
 
 - 信号名に `exp` または `期待値` を含む信号は、線の種類を指定しなければ破線で描きます。
 - `undefined` を指定しない場合でも、最大値が 255・65535・32767 などの典型的な無効値で、他の値から大きく離れていれば無効値として扱います。

@@ -1,3 +1,5 @@
+import { useWaveformStore } from "../../store/useWaveformStore";
+import { unique } from "../../store/signalDefs";
 import { useRef, useState } from "react";
 import { liveController } from "../../live/controller";
 import { useLiveStore } from "../../live/liveStore";
@@ -11,6 +13,8 @@ const primaryButton = "text-xs px-2 py-0.5 rounded bg-blue-500 text-white hover:
 
 export function VariantsPanel() {
   const { doc, saved, path, error, loaded, errors } = useVariantsStore();
+  const signalDefs = useWaveformStore(s => s.signalDefs);
+  const names = unique([...doc.variants.map(v => v.name), ...signalDefs.variantNames, ...Object.keys(signalDefs.variants)]);
   const resetNeeded = useLiveStore(s => s.sim.initStale);
   const setErrors = (errors: Record<string, string>) => useVariantsStore.setState({ errors });
   const [busy, setBusy] = useState(false);
@@ -29,7 +33,7 @@ export function VariantsPanel() {
    * 仕向ファイルを読めなかったときは、壊れたファイルを上書きしないよう保存しない。
    */
   async function select(name: string) {
-    const next = { ...doc, selected: name };
+    const next = { ...doc, selected: name, variants: name && !doc.variants.some(v => v.name === name) ? [...doc.variants, { name, values: [] }] : doc.variants };
     await apply(next);
     if (error || useVariantsStore.getState().errors[""]) return;
     try { await api.saveVariants(next); useVariantsStore.setState({ saved: JSON.stringify(next) }); }
@@ -46,7 +50,7 @@ export function VariantsPanel() {
     {error && <p role="alert" className="text-red-500">{error}（自動保存しません）</p>}
     {warning && <p role="alert" className="font-bold text-amber-800 dark:text-amber-300">{warning}。入力が効かないときは、仕向を選んでください。</p>}
     <select className={field} aria-label="仕向" value={doc.selected} disabled={!loaded || busy} onChange={e => void select(e.target.value)}>
-      <option value="">選択なし</option>{doc.variants.map(v => <option key={v.name}>{v.name}</option>)}
+      <option value="">選択なし</option>{names.map(name => <option key={name}>{name}</option>)}
     </select>
     <div className="flex items-center gap-1 whitespace-nowrap"><button className={button} disabled={busy} onClick={() => rename(true)}>追加</button><button className={button} disabled={!current || busy} onClick={() => rename(false)}>名前変更</button><button className={button} disabled={!current || busy} onClick={() => { if (window.confirm("この仕向を削除しますか？")) void apply({ ...doc, selected: "", variants: doc.variants.filter(v => v !== current) }); }}>削除</button><button className={button} disabled={busy} onClick={() => file.current?.click()}>CSV から取り込み</button></div>
     <div className="flex flex-col gap-1">

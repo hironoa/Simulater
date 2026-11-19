@@ -44,6 +44,10 @@ export function SignalSettings({ sigName, names, setting, groupAutoRange }: {
     undefinedText: (state.undefinedMapping[sigName] ?? []).join(","),
     rawData: state.chartData?.seriesMap[sigName],
   })));
+  const variant = useWaveformStore(s => s.selectedVariant);
+  const override = useWaveformStore(s => s.signalDefs.variants[s.selectedVariant]?.[sigName]);
+  const setVariantOverride = useWaveformStore(s => s.setVariantOverride);
+  const mark = (key: string) => override && Object.hasOwn(override, key) ? " •" : "";
   const [localLsb, setLocalLsb] = useState(lsb);
   const [localOffset, setLocalOffset] = useState(offset);
   const [localUnit, setLocalUnit] = useState(unit);
@@ -162,6 +166,11 @@ export function SignalSettings({ sigName, names, setting, groupAutoRange }: {
 
   return (
     <div className="bg-gray-50 dark:bg-slate-900 border-t border-dashed border-gray-200 dark:border-slate-700 pl-8 pr-3 py-1.5 transition-colors">
+      {variant && <label className="flex items-center gap-1 text-[10px] py-1">
+        <input type="checkbox" checked={override !== undefined} onChange={e => setVariantOverride(sigName, e.target.checked)} />
+        仕向「{variant}」だけの設定にする
+      </label>}
+      {override && Object.keys(override).length > 0 && <span className="text-[10px] text-amber-600" title="この仕向で上書きした項目">• 上書き: {Object.keys(override).join(", ")}</span>}
       <Section sectionKey="display" title="表示" summary={
         <span className="flex items-center gap-1 max-w-[170px]">
           <span className="inline-block w-2 h-2 rounded-sm shrink-0" style={{ background: localColor }} />
@@ -257,7 +266,7 @@ export function SignalSettings({ sigName, names, setting, groupAutoRange }: {
 
       </div>
       </Section>
-      <Section sectionKey="conversion" title="物理値変換" summary={<span className="font-mono max-w-[150px]">×{lsb || "1"} {offset.trim().startsWith("-") ? "" : "+"}{offset || "0"}{unit ? ` ${unit}` : ""}</span>}>
+      <Section sectionKey="conversion" title={"物理値変換" + (["lsb", "offset", "unit", "undefined"].some(k => override && Object.hasOwn(override, k)) ? " •" : "")} summary={<span className="font-mono max-w-[150px]">×{lsb || "1"} {offset.trim().startsWith("-") ? "" : "+"}{offset || "0"}{unit ? ` ${unit}` : ""}</span>}>
         <div className="sec-body grid grid-cols-[1fr_1fr_64px] gap-x-2 gap-y-1 pb-2.5">
           <div className="flex flex-col min-w-0">
             <label className="text-[10px] text-gray-500 dark:text-gray-400 mb-1 font-bold">LSB</label>
@@ -294,7 +303,7 @@ export function SignalSettings({ sigName, names, setting, groupAutoRange }: {
           <div className="col-span-3 text-[10px] text-gray-400 leading-snug">物理値 = 生値 × LSB + オフセット　／　除外値は生値で判定</div>
         </div>
       </Section>
-      <Section sectionKey="states" title="状態名" summary={<StateSummary mapping={states} />}>
+      <Section sectionKey="states" title={"状態名" + mark("states")} summary={<StateSummary mapping={states} />}>
         <div className="sec-body pb-2.5">
           <StateNameEditor rows={stateRows} rawData={rawData} onChange={changeStateRows} onEscape={() => setStateRows(mappingToRows(states))} />
         </div>
