@@ -5,7 +5,7 @@ import { displaySignalName } from "../utils/displaySignalName";
 import type { LiveCanvasLane, LiveCanvasSeries } from "./liveCanvas";
 
 type LiveLayoutSettings = Pick<AppState, "signalSettings" | "signalGroups" | "unassignedSignals" |
-  "unassignedGroupConfig" | "layoutMode" | "showAlias" | "lsbMapping" | "offsetMapping" | "valueDisplayMode">;
+  "unassignedGroupConfig" | "layoutMode" | "showAlias" | "lsbMapping" | "offsetMapping" | "valueDisplayMode" | "modeMapping">;
 
 export function buildLiveLanes(state: LiveLayoutSettings, names: readonly string[], height: number,
   visible?: (sig: string) => boolean): LiveCanvasLane[] {
@@ -23,6 +23,8 @@ export function buildLiveLanes(state: LiveLayoutSettings, names: readonly string
     const rangeValue = (value: number | null) => value === null ? null : raw ? (value - conv.offset) / conv.lsb : value;
     const min = rangeValue(set.yMin), max = rangeValue(set.yMax);
     return {
+      // yaml の信号は状態名がなくても空の表を持つので、空なら状態名なしとする（重ね表示で状態の系列を選び違えないため）
+      modeMapping: Object.keys(state.modeMapping[sig] ?? {}).length ? state.modeMapping[sig] : undefined,
       sig, color: set.color, label: (state.showAlias && set.alias) || displaySignalName(sig, active),
       conv: getDisplayConversion(sig, state.lsbMapping, state.offsetMapping, state.valueDisplayMode),
       yMin: set.yAuto ? null : raw && conv.lsb < 0 ? max : min,

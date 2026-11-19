@@ -61,6 +61,16 @@ describe("共有レイアウト", () => {
 });
 
 describe("ライブのレーン", () => {
+  it("系列に状態名を載せ、設定のない系列はundefinedにする", () => {
+    const state = setup();
+    const mapping = { 0: "停止", 1: "運転" };
+    const lanes = buildLiveLanes({ ...state, modeMapping: { a: mapping } }, ["a", "b"], 600);
+    expect(lanes[0].series[0].modeMapping).toBeUndefined();
+    expect(lanes[0].series[1].modeMapping).toBe(mapping);
+    // yaml が作る空の表は状態名なしとして扱う
+    const empty = buildLiveLanes({ ...state, modeMapping: { a: mapping, b: {} } }, ["a", "b"], 600);
+    expect(empty[0].series[0].modeMapping).toBeUndefined();
+  });
   it("yaml の順に重ね表示し、未チェックと記録にない信号を除く", () => {
     const state = setup();
     const lanes = buildLiveLanes(state, ["c", "off", "a", "b"], 600);

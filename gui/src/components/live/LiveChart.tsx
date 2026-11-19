@@ -24,11 +24,12 @@ export function LiveChart() {
     windowSize: s.windowSize, periodMs: s.sim.periodMs,
   })));
   const state = useWaveformStore(useShallow(s => ({
+    modeMapping: s.modeMapping, showMode: s.showMode,
     signalSettings: s.signalSettings, theme: s.theme, lsbMapping: s.lsbMapping, offsetMapping: s.offsetMapping,
     valueDisplayMode: s.valueDisplayMode, showAlias: s.showAlias, signalGroups: s.signalGroups,
     unassignedSignals: s.unassignedSignals, unassignedGroupConfig: s.unassignedGroupConfig, layoutMode: s.layoutMode,
   })));
-  const { theme } = state;
+  const { theme, showMode } = state;
   const view = useCompareView();
   const names = useSyncExternalStore(liveRecord.subscribeNames, liveRecord.getNames);
   const [size, setSize] = useState({ w: 0, h: 0 });
@@ -47,11 +48,11 @@ export function LiveChart() {
 
   const layoutRef = useRef(layout);
   layoutRef.current = layout;
-  const paramsRef = useRef({ windowSize, periodMs, theme, size });
-  paramsRef.current = { windowSize, periodMs, theme, size };
+  const paramsRef = useRef({ windowSize, periodMs, theme, size, showMode });
+  paramsRef.current = { windowSize, periodMs, theme, size, showMode };
 
   // 構成（レーン・テーマ・大きさ）が変わったら必ず描き直す
-  useEffect(() => { lastRev.current = -1; }, [layout, theme, size.w, size.h]);
+  useEffect(() => { lastRev.current = -1; }, [layout, theme, showMode, size.w, size.h]);
 
   useEffect(() => {
     let raf = 0;
@@ -88,13 +89,14 @@ export function LiveChart() {
       lastRev.current = liveRecord.revision;
       lastDraw = now;
       const t0 = performance.now();
-      const { windowSize: n, periodMs: p, theme: th } = paramsRef.current;
+      const { windowSize: n, periodMs: p, theme: th, showMode: mode } = paramsRef.current;
       const dark = th === "dark";
       const res = drawLive(ctx, w, h, dpr, liveRecord, layoutRef.current, n, p, {
+        stateOpacity: dark ? 0.3 : 0.15,
         axisColor: dark ? "#94a3b8" : "#64748b",
         splitColor: dark ? "#334155" : "#e5e7eb",
         left: 150, right: 20,
-      });
+      }, mode);
       drawMs = performance.now() - t0;
       points = res.points;
       frames++;

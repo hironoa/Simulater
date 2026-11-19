@@ -1,3 +1,5 @@
+import type { AppState } from "../types";
+import { getStateColor, type StateMapping } from "../utils/stateNames";
 import type { LiveRecord } from "./liveRecord";
 
 /**
@@ -19,6 +21,7 @@ export interface LiveCanvasSeries {
   yMin: number | null;
   yMax: number | null;
   lineWidth: number;
+  modeMapping?: StateMapping;
 }
 
 export interface LiveCanvasLane {
@@ -59,6 +62,7 @@ export function liveLaneRange(record: LiveRecord, lane: LiveCanvasLane, start: n
 }
 
 export interface LiveCanvasStyle {
+  stateOpacity?: number;
   axisColor: string;
   splitColor: string;
   /** 波形の領域の左右の余白（px）。左はレーン名と目盛りの値を書く場所。 */
@@ -68,7 +72,7 @@ export interface LiveCanvasStyle {
 
 /** 描画に必要な Canvas 2D の機能だけ（テストで差し替えられるようにする）。 */
 export type LiveCanvasContext = Pick<CanvasRenderingContext2D,
-  "beginPath" | "moveTo" | "lineTo" | "stroke" | "fillText" | "measureText" | "clearRect" | "save" | "restore" | "rect" | "clip" | "setTransform"
+  "fillRect" | "globalAlpha" | "beginPath" | "moveTo" | "lineTo" | "stroke" | "fillText" | "measureText" | "clearRect" | "save" | "restore" | "rect" | "clip" | "setTransform"
 > & {
   strokeStyle: string | CanvasGradient | CanvasPattern;
   fillStyle: string | CanvasGradient | CanvasPattern;
@@ -225,6 +229,7 @@ export interface LiveDrawResult { points: number; xMin: number; xMax: number }
 export function drawLive(
   ctx: LiveCanvasContext, width: number, height: number, dpr: number,
   record: LiveRecord, lanes: readonly LiveCanvasLane[], n: number, periodMs: number, style: LiveCanvasStyle,
+  showMode: AppState["showMode"] = "off",
 ): LiveDrawResult {
   const { start, end } = record.window(n);
   const steps = record.steps();
@@ -312,6 +317,42 @@ export function drawLive(
       xTicks.forEach((t, k) => ctx.fillText(xLabels[k], plotL + ((t - xMin) / xSpan) * plotW, bottom + 4));
       ctx.textAlign = "right";
       ctx.fillText("ms", plotR, bottom + 16);
+    }
+
+    // 状態の帯は生の値で区切り、重ね表示でも最初の状態系列だけを波形の下に描く。
+    const stateSeries = showMode !== "off" ? lane.series.find(s => s.modeMapping !== undefined) : undefined;
+    const stateCol = stateSeries && record.column(stateSeries.sig);
+    if (stateSeries && stateCol && count > 0) {
+      let segments = 1;
+      for (let i = start + 1; i < end; i++) {
+        if (stateCol[i] !== stateCol[i - 1]) segments++;
+      }
+      const dense = segments > plotW;
+      ctx.save();
+      ctx.font = "11px sans-serif";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      for (let i = start; i < end;) {
+        const value = stateCol[i];
+        let j = i + 1;
+        while (j < end && stateCol[j] === value) j++;
+        const left = Math.max(plotL, xOf(steps[i]));
+        const right = Math.min(plotR, xOf(steps[j < end ? j : end - 1]));
+        const bandWidth = right - left;
+        const name = stateSeries.modeMapping?.[value];
+        if (Number.isFinite(value) && name !== undefined && bandWidth > 0 && (!dense || bandWidth >= 1)) {
+          ctx.fillStyle = getStateColor(value);
+          ctx.globalAlpha = style.stateOpacity ?? 0.15;
+          ctx.fillRect(left, top, bandWidth, lane.height);
+          ctx.globalAlpha = 1;
+          if (showMode === "full" && ctx.measureText(name).width <= bandWidth - 8) {
+            ctx.fillStyle = style.axisColor;
+            ctx.fillText(name, (left + right) / 2, (top + bottom) / 2);
+          }
+        }
+        i = j;
+      }
+      ctx.restore();
     }
 
     // 波形
