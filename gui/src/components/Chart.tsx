@@ -626,6 +626,7 @@ export function Chart() {
     height: number;
   }>({ width: 0, height: 0 });
   const containerHeight = containerSize.height;
+  const containerWidth = containerSize.width;
 
   const activeSignals = useMemo(() => {
     return activeDisplaySignals(view.signals, view.settings, view.visible);
@@ -1035,6 +1036,7 @@ export function Chart() {
       compareEnabled && compareChartData
         ? { data: compareChartData, summary: view.summary, diffs, diffFilter, focusedDiffIndex, inactive: compareInactiveResult }
         : undefined,
+      containerWidth,
     );
 
     setTimeout(() => {

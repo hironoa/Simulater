@@ -74,7 +74,7 @@ export function buildDisplayBlocks(
   return displayBlocks;
 }
 
-/** 割合で配置する。通常表示の余白・間隔は従来値、ライブは px 指定を割合に直して渡す。 */
+/** 割合で配置する。停止時とライブで同じ余白・間隔を使う。 */
 export function layoutBlocks(
   displayBlocks: readonly DisplayBlock[], signalSettings: Record<string, Pick<SignalSetting, "weight">>,
   layoutMode: "uniform" | "optimized" | "manual", containerHeight: number,

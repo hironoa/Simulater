@@ -61,6 +61,46 @@ describe("共有レイアウト", () => {
 });
 
 describe("ライブのレーン", () => {
+  it.each(["uniform", "manual", "optimized"] as const)("%s の top と height は停止時の既定レイアウトと一致する", layoutMode => {
+    const state = { ...setup(), layoutMode };
+    const names = ["a", "b", "c"];
+    const blocks = buildDisplayBlocks(names, state.signalGroups, ["c"], state.unassignedGroupConfig);
+    const expected = layoutBlocks(blocks, state.signalSettings, layoutMode, 700);
+    const lanes = buildLiveLanes(state, names, 700);
+    expect(lanes.map(l => ({ top: l.top, height: l.height })))
+      .toEqual(expected.map(l => ({ top: l.top * 7, height: l.height * 7 })));
+  });
+  it("高さ200pxでは最下段の下に横軸用の30pxを残す", () => {
+    const lanes = buildLiveLanes(setup(), ["a", "b", "c"], 200);
+    const last = lanes[lanes.length - 1];
+    expect(last.top + last.height + 30).toBeLessThanOrEqual(200);
+    expect(last.top + last.height).toBeCloseTo(170);
+  });
+  it("高さ600pxでは既定の8%の配置を維持する", () => {
+    const state = setup();
+    const names = ["a", "b", "c"];
+    const blocks = buildDisplayBlocks(names, state.signalGroups, ["c"], state.unassignedGroupConfig);
+    const expected = layoutBlocks(blocks, state.signalSettings, state.layoutMode, 600);
+    const lanes = buildLiveLanes(state, names, 600);
+    lanes.forEach((lane, i) => {
+      expect(lane.top).toBeCloseTo(expected[i].top * 6);
+      expect(lane.height).toBeCloseTo(expected[i].height * 6);
+    });
+    const last = lanes[lanes.length - 1];
+    expect(last.top + last.height).toBeCloseTo(552);
+  });
+  it.each([0, 1, 20])("高さ%dpxでもレーン高が負にならない", height => {
+    const lanes = buildLiveLanes(setup(), ["a", "b", "c"], height);
+    expect(lanes.length).toBeGreaterThan(0);
+    expect(lanes.every(lane => Number.isFinite(lane.height) && lane.height >= 0)).toBe(true);
+  });
+  it("単位と別名を付け、raw と名前非表示も停止時と揃える", () => {
+    const state = { ...setup(), showSignalNames: true, showAlias: true, unitMapping: { a: "rpm" }, modeMapping: {} };
+    state.signalSettings.a = { ...state.signalSettings.a, alias: "回転数" };
+    expect(buildLiveLanes(state, ["a"], 600)[0].series[0].label).toBe("回転数 [rpm]");
+    expect(buildLiveLanes({ ...state, valueDisplayMode: "raw" }, ["a"], 600)[0].series[0].label).toBe("回転数 [raw]");
+    expect(buildLiveLanes({ ...state, showSignalNames: false }, ["a"], 600)[0].series[0].label).toBe("");
+  });
   it("系列に状態名を載せ、設定のない系列はundefinedにする", () => {
     const state = setup();
     const mapping = { 0: "停止", 1: "運転" };
@@ -84,11 +124,11 @@ describe("ライブのレーン", () => {
     const lanes = buildLiveLanes(useWaveformStore.getState(), names, 600);
     expect(lanes).toHaveLength(40);
     for (const lane of lanes) {
-      expect(lane.top).toBeGreaterThanOrEqual(10);
+      expect(lane.top).toBeGreaterThanOrEqual(35);
       expect(lane.height).toBeGreaterThan(0);
-      expect(lane.top + lane.height).toBeLessThanOrEqual(600 - 28 + 1e-9);
+      expect(lane.top + lane.height).toBeLessThanOrEqual(600 * 0.92 + 1e-9);
     }
-    expect(lanes[39].top + lanes[39].height).toBeCloseTo(572);
+    expect(lanes[39].top + lanes[39].height).toBeCloseTo(552);
   });
   it("重ね表示の範囲は窓内の全系列、固定範囲があればその和を使う", () => {
     const state = setup();

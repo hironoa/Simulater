@@ -4,7 +4,8 @@ import { useWaveformStore } from "../../store/useWaveformStore";
 import { useLiveStore } from "../../live/liveStore";
 import { liveRecord } from "../../live/liveRecord";
 import { drawLive } from "../../live/liveCanvas";
-import { buildLiveLanes } from "../../live/liveLayout";
+import { leftMargin, rightMargin, rightAxisWidth, visibleRightAxes } from "../../utils/laneLabels";
+import { buildLiveLanes, fitLiveLabels } from "../../live/liveLayout";
 import { useCompareView } from "../../hooks/useCompareView";
 
 /** 描画の上限（fps）。samples は約 50ms ごとに届く。描画は記録が変わったときだけ行う。 */
@@ -24,7 +25,7 @@ export function LiveChart() {
     windowSize: s.windowSize, periodMs: s.sim.periodMs,
   })));
   const state = useWaveformStore(useShallow(s => ({
-    modeMapping: s.modeMapping, showMode: s.showMode,
+    modeMapping: s.modeMapping, showMode: s.showMode, unitMapping: s.unitMapping, showSignalNames: s.showSignalNames,
     signalSettings: s.signalSettings, theme: s.theme, lsbMapping: s.lsbMapping, offsetMapping: s.offsetMapping,
     valueDisplayMode: s.valueDisplayMode, showAlias: s.showAlias, signalGroups: s.signalGroups,
     unassignedSignals: s.unassignedSignals, unassignedGroupConfig: s.unassignedGroupConfig, layoutMode: s.layoutMode,
@@ -44,15 +45,22 @@ export function LiveChart() {
   }, []);
 
   // レーン構成
-  const layout = useMemo(() => buildLiveLanes(state, names, size.h, view.visible), [state, names, size.h, view]);
+  const rawLayout = useMemo(() => buildLiveLanes(state, names, size.h, view.visible), [state, names, size.h, view]);
+  const { layout, titleWidth } = useMemo(() => fitLiveLabels(rawLayout, size.w), [rawLayout, size.w]);
 
+  const margins = useMemo(() => ({
+    titleWidth,
+    rightAxes: Math.max(0, ...layout.map(lane => lane.syncRange === false ? lane.series.length - 1 : 0)),
+  }), [layout, titleWidth]);
+  const tickCharacters = useRef(0);
+  const rightTickCharacters = useRef(0);
   const layoutRef = useRef(layout);
   layoutRef.current = layout;
-  const paramsRef = useRef({ windowSize, periodMs, theme, size, showMode });
-  paramsRef.current = { windowSize, periodMs, theme, size, showMode };
+  const paramsRef = useRef({ windowSize, periodMs, theme, size, showMode, margins, showSignalNames: state.showSignalNames });
+  paramsRef.current = { windowSize, periodMs, theme, size, showMode, margins, showSignalNames: state.showSignalNames };
 
   // 構成（レーン・テーマ・大きさ）が変わったら必ず描き直す
-  useEffect(() => { lastRev.current = -1; }, [layout, theme, showMode, size.w, size.h]);
+  useEffect(() => { lastRev.current = -1; tickCharacters.current = 0; rightTickCharacters.current = 0; }, [layout, theme, showMode, size.w, size.h]);
 
   useEffect(() => {
     let raf = 0;
@@ -89,14 +97,28 @@ export function LiveChart() {
       lastRev.current = liveRecord.revision;
       lastDraw = now;
       const t0 = performance.now();
-      const { windowSize: n, periodMs: p, theme: th, showMode: mode } = paramsRef.current;
+      const { windowSize: n, periodMs: p, theme: th, showMode: mode, margins: m, showSignalNames } = paramsRef.current;
       const dark = th === "dark";
+      const axisWidth = rightAxisWidth(rightTickCharacters.current);
+      const rightAxes = visibleRightAxes(m.rightAxes, axisWidth, w);
       const res = drawLive(ctx, w, h, dpr, liveRecord, layoutRef.current, n, p, {
+        dark,
         stateOpacity: dark ? 0.3 : 0.15,
         axisColor: dark ? "#94a3b8" : "#64748b",
         splitColor: dark ? "#334155" : "#e5e7eb",
-        left: 150, right: 20,
+        left: leftMargin(showSignalNames, m.titleWidth, tickCharacters.current),
+        right: rightMargin(rightAxes, rightTickCharacters.current),
+        rightAxes,
+        rightAxisWidth: axisWidth,
       }, mode);
+      if (res.maxTickCharacters > tickCharacters.current) {
+        tickCharacters.current = res.maxTickCharacters;
+        lastRev.current = -1;
+      }
+      if (res.maxRightTickCharacters > rightTickCharacters.current) {
+        rightTickCharacters.current = res.maxRightTickCharacters;
+        lastRev.current = -1;
+      }
       drawMs = performance.now() - t0;
       points = res.points;
       frames++;
