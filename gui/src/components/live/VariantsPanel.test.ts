@@ -61,6 +61,18 @@ describe("仕向パネルの名前変更", () => {
     expect(useWaveformStore.getState().signalDefs.variants.EU.X).toEqual({ lsb: 0.1 });
     expect(useVariantsStore.getState().errors[""]).toBe("failed");
   });
+  it("信号情報にだけある仕向名への変更では両方の上書きを保つ", async () => {
+    useWaveformStore.getState().parseMappingData("version: 2\nvariants: [EU, US]\nsignals:\n  X: {lsb: 1, variants: {EU: {lsb: 0.1}, US: {lsb: 0.2}}}\n", "yaml", false);
+    vi.mocked(window.prompt).mockReturnValue("US");
+    const beforeDoc = useVariantsStore.getState().doc;
+    const beforeDefs = useWaveformStore.getState().signalDefs;
+    await click("名前変更");
+    expect(setInit).not.toHaveBeenCalled();
+    expect(useVariantsStore.getState().doc).toBe(beforeDoc);
+    expect(useWaveformStore.getState().selectedVariant).toBe("EU");
+    expect(useWaveformStore.getState().signalDefs).toBe(beforeDefs);
+    expect(useWaveformStore.getState().signalDefs.variants).toEqual({ EU: { X: { lsb: 0.1 } }, US: { X: { lsb: 0.2 } } });
+  });
   it.each([null, "", "EU"])("取り消し・空名・既存名 %s では変更しない", async name => {
     vi.mocked(window.prompt).mockReturnValue(name);
     const before = useWaveformStore.getState().signalDefs;

@@ -50,7 +50,7 @@ export function VariantsPanel() {
   const update = (values: InitValue[]) => apply({ ...doc, variants: doc.variants.map(v => v.name === doc.selected ? { ...v, values } : v) });
   const rename = (adding: boolean) => {
     const name = window.prompt(adding ? "仕向の名前" : "新しい名前", adding ? "" : doc.selected)?.trim();
-    if (!name || doc.variants.some(v => v.name === name)) return;
+    if (!name || (adding ? doc.variants.some(v => v.name === name) : names.includes(name))) return;
     void apply({ ...doc, selected: name, variants: adding ? [...doc.variants, { name, values: [] }] : doc.variants.map(v => v.name === doc.selected ? { ...v, name } : v) }, adding ? undefined : () => useWaveformStore.getState().renameVariant(doc.selected, name));
   };
   return <div className="text-xs flex flex-col gap-2">
