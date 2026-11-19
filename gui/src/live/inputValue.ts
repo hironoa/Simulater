@@ -146,7 +146,10 @@ export function physicalInputValue(text: string, conversion: { lsb: number; offs
   const physical = Number(text);
   if (!Number.isFinite(physical) || !Number.isFinite(conversion.lsb) || conversion.lsb === 0 || !Number.isFinite(conversion.offset)) return null;
   const raw = (physical - conversion.offset) / conversion.lsb;
-  const value = kind === "float" ? raw : Math.round(raw);
+  // 十進小数の割り算の誤差（25.05 → 650.4999999999999）で四捨五入の結果が変わらないよう、15 桁に整えてから丸める。
+  // 15 桁を超える大きさの値は整えると桁が落ちるので、そのまま丸める。四捨五入は 0 から遠い側へ（-650.5 → -651）
+  const tidy = Math.abs(raw) < 1e15 ? Number(raw.toPrecision(15)) : raw;
+  const value = kind === "float" ? raw : Math.sign(tidy) * Math.round(Math.abs(tidy));
   return Number.isFinite(value) && (kind === "float" || Number.isSafeInteger(value)) ? value : null;
 }
 
