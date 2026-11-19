@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { signalTitle, getTextWidth, leftMargin, rightMargin, laneSplitNumber, laneLabelTop, signalLineType } from "./laneLabels";
+import { signalTitle, getTextWidth, leftMargin, rightMargin, rightAxisWidth, laneSplitNumber, laneLabelTop, signalLineType } from "./laneLabels";
 import { buildChartOptions } from "./chartOptionsBuilder";
 
 describe("レーン共通の表示計算", () => {
@@ -24,6 +24,13 @@ describe("レーン共通の表示計算", () => {
     expect(rightMargin(3)).toBe(120);
     expect(laneLabelTop(10, 100, 2, 0)).toBe(44);
   });
+  it("右軸の幅と余白を桁数に応じて広げる", () => {
+    expect(rightAxisWidth()).toBe(35);
+    expect(rightAxisWidth(4)).toBe(35);
+    expect(rightAxisWidth(10)).toBe(68);
+    expect(rightMargin(0, 10)).toBe(15);
+    expect(rightMargin(2, 10)).toBe(151);
+  });
   it.each([[29, 1], [30, 2], [59, 2], [60, 3], [99, 3], [100, 5]])("高さ%dのsplitNumberは%d", (height, expected) => {
     expect(laneSplitNumber(height)).toBe(expected);
   });
@@ -45,5 +52,19 @@ describe("停止時の左余白", () => {
     expect(option.grid[0].left).toBe(leftMargin(showNames, showNames ? getTextWidth("g_counter [rpm]") : 0, 5));
     expect(option.yAxis[0].min).toBe(10000);
     expect(option.yAxis[0].max).toBe(10500);
+  });
+});
+
+describe("停止時の右余白", () => {
+  it("10桁の右軸2本のoffsetと全gridのrightを広げる", () => {
+    const names = ["a", "b", "c"];
+    const ranges = [[0, 2], [1000000000, 2000000000], [1000000000, 2000000000]];
+    const option = buildChartOptions({ steps: [1, 2], seriesMap: Object.fromEntries(names.map((sig, i) => [sig, ranges[i]])) }, 600,
+      names, [{ name: "G", signals: names, layout: "overlap", syncRange: false }], [], { layout: "lane", syncRange: false },
+      Object.fromEntries(names.map((sig, i) => [sig, { color: "#f00", weight: 1, yAuto: false, yMin: ranges[i][0], yMax: ranges[i][1], yBreak: false }])),
+      {}, {}, {}, {}, {}, 1, "uniform", false, false, "off", false, "off", [], { start: 0, end: 100 }, "light");
+    expect(option.yAxis.slice(0, 3).map(axis => axis.offset)).toEqual([0, 0, rightAxisWidth(10)]);
+    expect(option.grid.every(grid => grid.right === rightMargin(2, 10))).toBe(true);
+    expect(option.grid[0].left).toBe(leftMargin(false, 0, 1));
   });
 });

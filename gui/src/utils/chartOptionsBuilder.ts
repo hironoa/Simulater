@@ -1,6 +1,6 @@
 import { displaySignalName } from "./displaySignalName";
 import { buildDisplayBlocks, layoutBlocks } from "./displayBlocks";
-import { FONT_MONO, signalTitle, getTextWidth, leftMargin as getLeftMargin, rightMargin, RIGHT_AXIS_WIDTH, laneLabelTop, laneSplitNumber, signalLineType } from "./laneLabels";
+import { FONT_MONO, signalTitle, getTextWidth, leftMargin as getLeftMargin, rightMargin, rightAxisWidth, RIGHT_AXIS_WIDTH, laneLabelTop, laneSplitNumber, signalLineType } from "./laneLabels";
 import * as echarts from "echarts";
 import { addCompareRendering, CompareRendering } from "./compareRendering";
 import { YBreak } from "../types";
@@ -304,7 +304,6 @@ export function buildChartOptions(
       if (numRight > maxRightAxesNum) maxRightAxesNum = numRight;
     }
   });
-  const rightAxisWidth = RIGHT_AXIS_WIDTH;
   const globalRightMargin = rightMargin(maxRightAxesNum);
   const titleFor = (sig: string) => signalTitle(sig, activeSignals, signalSettings[sig],
     { showAlias, unitMapping, modeMapping, valueDisplayMode });
@@ -336,7 +335,7 @@ export function buildChartOptions(
   });
 
   // 軸の範囲が確定した後で目盛り幅を加える
-  let maxTickCharacters = 0;
+  let maxTickCharacters = 0, maxRightTickCharacters = 0;
   const leftMargin = getLeftMargin(showSignalNames, globalMaxTitleWidth, maxTickCharacters);
 
   gridGroups.forEach((g, gIdx) => {
@@ -613,7 +612,7 @@ export function buildChartOptions(
       gridIndex: gridIdx,
       type: "value",
       position: isFirstInGrid ? "left" : "right",
-      offset: isFirstInGrid ? 0 : (myIdxInGrid - 1) * rightAxisWidth,
+      offset: isFirstInGrid ? 0 : (myIdxInGrid - 1) * RIGHT_AXIS_WIDTH,
       show: !hideYAxis,
       splitLine: { show: false },
       axisLine: {
@@ -653,6 +652,10 @@ export function buildChartOptions(
 
     if (isFirstInGrid) {
       maxTickCharacters = Math.max(maxTickCharacters,
+        String(Math.round(Number(yAxisConfig.min))).length,
+        String(Math.round(Number(yAxisConfig.max))).length);
+    } else {
+      maxRightTickCharacters = Math.max(maxRightTickCharacters,
         String(Math.round(Number(yAxisConfig.min))).length,
         String(Math.round(Number(yAxisConfig.max))).length);
     }
@@ -1075,6 +1078,12 @@ export function buildChartOptions(
 
   option.grid.forEach(grid => {
     grid.left = getLeftMargin(showSignalNames, globalMaxTitleWidth, maxTickCharacters);
+    grid.right = rightMargin(maxRightAxesNum, maxRightTickCharacters);
+  });
+  option.yAxis.forEach(axis => {
+    if (axis.position === "right") {
+      axis.offset = Number(axis.offset ?? 0) / RIGHT_AXIS_WIDTH * rightAxisWidth(maxRightTickCharacters);
+    }
   });
   return option;
 }

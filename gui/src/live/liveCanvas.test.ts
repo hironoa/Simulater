@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { niceTicks, formatTick, formatTicks, laneRange, fitText, traceStepLine, drawLive, type LiveCanvasContext, type LiveCanvasLane } from "./liveCanvas";
+import { rightAxisWidth, rightMargin } from "../utils/laneLabels";
 import { fitLabel } from "../utils/fitLabel";
 import { getStateColor } from "../utils/stateNames";
 import { getDarkerColor } from "../utils/helpers";
@@ -364,8 +365,40 @@ describe("drawLive", () => {
       expect(result.maxTickCharacters).toBe(expected);
     });
 
+  it("10桁の右軸2本をキャンバス内に収め、軸間隔を広げる", () => {
+    const r = new LiveRecord();
+    r.append(0, ["a", "b", "c"], [[0, 1e9, 1e9], [2, 2e9, 2e9]]);
+    const l: LiveCanvasLane = { ...lane("a"), syncRange: false,
+      series: ["a", "b", "c"].map((sig, i) => ({ ...lane(sig).series[0], yMin: i ? 1e9 : 0, yMax: i ? 2e9 : 2 })) };
+    const first = fake();
+    const measured = drawLive(first.ctx, 600, 200, 1, r, [l], 2, 1, style);
+    expect(measured.maxTickCharacters).toBe(3); // 0.5 などの小数目盛り
+    expect(measured.maxRightTickCharacters).toBe(10);
+    const width = rightAxisWidth(measured.maxRightTickCharacters);
+    const expanded = { ...style, right: rightMargin(2, measured.maxRightTickCharacters), rightAxisWidth: width };
+    const { ctx, calls, paints } = fake();
+    drawLive(ctx, 600, 200, 1, r, [l], 2, 1, expanded);
+    const plotR = 600 - expanded.right;
+    expect(calls).toContain(`moveTo(${plotR},10)`);
+    expect(calls).toContain(`moveTo(${plotR + width},10)`);
+    const rightLabels = paints.filter(p => p.baseline === "middle" && p.align === "left");
+    expect(new Set(rightLabels.map(p => p.x))).toEqual(new Set([plotR + 4, plotR + width + 4]));
+    expect(rightLabels.length).toBeGreaterThan(0);
+    expect(rightLabels.every(p => p.x + p.text.length * 6 <= 600)).toBe(true);
+    expect(rightLabels.filter(p => p.x === plotR + 4).every(p => p.x + p.text.length * 6 < plotR + width)).toBe(true);
+  });
+  it("右軸の範囲端の丸めた文字数も左軸と別に返す", () => {
+    const { ctx } = fake();
+    const l: LiveCanvasLane = { ...lane("a"), syncRange: false,
+      series: [{ ...lane("a").series[0], yMin: 0, yMax: 2 },
+        { ...lane("b").series[0], yMin: 9990, yMax: 9999.6 }] };
+    const result = drawLive(ctx, 600, 200, 1, twoScales(), [l], 2, 1, style);
+    expect(result.maxTickCharacters).toBe(3); // 0.5 などの小数目盛り
+    expect(result.maxRightTickCharacters).toBe(5);
+  });
+
   it("記録が空でも落ちない", () => {
     const { ctx } = fake();
-    expect(drawLive(ctx, 600, 200, 1, new LiveRecord(), [lane("a")], 100, 5, style)).toEqual({ points: 0, xMin: 0, xMax: 495, maxTickCharacters: 0 });
+    expect(drawLive(ctx, 600, 200, 1, new LiveRecord(), [lane("a")], 100, 5, style)).toEqual({ points: 0, xMin: 0, xMax: 495, maxTickCharacters: 0, maxRightTickCharacters: 0 });
   });
 });

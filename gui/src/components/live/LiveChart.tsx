@@ -4,7 +4,7 @@ import { useWaveformStore } from "../../store/useWaveformStore";
 import { useLiveStore } from "../../live/liveStore";
 import { liveRecord } from "../../live/liveRecord";
 import { drawLive } from "../../live/liveCanvas";
-import { getTextWidth, leftMargin, rightMargin } from "../../utils/laneLabels";
+import { getTextWidth, leftMargin, rightMargin, rightAxisWidth } from "../../utils/laneLabels";
 import { buildLiveLanes } from "../../live/liveLayout";
 import { useCompareView } from "../../hooks/useCompareView";
 
@@ -49,16 +49,17 @@ export function LiveChart() {
 
   const margins = useMemo(() => ({
     titleWidth: Math.max(0, ...layout.flatMap(lane => lane.series.map(s => getTextWidth(s.label)))),
-    right: rightMargin(Math.max(0, ...layout.map(lane => lane.syncRange === false ? lane.series.length - 1 : 0))),
+    rightAxes: Math.max(0, ...layout.map(lane => lane.syncRange === false ? lane.series.length - 1 : 0)),
   }), [layout]);
   const tickCharacters = useRef(0);
+  const rightTickCharacters = useRef(0);
   const layoutRef = useRef(layout);
   layoutRef.current = layout;
   const paramsRef = useRef({ windowSize, periodMs, theme, size, showMode, margins, showSignalNames: state.showSignalNames });
   paramsRef.current = { windowSize, periodMs, theme, size, showMode, margins, showSignalNames: state.showSignalNames };
 
   // 構成（レーン・テーマ・大きさ）が変わったら必ず描き直す
-  useEffect(() => { lastRev.current = -1; tickCharacters.current = 0; }, [layout, theme, showMode, size.w, size.h]);
+  useEffect(() => { lastRev.current = -1; tickCharacters.current = 0; rightTickCharacters.current = 0; }, [layout, theme, showMode, size.w, size.h]);
 
   useEffect(() => {
     let raf = 0;
@@ -102,10 +103,16 @@ export function LiveChart() {
         stateOpacity: dark ? 0.3 : 0.15,
         axisColor: dark ? "#94a3b8" : "#64748b",
         splitColor: dark ? "#334155" : "#e5e7eb",
-        left: leftMargin(showSignalNames, m.titleWidth, tickCharacters.current), right: m.right,
+        left: leftMargin(showSignalNames, m.titleWidth, tickCharacters.current),
+        right: rightMargin(m.rightAxes, rightTickCharacters.current),
+        rightAxisWidth: rightAxisWidth(rightTickCharacters.current),
       }, mode);
       if (res.maxTickCharacters > tickCharacters.current) {
         tickCharacters.current = res.maxTickCharacters;
+        lastRev.current = -1;
+      }
+      if (res.maxRightTickCharacters > rightTickCharacters.current) {
+        rightTickCharacters.current = res.maxRightTickCharacters;
         lastRev.current = -1;
       }
       drawMs = performance.now() - t0;

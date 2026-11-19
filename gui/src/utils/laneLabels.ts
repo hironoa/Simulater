@@ -30,8 +30,12 @@ export function leftMargin(showNames: boolean, titleWidth: number, tickCharacter
   return showNames ? 5 + titleWidth + 6 + axisWidth : Math.max(50, axisWidth + 5);
 }
 
-export function rightMargin(maxRightAxes: number): number {
-  return 15 + maxRightAxes * RIGHT_AXIS_WIDTH;
+export function rightAxisWidth(tickCharacters = 0): number {
+  return Math.max(RIGHT_AXIS_WIDTH, tickCharacters * 6 + 4 + 4);
+}
+
+export function rightMargin(maxRightAxes: number, tickCharacters = 0): number {
+  return 15 + maxRightAxes * rightAxisWidth(tickCharacters);
 }
 
 export function laneSplitNumber(height: number): number {

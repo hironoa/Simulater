@@ -67,6 +67,8 @@ export function liveLaneRange(record: LiveRecord, lane: LiveCanvasLane, start: n
 
 export interface LiveCanvasStyle {
   dark?: boolean;
+  /** 右軸1本の幅。省略時は35px。 */
+  rightAxisWidth?: number;
   stateOpacity?: number;
   axisColor: string;
   splitColor: string;
@@ -225,7 +227,7 @@ export function traceStepLine(
   return segs;
 }
 
-export interface LiveDrawResult { points: number; xMin: number; xMax: number; maxTickCharacters: number }
+export interface LiveDrawResult { points: number; xMin: number; xMax: number; maxTickCharacters: number; maxRightTickCharacters: number }
 
 /**
  * 記録の直近 n 点を描く。width / height は CSS px、dpr は devicePixelRatio。
@@ -251,7 +253,7 @@ export function drawLive(
   ctx.lineJoin = "round";
 
   const xTicks = niceTicks(xMin, xMax, Math.max(2, Math.floor(plotW / 110)));
-  let points = 0, maxTickCharacters = 0;
+  let points = 0, maxTickCharacters = 0, maxRightTickCharacters = 0;
 
   // syncGroup の範囲は、まとまりごとに 1 フレームで 1 回だけ求める
   const groupRanges = new Map<string, { lo: number; hi: number } | null>();
@@ -285,7 +287,7 @@ export function drawLive(
 
     lane.series.forEach((series, k) => {
       if (k > 0 && !perSeries) return;
-      const axisX = k === 0 ? plotL : plotR + (k - 1) * RIGHT_AXIS_WIDTH;
+      const axisX = k === 0 ? plotL : plotR + (k - 1) * (style.rightAxisWidth ?? RIGHT_AXIS_WIDTH);
       ctx.strokeStyle = series.color;
       ctx.lineWidth = 2;
       ctx.globalAlpha = 0.4;
@@ -296,19 +298,19 @@ export function drawLive(
       const own = ranges[k];
       const ticks = own ? niceTicks(own.lo, own.hi, laneSplitNumber(lane.height)) : [];
       const labels = formatTicks(ticks, false);
-      if (own) {
-        maxTickCharacters = Math.max(maxTickCharacters,
-          String(Math.round(own.lo)).length, String(Math.round(own.hi)).length);
-      }
+      let axisCharacters = own ? Math.max(
+        String(Math.round(own.lo)).length, String(Math.round(own.hi)).length) : 0;
       const yAxis = toY(own);
       ctx.fillStyle = series.color;
       ctx.font = `10px ${FONT_MONO}`;
       ctx.textAlign = k === 0 ? "right" : "left";
       ctx.textBaseline = "middle";
       ticks.forEach((t, i) => {
-        maxTickCharacters = Math.max(maxTickCharacters, labels[i].length);
+        axisCharacters = Math.max(axisCharacters, labels[i].length);
         ctx.fillText(labels[i], axisX + (k === 0 ? -4 : 4), yAxis(t));
       });
+      if (k === 0) maxTickCharacters = Math.max(maxTickCharacters, axisCharacters);
+      else maxRightTickCharacters = Math.max(maxRightTickCharacters, axisCharacters);
     });
 
     // 信号名の束を中央に置く。停止時と同じ幅の余白に全文を描く。
@@ -413,5 +415,5 @@ export function drawLive(
       points += count;
     }
   });
-  return { points, xMin, xMax, maxTickCharacters };
+  return { points, xMin, xMax, maxTickCharacters, maxRightTickCharacters };
 }
