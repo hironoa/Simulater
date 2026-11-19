@@ -127,6 +127,19 @@ describe("信号情報の自動保存", () => {
     expect(store.getState().unitMapping.X).toBe("A");
     await tick(); expect(mock.saveSignals.mock.calls[0][0]).toContain("国内");
   });
+  it("detecting 中の読み込み後も右パネルの最新の仕向を適用する", async () => {
+    useLiveStore.setState({ mode: "detecting" });
+    useVariantsStore.setState({ doc: { version: 1, selected: "国内", variants: [] } });
+    const mock = api();
+    mock.getSignals.mockImplementation(async () => {
+      useVariantsStore.setState({ doc: { version: 1, selected: "EU", variants: [] } });
+      return { path: "signals.yaml", exists: true, text: config + "viewState: {variant: 国内}\n", error: "" };
+    });
+    persist = createSignalsPersistence(mock); await persist.start("live");
+    expect(store.getState().selectedVariant).toBe("EU");
+    expect(store.getState().unitMapping.X).toBe("A");
+    expect(localStorage.setItem).not.toHaveBeenCalled();
+  });
   it("保存中の変更も直列に保存し、古い書込みで戻さない", async () => {
     const mock = api(); let resolve!: (value: unknown) => void;
     mock.saveSignals.mockImplementationOnce(() => new Promise(r => { resolve = r; }));

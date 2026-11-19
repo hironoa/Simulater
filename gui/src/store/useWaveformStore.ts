@@ -259,7 +259,7 @@ export const useWaveformStore = create<WaveformStore>((set, get) => ({
     const state = get();
     if (selectedVariant === state.selectedVariant) return;
     set({ selectedVariant, ...effectiveMappings(state.signalDefs, selectedVariant), autoAdjustTrigger: state.autoAdjustTrigger + 1 });
-    if (useLiveStore.getState().mode !== "live") {
+    if (useLiveStore.getState().mode === "offline") {
       try { localStorage.setItem("sim-gui:signals-variant:v1", selectedVariant); } catch { /* unavailable */ }
     }
   },
@@ -590,14 +590,14 @@ export const useWaveformStore = create<WaveformStore>((set, get) => ({
   parseMappingData: (text, format, keepExisting = false, options) => {
     let importedDefs: SignalDefs | null = null;
     let importedView: SignalView | null = null;
-    let selectedVariant = useLiveStore.getState().mode === "live" ? useVariantsStore.getState().doc.selected : get().selectedVariant;
+    let selectedVariant = useLiveStore.getState().mode !== "offline" ? useVariantsStore.getState().doc.selected : get().selectedVariant;
     if (format === "yaml") {
       try {
         const original = readSignalDocument(text);
         if (original.version === 2) {
           importedDefs = readDefs(original);
           importedView = { signals: original.view?.signals ?? {}, groups: original.view?.groups ?? {} };
-          if (!options?.reapply && useLiveStore.getState().mode !== "live" && typeof original.viewState?.variant === "string") selectedVariant = original.viewState.variant;
+          if (!options?.reapply && useLiveStore.getState().mode === "offline" && typeof original.viewState?.variant === "string") selectedVariant = original.viewState.variant;
           text = yaml.dump(legacyView(original, importedDefs, selectedVariant));
         } else {
           importedView = { signals: Object.fromEntries(Object.entries(original).filter(([k]) => !["groups", "inactive", "viewState", "layoutMode"].includes(k))), groups: original.groups ?? {} };
@@ -891,7 +891,7 @@ export const useWaveformStore = create<WaveformStore>((set, get) => ({
       nextState.signalDefs = writeEffective(keepExisting ? get().signalDefs : emptyDefs(), nextState as AppState, keepExisting ? selectedVariant : "", names);
     }
     set(nextState);
-    if (useLiveStore.getState().mode !== "live" && typeof viewStateConfig?.variant === "string") {
+    if (useLiveStore.getState().mode === "offline" && typeof viewStateConfig?.variant === "string") {
       try { localStorage.setItem("sim-gui:signals-variant:v1", selectedVariant); } catch { /* unavailable */ }
     }
 
@@ -1062,7 +1062,7 @@ export const useWaveformStore = create<WaveformStore>((set, get) => ({
         meanings[sig] = { ...def, ...(Object.keys(variants).length ? { variants } : {}) };
       }
     }
-    const variantNames = unique([...defs.variantNames, ...Object.keys(defs.variants), ...(useLiveStore.getState().mode === "live" ? useVariantsStore.getState().doc.variants.map(v => v.name) : [])]);
+    const variantNames = unique([...defs.variantNames, ...Object.keys(defs.variants), ...(useLiveStore.getState().mode !== "offline" ? useVariantsStore.getState().doc.variants.map(v => v.name) : [])]);
     return dumpSignals({ version: 2, variants: variantNames, signals: meanings,
       ...(doc.inactive ? { inactive: doc.inactive } : {}),
       view: { ...(doc.layoutMode ? { layoutMode: doc.layoutMode } : {}), groups: groupsOutput, signals: viewSignals },
@@ -1374,11 +1374,20 @@ export const useWaveformStore = create<WaveformStore>((set, get) => ({
     })),
 
   renameGroup: (id, name) =>
-    set((state) => ({
-      signalGroups: state.signalGroups.map((g) =>
-        g.id === id ? { ...g, name } : g,
-      ),
-    })),
+    set((state) => {
+      const group = state.signalGroups.find(g => g.id === id);
+      if (!group || group.name === name) return state;
+      const groups = { ...state.signalView.groups };
+      delete groups[group.name];
+      groups[name] = { expanded: group.expanded, visible: group.visible,
+        layout: group.layout, syncRange: group.syncRange };
+      const signals = Object.fromEntries(Object.entries(state.signalView.signals).map(([sig, config]) =>
+        [sig, config.group === group.name ? { ...config, group: name } : config]));
+      return {
+        signalGroups: state.signalGroups.map(g => g.id === id ? { ...g, name } : g),
+        signalView: { ...state.signalView, groups, signals },
+      };
+    }),
 
   toggleGroupExpand: (id) =>
     set((state) => {
@@ -1530,7 +1539,20 @@ export const useWaveformStore = create<WaveformStore>((set, get) => ({
         applyLeaderSettings(unassigned);
       }
 
-      return { signalGroups: groups, unassignedSignals: unassigned, signalSettings: newSettings };
+      const removedNames = new Set(state.signalGroups.filter(g => !groups.some(next => next.name === g.name)).map(g => g.name));
+      let signalView = state.signalView;
+      if (removedNames.size) {
+        const retainedGroups = { ...signalView.groups };
+        for (const name of removedNames) delete retainedGroups[name];
+        const signals = Object.fromEntries(Object.entries(signalView.signals).map(([sig, config]) => {
+          if (typeof config.group !== "string" || !removedNames.has(config.group)) return [sig, config];
+          const remaining = { ...config };
+          delete remaining.group;
+          return [sig, remaining];
+        }));
+        signalView = { ...signalView, groups: retainedGroups, signals };
+      }
+      return { signalGroups: groups, unassignedSignals: unassigned, signalSettings: newSettings, signalView };
     }),
 
   addCursor: (time, index) =>

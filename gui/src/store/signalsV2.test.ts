@@ -152,12 +152,15 @@ describe("信号情報 v2", () => {
     read("viewState: {showAlias: true}\nX: {1: ON}\n");
     expect(state().showAlias).toBe(true);
   });
-  it("ライブは viewState.variant より右パネルを優先し名前を合わせて保存", () => {
-    useLiveStore.setState({ mode: "live" });
+  it.each(["live", "detecting"] as const)("%s は viewState.variant より右パネルを優先し名前を合わせて保存", (mode) => {
+    useLiveStore.setState({ mode });
     useVariantsStore.setState({ doc: { version: 1, selected: "EU", variants: [{ name: "北米", values: [] }] } });
     read(config + "viewState: {variant: 国内}\n");
     expect(state().selectedVariant).toBe("EU");
     expect(output().variants).toEqual(["国内", "EU", "北米"]);
+    expect(localStorage.setItem).not.toHaveBeenCalled();
+    state().setSelectedVariant("国内");
+    expect(localStorage.setItem).not.toHaveBeenCalled();
   });
   it.each(["broken: [", "version: 2\nsignals: {MODE: {states: [oops]}}\n"])("不正 YAML は通知して状態を変更しない: %s", (text) => {
     read(); const before = state();
@@ -196,6 +199,32 @@ describe("信号情報 v2", () => {
     expect(Object.keys(groups)).toEqual(["現在", "車速", "空"]);
     expect(groups.空).toEqual({ expanded: false, visible: false, layout: "overlap", syncRange: true });
     expect(groups.車速).toEqual({ expanded: false, visible: true, layout: "lane", syncRange: false });
+  });
+  it("グループを改名すると保持設定と一覧外の信号も改名する", () => {
+    state().parseWaveformCSV(csv(["MODE"]), "one.csv"); read();
+    const group = state().signalGroups.find(g => g.name === "車速")!;
+    store.setState({ signalView: { ...state().signalView, signals: {
+      ...state().signalView.signals, HIDDEN: { group: "車速", alias: "保持" },
+    } } });
+    state().toggleGroupExpand(group.id);
+    state().renameGroup(group.id, "new");
+    expect(output().view.groups).not.toHaveProperty("車速");
+    expect(output().view.groups.new.expanded).toBe(true);
+    expect(state().signalView.groups.new.expanded).toBe(true);
+    expect(output().view.signals.MODE.group).toBe("new");
+    expect(output().view.signals.HIDDEN).toEqual({ group: "new", alias: "保持" });
+    expect(output().view.groups).toHaveProperty("空");
+  });
+  it("グループを削除すると保持設定と一覧外の信号の所属も削除する", () => {
+    state().parseWaveformCSV(csv(["MODE"]), "one.csv"); read();
+    store.setState({ signalView: { ...state().signalView, signals: {
+      ...state().signalView.signals, HIDDEN: { group: "車速", alias: "保持" },
+    } } });
+    state().setGroups(state().signalGroups.filter(g => g.name !== "車速"), ["MODE"]);
+    expect(output().view.groups).not.toHaveProperty("車速");
+    expect(output().view.signals.MODE).not.toHaveProperty("group");
+    expect(output().view.signals.HIDDEN).toEqual({ alias: "保持" });
+    expect(output().view.groups).toHaveProperty("空");
   });
   it("監視だけの信号は意味に書かず、見た目と空の仕向上書きは残す", () => {
     state().ensureLiveSignals(["X", "Y"], new Set(["X", "Y"]));

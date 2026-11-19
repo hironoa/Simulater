@@ -79,6 +79,7 @@ export function createSignalsPersistence(api: Pick<SimApi, "getSignals" | "saveS
         useWaveformStore.getState().parseMappingData(text, "yaml", false);
         lastText = text;
       }
+      if (live) followVariants();
       ready = true;
     } catch (e) {
       if (live) error(`信号情報ファイルを読めません: ${String(e instanceof Error ? e.message : e)}（${path}）`);
