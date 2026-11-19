@@ -83,6 +83,7 @@ const put = (n, v) => { if (isArg(n)) argValues.set(n, v); else values[leafIndex
 
 // ---- 実行状態 ----
 let variantsDoc = null;
+let signalsText = null;
 let inits = [];
 let initStale = false;
 const oncePairs = rows => JSON.stringify(rows.filter(row => row.mode === "once").map(row => JSON.stringify([row.name, row.value])).sort());
@@ -419,6 +420,13 @@ const server = http.createServer(async (req, res) => {
       if (!body || typeof body !== "object" || Array.isArray(body) || !Array.isArray(body.variants)) return json(res, 400, { error: "variants 配列が必要です" });
       variantsDoc = body;
       return json(res, 200, { ok: true, path: "(メモリ)/sim_gui_variants.json" });
+    }
+    if (url.pathname === "/api/signals" && req.method === "GET") return json(res, 200, { path: "(メモリ)/sim_gui_signals.yaml", exists: signalsText !== null, text: signalsText, error: "" });
+    if (url.pathname === "/api/signals" && req.method === "POST") {
+      const body = await readBody(req);
+      if (body.includes(0)) return json(res, 400, { error: "信号情報はテキストで送ってください" });
+      signalsText = body.toString("utf8");
+      return json(res, 200, { ok: true, path: "(メモリ)/sim_gui_signals.yaml" });
     }
     if (url.pathname === "/api/init" && req.method === "POST") {
       const body = JSON.parse(await readBody(req));

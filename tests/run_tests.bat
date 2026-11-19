@@ -246,6 +246,7 @@ rem work folder (relative to this cfg), not to the test sources.
     echo defines = %T%\defines\contracts\type_contract.h
     echo defines_near_base = 0
     echo gui_variants = variants.json
+    echo gui_signals = signals.yaml
 )
 start "" /b "%WORK%\gui\sim_guitest.exe" gui --no-browser --cfg "%WORK%\gui\gui.cfg" --port %PORT% --period-ms 2 > "%WORK%\gui.log" 2>&1
 set TRIES=0
@@ -281,6 +282,28 @@ if errorlevel 1 (call :ng "variants: path is relative to the cfg" & type "%V%\va
 if exist "%V%\variants.json" (call :ok "variants: saved next to the cfg") else (call :ng "variants: saved next to the cfg")
 "%HAS%" /l /c:"\"value\":\"0x20\"" "%V%\variants.out" >nul
 if errorlevel 1 (call :ng "variants: keeps the value as written") else (call :ok "variants: keeps the value as written")
+curl -s "%U%/api/signals" > "%V%\signals.out"
+"%HAS%" /l /c:"\"exists\":false,\"text\":null" "%V%\signals.out" >nul
+if errorlevel 1 (call :ng "signals: no file gives exists:false, text:null") else (call :ok "signals: no file gives exists:false, text:null")
+call :post_code "%G%\signals.yaml" signals_save.out /api/signals
+if "%CODE%"=="200" (call :ok "signals: save is 200") else (call :ng "signals: save is 200, got %CODE%")
+if exist "%V%\signals.yaml" (call :ok "signals: saved next to the cfg") else (call :ng "signals: saved next to the cfg")
+fc /b "%G%\signals.yaml" "%V%\signals.yaml" >nul
+if errorlevel 1 (call :ng "signals: preserves all bytes") else (call :ok "signals: preserves all bytes")
+curl -s "%U%/api/signals" > "%V%\signals.out"
+rem Read the Japanese state from the UTF-8 fixture without putting non-ASCII text in this batch file.
+powershell -NoProfile -Command "$s = (Get-Content -Encoding UTF8 ($env:G + '\signals.yaml'))[0].Substring(7); $text = Get-Content -Raw -Encoding UTF8 ($env:V + '\signals.out'); if ($s -and $text -and $text.Contains($s)) { exit 0 } else { exit 1 }" >nul
+if errorlevel 1 (call :ng "signals: reads back the Japanese state") else (call :ok "signals: reads back the Japanese state")
+"%HAS%" /l /c:"\\\"quoted\\\"" "%V%\signals.out" >nul
+if errorlevel 1 (call :ng "signals: escapes quotes") else (call :ok "signals: escapes quotes")
+"%HAS%" /l /c:"\n" "%V%\signals.out" >nul
+if errorlevel 1 (call :ng "signals: escapes newlines") else (call :ok "signals: escapes newlines")
+"%HAS%" /l /c:"\t" "%V%\signals.out" >nul
+if errorlevel 1 (call :ng "signals: escapes tabs") else (call :ok "signals: escapes tabs")
+"%HAS%" /l /c:"C:\\signals" "%V%\signals.out" >nul
+if errorlevel 1 (call :ng "signals: escapes backslashes") else (call :ok "signals: escapes backslashes")
+call :post_code "%G%\signals_nul.bin" signals_nul.out /api/signals
+if "%CODE%"=="400" (call :ok "signals: NUL body is 400") else (call :ng "signals: NUL body is 400, got %CODE%")
 call :post_code "%G%\init_values.json" init.out /api/init
 if "%CODE%"=="200" (call :ok "init: set the list") else (call :ng "init: set the list, got %CODE%")
 call :has_info "\"initStale\":false" "init: a once change at step 0 does not set initStale"
