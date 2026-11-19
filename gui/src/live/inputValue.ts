@@ -6,7 +6,7 @@
 // 利用者が書いた文字列（`"9007199254740993"`、`"0x20000000000001"`）は Number に通さずにそのまま送る。
 // SSE の samples / values は JSON の数値なので、2^53 を超える整数は届いた時点で丸まっている。そうした現在値は送り返さない。
 
-import type { PendingWrite, SimState } from "./api";
+import type { PendingWrite, SimState, SymbolKind } from "./api";
 
 /** セルの文字列（`"7"`、`"-3"`、`"0x78"`、`"1.5"`、`"'A'"`）を数値にする。数値にできなければ null。表示・判定用で、送る値には使わない。 */
 export function cellNumber(v: number | string | undefined | null): number | null {
@@ -91,7 +91,7 @@ export function numberInputValue(text: string): string | null {
  * - トグル・ボタン: 元にする値（無ければ 0）。
  */
 export function holdInputValue(
-  widget: "number" | "slider" | "toggle" | "button",
+  widget: "number" | "slider" | "toggle" | "button" | "state",
   text: string,
   slider: number,
   base: InputValue,
@@ -138,4 +138,21 @@ export function upsertPending(list: PendingWrite[], name: string, value: string)
 /** 反映待ちの一覧からその名前を除く。 */
 export function dropPending(list: PendingWrite[], name: string): PendingWrite[] {
   return list.some((p) => p.name === name) ? list.filter((p) => p.name !== name) : list;
+}
+
+/** 物理値から書き込み用の生の値を作る。整数型だけを四捨五入する。 */
+export function physicalInputValue(text: string, conversion: { lsb: number; offset: number }, kind: SymbolKind): number | null {
+  if (!text.trim() || !["int", "uint", "ptr", "float"].includes(kind)) return null;
+  const physical = Number(text);
+  if (!Number.isFinite(physical) || !Number.isFinite(conversion.lsb) || conversion.lsb === 0 || !Number.isFinite(conversion.offset)) return null;
+  const raw = (physical - conversion.offset) / conversion.lsb;
+  const value = kind === "float" ? raw : Math.round(raw);
+  return Number.isFinite(value) && (kind === "float" || Number.isSafeInteger(value)) ? value : null;
+}
+
+/** 表示だけを換算する。十進小数の乗算誤差を欄に残さない。 */
+export function physicalInputText(raw: number | string | null | undefined, conversion: { lsb: number; offset: number }): string {
+  const value = cellNumber(raw);
+  if (value === null) return raw == null ? "—" : String(raw);
+  return String(Number((value * conversion.lsb + conversion.offset).toPrecision(15)));
 }

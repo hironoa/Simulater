@@ -70,3 +70,18 @@ describe("構成の保存と復元", () => {
     expect(loadLayout(s)).toEqual(DEFAULT_LAYOUT);
   });
 });
+
+describe("入力の後方互換", () => {
+  it("印のない古いvalueは生の値で、holdも変更しない", () => {
+    const layout = sanitizeLayout({ inputs: [
+      { name: "temperature", hold: false, value: "651" },
+      { name: "mode", widget: "state", hold: true, value: "1" },
+      { name: "new", hold: true, holdPending: true },
+    ] });
+    expect(layout.inputs.map(i => i.value)).toEqual(["651", "1", undefined]);
+    expect(layout.inputs.map(i => i.hold)).toEqual([false, true, true]);
+    expect(layout.inputs[2].holdPending).toBe(true);
+    const s = new MemoryStorage(); saveLayout(layout, s);
+    expect(loadLayout(s)).toEqual(layout);
+  });
+});

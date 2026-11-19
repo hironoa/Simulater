@@ -142,6 +142,76 @@ describe("ライブ制御（SSE の取り込み）", () => {
     });
   }
 
+  describe("入力パネルの並び・新規固定・物理値・状態", () => {
+    it("並べ替えた inputs の順を保存し、読み戻せる", async () => {
+      const live = makeController();
+      await live.start();
+      live.addInput("a"); live.addInput("b"); live.addInput("c");
+      live.moveInput(0, 2);
+      expect(useLiveStore.getState().inputs.map(i => i.name)).toEqual(["b", "c", "a"]);
+      expect(JSON.parse(localStorage.getItem("sim-gui:layout:v1")!).inputs.map(i => i.name)).toEqual(["b", "c", "a"]);
+      live.moveInput(-1, 0); live.moveInput(0, 8);
+      live.stop();
+      const restored = makeController();
+      await restored.start();
+      expect(useLiveStore.getState().inputs.map(i => i.name)).toEqual(["b", "c", "a"]);
+      restored.stop();
+    });
+
+    it("新規入力は固定 ON で待ち、再読み込みや空の holds でも維持し、最初に固定として書く", async () => {
+      const live = makeController();
+      await live.start();
+      live.addInput("new");
+      live.addInput("switch", "toggle"); live.addInput("slide", "slider"); live.addInput("push", "button");
+      expect(useLiveStore.getState().inputs.map(i => i.hold)).toEqual([true, true, true, false]);
+      live.handlers.state({ holds: [] });
+      expect(useLiveStore.getState().inputs[0]).toMatchObject({ hold: true, holdPending: true });
+      live.stop();
+      const restored = makeController();
+      await restored.start();
+      restored.handlers.state({ holds: [] });
+      expect(useLiveStore.getState().inputs[0].hold).toBe(true);
+      await restored.write("new", "7");
+      expect(posted.filter(p => p.url === "/api/write").at(-1)?.body).toEqual({ name: "new", value: "7", hold: true });
+      expect(useLiveStore.getState().inputs[0]).toMatchObject({ hold: true, value: "7", holdPending: undefined });
+      restored.stop();
+    });
+
+    it("物理値25.06は整数型でraw651を固定として送り、生の値を保存する", async () => {
+      const symbols = vi.fn().mockResolvedValue([{ name: "temperature", kind: "int" }]);
+      const live = makeController({ symbols });
+      await live.start();
+      useWaveformStore.setState({ lsbMapping: { temperature: "0.1" }, offsetMapping: { temperature: "-40" } });
+      live.addInput("temperature");
+      expect(await live.writePhysical("temperature", "25.06")).toBe(651);
+      expect(posted.filter(p => p.url === "/api/write").at(-1)?.body).toEqual({ name: "temperature", value: 651, hold: true });
+      expect(JSON.parse(localStorage.getItem("sim-gui:layout:v1")!).inputs[0].value).toBe(651);
+      await live.writePhysical("temperature", "25.06");
+      expect(symbols).toHaveBeenCalledTimes(1);
+      live.stop();
+    });
+
+    it("型が取得できない物理値は送らず、誤りを通知する", async () => {
+      const live = makeController({ symbols: vi.fn().mockResolvedValue([]) });
+      await live.start(); live.addInput("unknown");
+      expect(await live.writePhysical("unknown", "25")).toBeNull();
+      expect(posted.filter(p => p.url === "/api/write")).toEqual([]);
+      expect(notify.error).toHaveBeenCalledWith(expect.stringContaining("型を取得できません"));
+      live.stop();
+    });
+
+    it("状態名がある変数は状態が既定で、選んだ生の値を固定として書く", async () => {
+      const live = makeController();
+      await live.start();
+      useWaveformStore.setState({ modeMapping: { mode: { 0: "停止", 1: "運転" } } });
+      live.addInput("mode");
+      expect(useLiveStore.getState().inputs[0]).toMatchObject({ widget: "state", hold: true });
+      await live.write("mode", "1");
+      expect(posted.filter(p => p.url === "/api/write").at(-1)?.body).toEqual({ name: "mode", value: "1", hold: true });
+      live.stop();
+    });
+  });
+
   describe("起動時の仕向の同期", () => {
     const values = [{ name: "a", value: "0x20", mode: "every" as const }];
     it.each([
@@ -505,6 +575,7 @@ describe("ライブ制御（SSE の取り込み）", () => {
       useLiveStore.setState({ watch: [] });
       await live.start();
       live.addInput("g_mode", "toggle");
+      live.updateInput("g_mode", { hold: false, holdPending: undefined }); // 単発入力の既存動作を試す
       await vi.runOnlyPendingTimersAsync();
       const es = FakeEventSource.last!;
       es.emit("values", { step: 3, names: ["g_mode"], values: [0] });
@@ -619,6 +690,7 @@ describe("ライブ制御（SSE の取り込み）", () => {
       useLiveStore.setState({ watch: [] });
       await live.start();
       live.addInput(name, "number");
+      live.updateInput(name, { hold: false, holdPending: undefined }); // 単発の文字列を試す
       await vi.runOnlyPendingTimersAsync();
       return { live, es: FakeEventSource.last! };
     }
