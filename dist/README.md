@@ -18,11 +18,11 @@
 
 | 項目 | 内容 |
 | --- | --- |
-| ビルド元 | `7e20a7c`（信号情報ファイル。sim gui の `/api/signals`（`sim.cfg` の `gui_signals`）と、GUI の形式 v2・仕向ごとの差分・起動時の自動の読み込みと保存、およびそのレビューの修正を、PR #63 までの main に足したもの。PR #64） |
+| ビルド元 | `730bcb8`（信号情報ファイル。sim gui の `/api/signals`（`sim.cfg` の `gui_signals`）と、GUI の形式 v2・仕向ごとの差分・起動時の自動の読み込みと保存、およびそのレビューの修正を、PR #63 までの main に足したもの。PR #64） |
 | ビルドした日 | 2026-11-19 |
-| ビルド方法 | GitHub Actions の `windows` ジョブ（run 44513284850、windows-2025、MinGW-Builds の gcc 15.2.0、x86_64、posix-seh、UCRT。`build.bat` の `CC=gcc`）の成果物 `sim-windows-x64` から `sim.exe` を取った。テキストのファイル（`sim_gui.html`、`README.md`、`sim.cfg.example`、`native_ram_clear.c`、`xlate/`、`native/`）は、成果物と改行コード以外が同じであることを確かめて、リポジトリのソースの写し（LF）を置いた |
+| ビルド方法 | GitHub Actions の `windows` ジョブ（run 44514939202、windows-2025、MinGW-Builds の gcc 15.2.0、x86_64、posix-seh、UCRT。`build.bat` の `CC=gcc`）の成果物 `sim-windows-x64` から `sim.exe` を取った。テキストのファイル（`sim_gui.html`、`README.md`、`sim.cfg.example`、`native_ram_clear.c`、`xlate/`、`native/`）は、成果物と改行コード以外が同じであることを確かめて、リポジトリのソースの写し（LF）を置いた |
 | 依存する DLL | Windows 標準のものだけ（KERNEL32、SHELL32、WS2_32、UCRT）。MinGW の DLL は要らない |
-| 確認 | CI の同じ run で、windows ジョブの `tests\run_tests.bat` 927 件と、コア単体の試験（`rl78\tests\run_tests.bat`）、clang でのビルドが成功し、macos ジョブの `tests/run_tests.sh` 1186 件がすべて成功。Mac の上では GUI の `npx vitest run` 372 件と `npm run lint` が成功。`sim.exe` そのものは Windows で実行していない |
+| 確認 | CI の同じ run で、windows ジョブの `tests\run_tests.bat` 927 件と、コア単体の試験（`rl78\tests\run_tests.bat`）、clang でのビルドが成功し、macos ジョブの `tests/run_tests.sh` 1186 件がすべて成功。Mac の上では GUI の `npx vitest run` 378 件と `npm run lint` が成功。`sim.exe` そのものは Windows で実行していない |
 
 普段の配布物は CI（GitHub Actions の `windows` ジョブの成果物 `sim-windows-x64`）が作ります。
 このフォルダは、CI を使えなかったときの代わりに置いたものです。ソースを変えても自動では作り直されないので、
