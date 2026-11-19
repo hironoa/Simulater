@@ -18,7 +18,7 @@
 
 | 項目 | 内容 |
 | --- | --- |
-| ビルド元 | `f607950`（入力パネルの並べ替え・既定の固定・物理値・状態の選択の GUI の変更を、`abeac77`（PR #58 までの main）に足したもの。PR #60。C のソースは `abeac77` と同じ） |
+| ビルド元 | `MERGE_SHA`（入力パネルの並べ替え・既定の固定・物理値・状態の選択の GUI の変更（PR #60）を、PR #59 までの main に取り込んだもの。C のソースは `abeac77` と同じ） |
 | ビルドした日 | 2026-11-19 |
 | ビルド方法 | GitHub Actions の `windows` ジョブ（run 44471996710、windows-2025、MinGW-Builds の gcc 15.2.0、x86_64、posix-seh、UCRT。`build.bat` の `CC=gcc`）の成果物 `sim-windows-x64` から `sim.exe` を取った。テキストのファイル（`sim_gui.html`、`README.md`、`sim.cfg.example`、`native_ram_clear.c`、`xlate/`、`native/`）は、成果物と改行コード以外が同じであることを確かめて、リポジトリのソースの写し（LF）を置いた |
 | 依存する DLL | Windows 標準のものだけ（KERNEL32、SHELL32、WS2_32、UCRT）。MinGW の DLL は要らない |

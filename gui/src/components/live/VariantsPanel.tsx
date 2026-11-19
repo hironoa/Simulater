@@ -2,7 +2,7 @@ import { useRef, useState } from "react";
 import { liveController } from "../../live/controller";
 import { useLiveStore } from "../../live/liveStore";
 import { decodeVariantsCsv, parseInitFromCsv, type VariantsDoc, type InitValue } from "../../live/variants";
-import { setVariantsApplyError, useVariantsStore } from "../../live/variantsStore";
+import { setVariantsApplyError, useVariantsStore, variantWarning } from "../../live/variantsStore";
 import { SymbolSearch } from "./SymbolSearch";
 
 const field = "px-1.5 py-0.5 text-xs rounded border border-gray-300 dark:border-slate-600 bg-white dark:bg-slate-900";
@@ -24,6 +24,18 @@ export function VariantsPanel() {
     catch (e) { setVariantsApplyError(e); }
     finally { setBusy(false); }
   }
+  /**
+   * 仕向を選んだら、反映して、選択をファイルにも保存する（保存しないと、次の起動で選んでいない状態に戻る）。
+   * 仕向ファイルを読めなかったときは、壊れたファイルを上書きしないよう保存しない。
+   */
+  async function select(name: string) {
+    const next = { ...doc, selected: name };
+    await apply(next);
+    if (error || useVariantsStore.getState().errors[""]) return;
+    try { await api.saveVariants(next); useVariantsStore.setState({ saved: JSON.stringify(next) }); }
+    catch (e) { setErrors({ "": `選択をファイルに保存できませんでした: ${(e as Error).message}` }); }
+  }
+  const warning = variantWarning({ doc, loaded, error });
   const update = (values: InitValue[]) => apply({ ...doc, variants: doc.variants.map(v => v.name === doc.selected ? { ...v, values } : v) });
   const rename = (adding: boolean) => {
     const name = window.prompt(adding ? "仕向の名前" : "新しい名前", adding ? "" : doc.selected)?.trim();
@@ -32,7 +44,8 @@ export function VariantsPanel() {
   };
   return <div className="text-xs flex flex-col gap-2">
     {error && <p role="alert" className="text-red-500">{error}（自動保存しません）</p>}
-    <select className={field} aria-label="仕向" value={doc.selected} disabled={!loaded || busy} onChange={e => void apply({ ...doc, selected: e.target.value })}>
+    {warning && <p role="alert" className="font-bold text-amber-800 dark:text-amber-300">{warning}。入力が効かないときは、仕向を選んでください。</p>}
+    <select className={field} aria-label="仕向" value={doc.selected} disabled={!loaded || busy} onChange={e => void select(e.target.value)}>
       <option value="">選択なし</option>{doc.variants.map(v => <option key={v.name}>{v.name}</option>)}
     </select>
     <div className="flex items-center gap-1 whitespace-nowrap"><button className={button} disabled={busy} onClick={() => rename(true)}>追加</button><button className={button} disabled={!current || busy} onClick={() => rename(false)}>名前変更</button><button className={button} disabled={!current || busy} onClick={() => { if (window.confirm("この仕向を削除しますか？")) void apply({ ...doc, selected: "", variants: doc.variants.filter(v => v !== current) }); }}>削除</button><button className={button} disabled={busy} onClick={() => file.current?.click()}>CSV から取り込み</button></div>

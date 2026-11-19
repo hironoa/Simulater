@@ -2,11 +2,14 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it } from "vitest";
 import { initialLiveState, useLiveStore } from "../../live/liveStore";
+import { useVariantsStore, variantWarning } from "../../live/variantsStore";
 import { LiveBar } from "./LiveBar";
 
 const initial = useLiveStore.getInitialState();
 const originalSim = initial.sim;
-afterEach(() => { initial.sim = originalSim; });
+const variantsInitial = useVariantsStore.getInitialState();
+const originalVariants = { ...variantsInitial };
+afterEach(() => { initial.sim = originalSim; Object.assign(variantsInitial, originalVariants); });
 
 function render(func: string, needReset = false) {
   // サーバ描画は Zustand の初期スナップショットを読む。
@@ -36,5 +39,15 @@ describe("LiveBar", () => {
     const blocked = render("TEST_cycle", true);
     expect(button(blocked, "実行")).toContain('disabled=""');
     expect(button(blocked, "N 周期だけ進めて止める")).toContain('disabled=""');
+  });
+
+  it("仕向を選んでいなければ警告を出す（読み込み前・ファイルを読めないときは出さない）", () => {
+    const doc = { version: 1 as const, selected: "", variants: [{ name: "国内", values: [] }] };
+    Object.assign(variantsInitial, { doc, loaded: true, error: "" });
+    expect(render("TEST_cycle")).toContain("仕向が選ばれていません");
+    Object.assign(variantsInitial, { doc: { ...doc, selected: "国内" } });
+    expect(render("TEST_cycle")).not.toContain("仕向が選ばれていません");
+    expect(variantWarning({ doc, loaded: false, error: "" })).toBe("");
+    expect(variantWarning({ doc, loaded: true, error: "壊れています" })).toBe("");
   });
 });
