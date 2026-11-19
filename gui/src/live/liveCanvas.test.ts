@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { niceTicks, formatTick, formatTicks, laneRange, fitText, traceStepLine, drawLive, type LiveCanvasContext } from "./liveCanvas";
+import { niceTicks, formatTick, formatTicks, laneRange, fitText, traceStepLine, drawLive, type LiveCanvasContext, type LiveCanvasLane } from "./liveCanvas";
 import { LiveRecord } from "./liveRecord";
 
 const id = { lsb: 1, offset: 0 };
@@ -122,6 +122,7 @@ describe("drawLive", () => {
     const calls: string[] = [];
     const f = (name: string) => (...a: unknown[]) => { calls.push(`${name}(${a.join(",")})`); };
     const ctx = {
+      fillRect: f("fillRect"), globalAlpha: 1,
       beginPath: f("beginPath"), moveTo: f("moveTo"), lineTo: f("lineTo"), stroke: f("stroke"), fillText: f("fillText"),
       measureText: (s: string) => ({ width: s.length * 6 }) as TextMetrics, clearRect: f("clearRect"), save: f("save"), restore: f("restore"),
       rect: f("rect"), clip: f("clip"), setTransform: f("setTransform"),
@@ -131,6 +132,55 @@ describe("drawLive", () => {
   };
   const style = { axisColor: "#000", splitColor: "#ccc", left: 150, right: 20 };
   const lane = (sig: string) => ({ top: 10, height: 100, series: [{ sig, color: "#f00", label: sig, conv: id, yMin: null, yMax: null, lineWidth: 1.5 }] });
+
+  const stateLane = (): LiveCanvasLane => ({ ...lane("a"), series: [{ ...lane("a").series[0],
+    conv: { lsb: 10, offset: 100 }, modeMapping: { 0: "停止", 1: "運転" } }] });
+  const states = (values = [0, 0, 1, 1, 1]) => {
+    const r = new LiveRecord();
+    r.append(0, ["a"], values.map(v => [v]));
+    return r;
+  };
+  const bands = (calls: string[]) => calls.filter(c => c.startsWith("fillRect("));
+  const stateText = (calls: string[]) => calls.filter(c => /^fillText\((停止|運転),/.test(c));
+
+  it.each(["bg-only", "full"] as const)("%s: 生の値の連続区間に帯を2つ描き、fullだけ状態名を描く", mode => {
+    const { ctx, calls } = fake();
+    drawLive(ctx, 600, 200, 1, states(), [stateLane()], 5, 1, style, mode);
+    expect(bands(calls)).toEqual(["fillRect(150,10,215,100)", "fillRect(365,10,215,100)"]);
+    expect(stateText(calls)).toHaveLength(mode === "full" ? 2 : 0);
+    expect(calls.indexOf(bands(calls)[1])).toBeLessThan(calls.indexOf("clip()"));
+  });
+  it("off は帯も状態名も描かない", () => {
+    const { ctx, calls } = fake();
+    drawLive(ctx, 600, 200, 1, states(), [stateLane()], 5, 1, style, "off");
+    expect(bands(calls)).toHaveLength(0);
+    expect(stateText(calls)).toHaveLength(0);
+  });
+  it("状態名にない値やNaNの区間は描かない", () => {
+    const { ctx, calls } = fake();
+    drawLive(ctx, 600, 200, 1, states([0, 0, 9, NaN, 1]), [stateLane()], 5, 1, style, "full");
+    expect(bands(calls)).toEqual(["fillRect(150,10,215,100)"]);
+    expect(stateText(calls)).toHaveLength(1);
+  });
+  it("重ね表示は状態名のある最初の系列だけに帯を描く", () => {
+    const { ctx, calls } = fake();
+    const l = { ...stateLane(), series: [...lane("missing").series, ...stateLane().series, ...stateLane().series] };
+    drawLive(ctx, 600, 200, 1, states(), [l], 5, 1, style, "full");
+    expect(bands(calls)).toHaveLength(2);
+    expect(stateText(calls)).toHaveLength(2);
+  });
+  it("窓の外の値は見ず、文字が入らない帯では名前を省略する", () => {
+    const { ctx, calls } = fake();
+    drawLive(ctx, 180, 200, 1, states([9, 9, 0, 0, 1, 1, 1]), [stateLane()], 5, 1, style, "full");
+    expect(bands(calls)).toEqual(["fillRect(150,10,5,100)", "fillRect(155,10,5,100)"]);
+    expect(stateText(calls)).toHaveLength(0);
+  });
+  it("区間数が横幅を超えるときは1px未満の帯を描かない", () => {
+    const { ctx, calls } = fake();
+    drawLive(ctx, 174, 200, 1, states([0, 1, 0, 1, 0, 0, 0]), [stateLane()], 7, 1, style, "bg-only");
+    expect(bands(calls)).toHaveLength(1);
+    expect(Number(bands(calls)[0].split(",")[2])).toBeGreaterThanOrEqual(1);
+  });
 
   it("直近 n 点を描き、横軸は窓の幅で固定する", () => {
     const r = new LiveRecord();
