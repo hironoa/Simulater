@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { signalTitle, getTextWidth, maxTitleWidth, truncateTitle, leftMargin, rightMargin, rightAxisWidth, laneSplitNumber, laneLabelTop, signalLineType } from "./laneLabels";
+import { signalTitle, getTextWidth, maxTitleWidth, truncateTitle, leftMargin, rightMargin, rightAxisWidth, visibleRightAxes, laneSplitNumber, laneLabelTop, signalLineType } from "./laneLabels";
 import { buildChartOptions } from "./chartOptionsBuilder";
 
 describe("レーン共通の表示計算", () => {
@@ -42,6 +42,12 @@ describe("レーン共通の表示計算", () => {
     expect(rightAxisWidth(10)).toBe(68);
     expect(rightMargin(0, 10)).toBe(15);
     expect(rightMargin(2, 10)).toBe(151);
+  });
+  it.each([
+    [9, 68, 600, 2], [9, 35, 600, 4], [1, 68, 600, 1], [0, 68, 600, 0],
+    [9, 68, 40, 0], [9, 68, 0, 9], [9, 68, undefined, 9],
+  ])("右軸%d本・幅%dpx・領域%sでは%d本を表示する", (axes, width, container, expected) => {
+    expect(visibleRightAxes(axes, width, container)).toBe(expected);
   });
   it.each([[29, 1], [30, 2], [59, 2], [60, 3], [99, 3], [100, 5]])("高さ%dのsplitNumberは%d", (height, expected) => {
     expect(laneSplitNumber(height)).toBe(expected);
@@ -104,5 +110,25 @@ describe("停止時の長いタイトル", () => {
     expect(option.grid[0].left).toBe(leftMargin(true, 600, 1));
     expect(option.title[0].text).toBe(alias);
     expect(option.title[0].textStyle).not.toHaveProperty("width");
+  });
+});
+
+describe("停止時の右軸本数制限", () => {
+  it("幅600px・10系列・10桁でも右余白を3割以内に収め、超過軸を隠す", () => {
+    const names = Array.from({ length: 10 }, (_, i) => `s${i}`);
+    const ranges = names.map((_, i) => i ? [1e9, 2e9] : [0, 2]);
+    const option = buildChartOptions({ steps: [1, 2], seriesMap: Object.fromEntries(names.map((sig, i) => [sig, ranges[i]])) }, 600,
+      names, [{ name: "G", signals: names, layout: "overlap", syncRange: false }], [], { layout: "lane", syncRange: false },
+      Object.fromEntries(names.map((sig, i) => [sig, { color: "#f00", weight: 1, yAuto: false, yMin: ranges[i][0], yMax: ranges[i][1], yBreak: false }])),
+      {}, {}, {}, {}, {}, 1, "uniform", false, false, "off", false, "off", [], { start: 0, end: 100 }, "light", "physical", undefined, undefined, 600);
+    expect(option.grid.every(grid => grid.right === 151 && Number(grid.right) <= 180)).toBe(true);
+    const axes = option.yAxis.slice(0, 10);
+    expect(axes.slice(0, 3).every(axis => axis.show === true)).toBe(true);
+    axes.slice(3).forEach(axis => {
+      expect(axis.show).toBe(false);
+      expect(axis.axisLine.show).toBe(false);
+      expect(axis.axisLabel.show).toBe(false);
+    });
+    expect(names.every(sig => option.series.some(series => series.name === sig))).toBe(true);
   });
 });

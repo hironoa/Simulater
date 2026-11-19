@@ -1,6 +1,6 @@
 import { displaySignalName } from "./displaySignalName";
 import { buildDisplayBlocks, layoutBlocks } from "./displayBlocks";
-import { FONT_MONO, maxTitleWidth, truncateTitle, signalTitle, getTextWidth, leftMargin as getLeftMargin, rightMargin, rightAxisWidth, RIGHT_AXIS_WIDTH, laneLabelTop, laneSplitNumber, signalLineType } from "./laneLabels";
+import { FONT_MONO, maxTitleWidth, truncateTitle, signalTitle, getTextWidth, leftMargin as getLeftMargin, rightMargin, rightAxisWidth, visibleRightAxes, RIGHT_AXIS_WIDTH, laneLabelTop, laneSplitNumber, signalLineType } from "./laneLabels";
 import * as echarts from "echarts";
 import { addCompareRendering, CompareRendering } from "./compareRendering";
 import { YBreak } from "../types";
@@ -1081,13 +1081,21 @@ export function buildChartOptions(
     },
   ];
 
+  const axisWidth = rightAxisWidth(maxRightTickCharacters);
+  const rightAxes = visibleRightAxes(maxRightAxesNum, axisWidth, containerWidth);
   option.grid.forEach(grid => {
     grid.left = getLeftMargin(showSignalNames, globalMaxTitleWidth, maxTickCharacters);
-    grid.right = rightMargin(maxRightAxesNum, maxRightTickCharacters);
+    grid.right = rightMargin(rightAxes, maxRightTickCharacters);
   });
   option.yAxis.forEach(axis => {
     if (axis.position === "right") {
-      axis.offset = Number(axis.offset ?? 0) / RIGHT_AXIS_WIDTH * rightAxisWidth(maxRightTickCharacters);
+      const rightIndex = Number(axis.offset ?? 0) / RIGHT_AXIS_WIDTH;
+      axis.offset = rightIndex * axisWidth;
+      if (rightIndex >= rightAxes) {
+        axis.show = false;
+        axis.axisLine = { ...axis.axisLine, show: false };
+        axis.axisLabel = { ...axis.axisLabel, show: false };
+      }
     }
   });
   return option;

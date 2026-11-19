@@ -54,6 +54,12 @@ export function rightAxisWidth(tickCharacters = 0): number {
   return Math.max(RIGHT_AXIS_WIDTH, tickCharacters * 6 + 4 + 4);
 }
 
+/** 右余白を領域幅の3割以内に収める。幅未取得時は従来の本数。 */
+export function visibleRightAxes(maxRightAxes: number, axisWidth: number, containerWidth: number): number {
+  if (!(containerWidth > 0)) return maxRightAxes;
+  return Math.min(maxRightAxes, Math.max(0, Math.floor((containerWidth * 0.3 - 15) / axisWidth)));
+}
+
 export function rightMargin(maxRightAxes: number, tickCharacters = 0): number {
   return 15 + maxRightAxes * rightAxisWidth(tickCharacters);
 }

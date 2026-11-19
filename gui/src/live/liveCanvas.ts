@@ -69,6 +69,8 @@ export interface LiveCanvasStyle {
   dark?: boolean;
   /** 右軸1本の幅。省略時は35px。 */
   rightAxisWidth?: number;
+  /** 描く右軸の最大本数。省略時は全軸。波形の系列数は制限しない。 */
+  rightAxes?: number;
   stateOpacity?: number;
   axisColor: string;
   splitColor: string;
@@ -286,7 +288,7 @@ export function drawLive(
     ctx.stroke();
 
     lane.series.forEach((series, k) => {
-      if (k > 0 && !perSeries) return;
+      if (k > 0 && (!perSeries || k - 1 >= (style.rightAxes ?? Infinity))) return;
       const axisX = k === 0 ? plotL : plotR + (k - 1) * (style.rightAxisWidth ?? RIGHT_AXIS_WIDTH);
       ctx.strokeStyle = series.color;
       ctx.lineWidth = 2;

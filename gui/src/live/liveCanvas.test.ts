@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { niceTicks, formatTick, formatTicks, laneRange, fitText, traceStepLine, drawLive, type LiveCanvasContext, type LiveCanvasLane } from "./liveCanvas";
-import { rightAxisWidth, rightMargin, leftMargin, maxTitleWidth, truncateTitle } from "../utils/laneLabels";
+import { rightAxisWidth, rightMargin, visibleRightAxes, leftMargin, maxTitleWidth, truncateTitle } from "../utils/laneLabels";
 import { fitLabel } from "../utils/fitLabel";
 import { getStateColor } from "../utils/stateNames";
 import { getDarkerColor } from "../utils/helpers";
@@ -415,6 +415,40 @@ describe("drawLive", () => {
     expect(paints.some(p => p.x === 5 && p.text === truncateTitle(alias, 180))).toBe(true);
     expect(calls).toContain(`rect(${bounded.left},10,${600 - bounded.right - bounded.left},100)`);
     expect(fitLiveLabels([original], 0).layout[0].series[0].label).toBe(alias);
+  });
+
+  it("幅600px・10系列・10桁では右軸を2本に制限して全波形を維持する", () => {
+    const names = Array.from({ length: 10 }, (_, i) => `s${i}`);
+    const r = new LiveRecord();
+    r.append(0, names, [names.map(() => 1e9), names.map(() => 2e9)]);
+    const l: LiveCanvasLane = { ...lane(names[0]), syncRange: false,
+      series: names.map(sig => ({ ...lane(sig).series[0], yMin: 1e9, yMax: 2e9 })) };
+    const { layout, titleWidth } = fitLiveLabels([l], 600);
+    const axisWidth = rightAxisWidth(10);
+    const rightAxes = visibleRightAxes(9, axisWidth, 600);
+    const bounded = { ...style, left: leftMargin(true, titleWidth, 10), right: rightMargin(rightAxes, 10), rightAxes, rightAxisWidth: axisWidth };
+    expect(rightAxes).toBe(2);
+    expect(600 - bounded.left - bounded.right).toBeGreaterThanOrEqual(180);
+    const { ctx, paints, calls } = fake();
+    const result = drawLive(ctx, 600, 200, 1, r, layout, 2, 1, bounded);
+    const plotR = 600 - bounded.right;
+    const labels = paints.filter(p => p.baseline === "middle" && p.align === "left");
+    expect(new Set(labels.map(p => p.x))).toEqual(new Set([plotR + 4, plotR + axisWidth + 4]));
+    expect(calls.filter(c => c === "clip()")).toHaveLength(10);
+    expect(result.points).toBe(20);
+  });
+  it("非表示の右軸の文字数は数えず、その系列も自身の範囲で描く", () => {
+    const { ctx, calls } = fake();
+    const l: LiveCanvasLane = { ...lane("a"), syncRange: false, series: [
+      { ...lane("a").series[0], yMin: 0, yMax: 1 },
+      { ...lane("b").series[0], yMin: 0, yMax: 1000 },
+      { ...lane("c").series[0], yMin: 1e9, yMax: 2e9 },
+    ] };
+    const r = new LiveRecord(); r.append(0, ["a", "b", "c"], [[0, 0, 1e9], [1, 1000, 2e9]]);
+    const result = drawLive(ctx, 600, 200, 1, r, [l], 2, 1, { ...style, rightAxes: 1 });
+    expect(result.maxRightTickCharacters).toBe(4);
+    expect(lineSpans(calls)[2]).toEqual({ min: 10, max: 110 });
+    expect(drawLive(ctx, 600, 200, 1, r, [l], 2, 1, { ...style, rightAxes: 0 }).maxRightTickCharacters).toBe(0);
   });
 
   it("記録が空でも落ちない", () => {

@@ -4,7 +4,7 @@ import { useWaveformStore } from "../../store/useWaveformStore";
 import { useLiveStore } from "../../live/liveStore";
 import { liveRecord } from "../../live/liveRecord";
 import { drawLive } from "../../live/liveCanvas";
-import { leftMargin, rightMargin, rightAxisWidth } from "../../utils/laneLabels";
+import { leftMargin, rightMargin, rightAxisWidth, visibleRightAxes } from "../../utils/laneLabels";
 import { buildLiveLanes, fitLiveLabels } from "../../live/liveLayout";
 import { useCompareView } from "../../hooks/useCompareView";
 
@@ -99,14 +99,17 @@ export function LiveChart() {
       const t0 = performance.now();
       const { windowSize: n, periodMs: p, theme: th, showMode: mode, margins: m, showSignalNames } = paramsRef.current;
       const dark = th === "dark";
+      const axisWidth = rightAxisWidth(rightTickCharacters.current);
+      const rightAxes = visibleRightAxes(m.rightAxes, axisWidth, w);
       const res = drawLive(ctx, w, h, dpr, liveRecord, layoutRef.current, n, p, {
         dark,
         stateOpacity: dark ? 0.3 : 0.15,
         axisColor: dark ? "#94a3b8" : "#64748b",
         splitColor: dark ? "#334155" : "#e5e7eb",
         left: leftMargin(showSignalNames, m.titleWidth, tickCharacters.current),
-        right: rightMargin(m.rightAxes, rightTickCharacters.current),
-        rightAxisWidth: rightAxisWidth(rightTickCharacters.current),
+        right: rightMargin(rightAxes, rightTickCharacters.current),
+        rightAxes,
+        rightAxisWidth: axisWidth,
       }, mode);
       if (res.maxTickCharacters > tickCharacters.current) {
         tickCharacters.current = res.maxTickCharacters;
