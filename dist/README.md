@@ -18,11 +18,11 @@
 
 | 項目 | 内容 |
 | --- | --- |
-| ビルド元 | `6453699`（入力パネルの並べ替え・既定の固定・物理値・状態の選択の GUI の変更（PR #60）を、PR #59 までの main に取り込んだもの。C のソースは `abeac77` と同じ） |
+| ビルド元 | `2e5b211`（入力パネルの並べ替え・既定の固定・物理値・状態の選択の GUI の変更（PR #60）を、PR #59 までの main に取り込んだもの。C のソースは `abeac77` と同じ） |
 | ビルドした日 | 2026-11-19 |
-| ビルド方法 | GitHub Actions の `windows` ジョブ（run 44479531944、windows-2025、MinGW-Builds の gcc 15.2.0、x86_64、posix-seh、UCRT。`build.bat` の `CC=gcc`）の成果物 `sim-windows-x64` から `sim.exe` を取った。テキストのファイル（`sim_gui.html`、`README.md`、`sim.cfg.example`、`native_ram_clear.c`、`xlate/`、`native/`）は、成果物と改行コード以外が同じであることを確かめて、リポジトリのソースの写し（LF）を置いた |
+| ビルド方法 | GitHub Actions の `windows` ジョブ（run 44480773989、windows-2025、MinGW-Builds の gcc 15.2.0、x86_64、posix-seh、UCRT。`build.bat` の `CC=gcc`）の成果物 `sim-windows-x64` から `sim.exe` を取った。テキストのファイル（`sim_gui.html`、`README.md`、`sim.cfg.example`、`native_ram_clear.c`、`xlate/`、`native/`）は、成果物と改行コード以外が同じであることを確かめて、リポジトリのソースの写し（LF）を置いた |
 | 依存する DLL | Windows 標準のものだけ（KERNEL32、SHELL32、WS2_32、UCRT）。MinGW の DLL は要らない |
-| 確認 | CI の同じ run で、windows ジョブの `tests\run_tests.bat` 917 件と、コア単体の試験（`rl78\tests\run_tests.bat`）、clang でのビルドが成功し、macos ジョブの `tests/run_tests.sh` 1176 件がすべて成功。Mac の上では GUI の `npx vitest run` 242 件と `npm run lint` が成功。`sim.exe` そのものは Windows で実行していない |
+| 確認 | CI の同じ run で、windows ジョブの `tests\run_tests.bat` 917 件と、コア単体の試験（`rl78\tests\run_tests.bat`）、clang でのビルドが成功し、macos ジョブの `tests/run_tests.sh` 1176 件がすべて成功。Mac の上では GUI の `npx vitest run` 243 件と `npm run lint` が成功。`sim.exe` そのものは Windows で実行していない |
 
 普段の配布物は CI（GitHub Actions の `windows` ジョブの成果物 `sim-windows-x64`）が作ります。
 このフォルダは、CI を使えなかったときの代わりに置いたものです。ソースを変えても自動では作り直されないので、
