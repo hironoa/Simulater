@@ -1,9 +1,10 @@
 import { describe, it, expect } from "vitest";
 import { niceTicks, formatTick, formatTicks, laneRange, fitText, traceStepLine, drawLive, type LiveCanvasContext, type LiveCanvasLane } from "./liveCanvas";
-import { rightAxisWidth, rightMargin } from "../utils/laneLabels";
+import { rightAxisWidth, rightMargin, leftMargin, maxTitleWidth, truncateTitle } from "../utils/laneLabels";
 import { fitLabel } from "../utils/fitLabel";
 import { getStateColor } from "../utils/stateNames";
 import { getDarkerColor } from "../utils/helpers";
+import { fitLiveLabels } from "./liveLayout";
 import { LiveRecord } from "./liveRecord";
 
 const id = { lsb: 1, offset: 0 };
@@ -395,6 +396,25 @@ describe("drawLive", () => {
     const result = drawLive(ctx, 600, 200, 1, twoScales(), [l], 2, 1, style);
     expect(result.maxTickCharacters).toBe(3); // 0.5 などの小数目盛り
     expect(result.maxRightTickCharacters).toBe(5);
+  });
+
+  it("幅600px・100文字の別名でも波形に半分以上の幅を残す", () => {
+    const alias = "a".repeat(100);
+    const original = lane("a"); original.series[0].label = alias;
+    const { layout, titleWidth } = fitLiveLabels([original], 600);
+    expect(titleWidth).toBe(maxTitleWidth(600));
+    expect(layout[0].series[0].label).toBe(truncateTitle(alias, 180));
+    expect(original.series[0].label).toBe(alias);
+    const r = states();
+    const first = fake();
+    const measured = drawLive(first.ctx, 600, 200, 1, r, layout, 5, 1, style);
+    const bounded = { ...style, left: leftMargin(true, titleWidth, measured.maxTickCharacters), right: rightMargin(0) };
+    expect(600 - bounded.right - bounded.left).toBeGreaterThanOrEqual(300);
+    const { ctx, paints, calls } = fake();
+    drawLive(ctx, 600, 200, 1, r, layout, 5, 1, bounded);
+    expect(paints.some(p => p.x === 5 && p.text === truncateTitle(alias, 180))).toBe(true);
+    expect(calls).toContain(`rect(${bounded.left},10,${600 - bounded.right - bounded.left},100)`);
+    expect(fitLiveLabels([original], 0).layout[0].series[0].label).toBe(alias);
   });
 
   it("記録が空でも落ちない", () => {

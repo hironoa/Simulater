@@ -1,6 +1,6 @@
 import { displaySignalName } from "./displaySignalName";
 import { buildDisplayBlocks, layoutBlocks } from "./displayBlocks";
-import { FONT_MONO, signalTitle, getTextWidth, leftMargin as getLeftMargin, rightMargin, rightAxisWidth, RIGHT_AXIS_WIDTH, laneLabelTop, laneSplitNumber, signalLineType } from "./laneLabels";
+import { FONT_MONO, maxTitleWidth, truncateTitle, signalTitle, getTextWidth, leftMargin as getLeftMargin, rightMargin, rightAxisWidth, RIGHT_AXIS_WIDTH, laneLabelTop, laneSplitNumber, signalLineType } from "./laneLabels";
 import * as echarts from "echarts";
 import { addCompareRendering, CompareRendering } from "./compareRendering";
 import { YBreak } from "../types";
@@ -50,6 +50,7 @@ export function buildChartOptions(
   valueDisplayMode: "physical" | "raw" = "physical",
   inactive?: InactiveResult,
   comparison?: CompareRendering,
+  containerWidth = 0,
 ) {
   const rangeCache = new Map<string, (number | null)[]>();
   const rangeData = (sig: string) => {
@@ -305,6 +306,7 @@ export function buildChartOptions(
     }
   });
   const globalRightMargin = rightMargin(maxRightAxesNum);
+  const titleWidthLimit = containerWidth > 0 ? maxTitleWidth(containerWidth) : Infinity;
   const titleFor = (sig: string) => signalTitle(sig, activeSignals, signalSettings[sig],
     { showAlias, unitMapping, modeMapping, valueDisplayMode });
 
@@ -333,6 +335,8 @@ export function buildChartOptions(
   Object.values(maxGridTitleWidths).forEach((w) => {
     if (w > globalMaxTitleWidth) globalMaxTitleWidth = w;
   });
+
+  globalMaxTitleWidth = Math.min(globalMaxTitleWidth, titleWidthLimit);
 
   // 軸の範囲が確定した後で目盛り幅を加える
   let maxTickCharacters = 0, maxRightTickCharacters = 0;
@@ -562,7 +566,7 @@ export function buildChartOptions(
     }
 
     if (showSignalNames) {
-      const titleText = titleFor(sig);
+      const titleText = truncateTitle(titleFor(sig), titleWidthLimit);
 
       if (overlapTitleOffsets[gridIdx] === undefined) {
         overlapTitleOffsets[gridIdx] = 0;
@@ -586,6 +590,7 @@ export function buildChartOptions(
         padding: 0,
         textBaseline: "top",
         textStyle: {
+          ...(containerWidth > 0 ? { width: titleWidthLimit, overflow: "truncate" as const, ellipsis: "…" } : {}),
           fontSize: 10,
           color: color,
           fontWeight: "bold",

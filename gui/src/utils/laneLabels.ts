@@ -21,6 +21,26 @@ export function getTextWidth(text: string, fontSize = 10): number {
   return width;
 }
 
+export function maxTitleWidth(containerWidth: number): number {
+  return Math.max(40, containerWidth * 0.3);
+}
+
+/** 幅の見積もりだけで省略する。構成・幅の変更時に使い、描画中のmeasureTextを避ける。 */
+export function truncateTitle(text: string, width: number): string {
+  if (getTextWidth(text) <= width) return text;
+  const ellipsis = "…";
+  let used = getTextWidth(ellipsis);
+  if (used > width) return "";
+  let prefix = "";
+  for (const char of text) {
+    const next = getTextWidth(char);
+    if (used + next > width) break;
+    prefix += char;
+    used += next;
+  }
+  return prefix + ellipsis;
+}
+
 export function laneLabelTop(top: number, height: number, count: number, index: number): number {
   return top + height / 2 - (count * 14 + (count - 1) * 4) / 2 + index * 18;
 }

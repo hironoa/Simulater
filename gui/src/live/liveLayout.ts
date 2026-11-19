@@ -1,7 +1,7 @@
 import type { AppState } from "../types";
 import { activeDisplaySignals, buildDisplayBlocks, layoutBlocks } from "../utils/displayBlocks";
 import { getConversion, getDisplayConversion } from "../utils/helpers";
-import { signalTitle, signalLineType } from "../utils/laneLabels";
+import { signalTitle, signalLineType, getTextWidth, maxTitleWidth, truncateTitle } from "../utils/laneLabels";
 import type { LiveCanvasLane, LiveCanvasSeries } from "./liveCanvas";
 
 type LiveLayoutSettings = Pick<AppState, "signalSettings" | "signalGroups" | "unassignedSignals" |
@@ -39,4 +39,15 @@ export function buildLiveLanes(state: LiveLayoutSettings, names: readonly string
           ...(block.syncGroup ? { rangeSeries: block.syncGroup.map(toSeries) } : {}) }
       : { series: block.signals.map(toSeries), syncRange: block.syncRange }),
   }));
+}
+
+/** 名前の幅と省略結果はレーン構成・キャンバス幅が変わるときだけ求める。 */
+export function fitLiveLabels(lanes: LiveCanvasLane[], containerWidth: number) {
+  const limit = containerWidth > 0 ? maxTitleWidth(containerWidth) : Infinity;
+  const titleWidth = Math.min(limit, Math.max(0,
+    ...lanes.flatMap(lane => lane.series.map(series => getTextWidth(series.label)))));
+  const layout = lanes.map(lane => ({ ...lane,
+    series: lane.series.map(series => ({ ...series, label: truncateTitle(series.label, limit) })),
+  }));
+  return { layout, titleWidth };
 }

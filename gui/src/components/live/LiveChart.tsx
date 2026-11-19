@@ -4,8 +4,8 @@ import { useWaveformStore } from "../../store/useWaveformStore";
 import { useLiveStore } from "../../live/liveStore";
 import { liveRecord } from "../../live/liveRecord";
 import { drawLive } from "../../live/liveCanvas";
-import { getTextWidth, leftMargin, rightMargin, rightAxisWidth } from "../../utils/laneLabels";
-import { buildLiveLanes } from "../../live/liveLayout";
+import { leftMargin, rightMargin, rightAxisWidth } from "../../utils/laneLabels";
+import { buildLiveLanes, fitLiveLabels } from "../../live/liveLayout";
 import { useCompareView } from "../../hooks/useCompareView";
 
 /** 描画の上限（fps）。samples は約 50ms ごとに届く。描画は記録が変わったときだけ行う。 */
@@ -45,12 +45,13 @@ export function LiveChart() {
   }, []);
 
   // レーン構成
-  const layout = useMemo(() => buildLiveLanes(state, names, size.h, view.visible), [state, names, size.h, view]);
+  const rawLayout = useMemo(() => buildLiveLanes(state, names, size.h, view.visible), [state, names, size.h, view]);
+  const { layout, titleWidth } = useMemo(() => fitLiveLabels(rawLayout, size.w), [rawLayout, size.w]);
 
   const margins = useMemo(() => ({
-    titleWidth: Math.max(0, ...layout.flatMap(lane => lane.series.map(s => getTextWidth(s.label)))),
+    titleWidth,
     rightAxes: Math.max(0, ...layout.map(lane => lane.syncRange === false ? lane.series.length - 1 : 0)),
-  }), [layout]);
+  }), [layout, titleWidth]);
   const tickCharacters = useRef(0);
   const rightTickCharacters = useRef(0);
   const layoutRef = useRef(layout);
