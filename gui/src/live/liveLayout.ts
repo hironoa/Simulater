@@ -12,7 +12,9 @@ export function buildLiveLanes(state: LiveLayoutSettings, names: readonly string
   const active = activeDisplaySignals(names, state.signalSettings, visible);
   const blocks = buildDisplayBlocks(active, state.signalGroups, state.unassignedSignals, state.unassignedGroupConfig);
   const h = Math.max(0, height);
-  const positions = layoutBlocks(blocks, state.signalSettings, state.layoutMode, h);
+  // 横軸の目盛りとmsの行に最低30pxを確保する。十分な高さでは停止時と同じ8%。
+  const bottomMargin = h > 0 ? Math.max(8, 30 / h * 100) : 8;
+  const positions = layoutBlocks(blocks, state.signalSettings, state.layoutMode, h, 35, bottomMargin);
   const toSeries = (sig: string): LiveCanvasSeries => {
     const set = state.signalSettings[sig];
     const conv = getConversion(sig, state.lsbMapping, state.offsetMapping);
@@ -33,7 +35,7 @@ export function buildLiveLanes(state: LiveLayoutSettings, names: readonly string
   // 縦軸の同期は止まっているときの表示（chartOptionsBuilder）と同じ: 重ね表示は syncRange、並べる表示は syncGroup
   return blocks.map((block, i) => ({
     top: positions[i].top * h / 100,
-    height: positions[i].height * h / 100,
+    height: Math.max(0, positions[i].height) * h / 100,
     ...(block.type === "single"
       ? { series: [toSeries(block.sig)], syncKey: block.syncGroup?.join(",") ?? null,
           ...(block.syncGroup ? { rangeSeries: block.syncGroup.map(toSeries) } : {}) }

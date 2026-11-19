@@ -70,6 +70,30 @@ describe("ライブのレーン", () => {
     expect(lanes.map(l => ({ top: l.top, height: l.height })))
       .toEqual(expected.map(l => ({ top: l.top * 7, height: l.height * 7 })));
   });
+  it("高さ200pxでは最下段の下に横軸用の30pxを残す", () => {
+    const lanes = buildLiveLanes(setup(), ["a", "b", "c"], 200);
+    const last = lanes[lanes.length - 1];
+    expect(last.top + last.height + 30).toBeLessThanOrEqual(200);
+    expect(last.top + last.height).toBeCloseTo(170);
+  });
+  it("高さ600pxでは既定の8%の配置を維持する", () => {
+    const state = setup();
+    const names = ["a", "b", "c"];
+    const blocks = buildDisplayBlocks(names, state.signalGroups, ["c"], state.unassignedGroupConfig);
+    const expected = layoutBlocks(blocks, state.signalSettings, state.layoutMode, 600);
+    const lanes = buildLiveLanes(state, names, 600);
+    lanes.forEach((lane, i) => {
+      expect(lane.top).toBeCloseTo(expected[i].top * 6);
+      expect(lane.height).toBeCloseTo(expected[i].height * 6);
+    });
+    const last = lanes[lanes.length - 1];
+    expect(last.top + last.height).toBeCloseTo(552);
+  });
+  it.each([0, 1, 20])("高さ%dpxでもレーン高が負にならない", height => {
+    const lanes = buildLiveLanes(setup(), ["a", "b", "c"], height);
+    expect(lanes.length).toBeGreaterThan(0);
+    expect(lanes.every(lane => Number.isFinite(lane.height) && lane.height >= 0)).toBe(true);
+  });
   it("単位と別名を付け、raw と名前非表示も停止時と揃える", () => {
     const state = { ...setup(), showSignalNames: true, showAlias: true, unitMapping: { a: "rpm" }, modeMapping: {} };
     state.signalSettings.a = { ...state.signalSettings.a, alias: "回転数" };
