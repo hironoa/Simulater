@@ -222,6 +222,21 @@ describe("ライブ制御（SSE の取り込み）", () => {
       expect(useWaveformStore.getState().signalSettings.x.checked).toBe(false);
     });
 
+    it("入力カードだけの監視は系列名が長くなっても短く戻っても非表示を保つ", () => {
+      const live = makeController();
+      live.addInput("a.c/x");
+      expect(useWaveformStore.getState().signalSettings.x.checked).toBe(true);
+      useWaveformStore.getState().toggleSignalCheck("x");
+
+      live.addInput("b.c/x");
+
+      expect(useWaveformStore.getState().signalSettings["a.c/x"].checked).toBe(false);
+
+      live.removeInput("b.c/x");
+
+      expect(useWaveformStore.getState().signalSettings.x.checked).toBe(false);
+    });
+
     it("新しく監視する変数の表示には YAML の checked を使う", () => {
       const live = makeController();
       const state = useWaveformStore.getState();

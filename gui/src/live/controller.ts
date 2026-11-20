@@ -144,12 +144,16 @@ export function createLiveController(deps: LiveControllerDeps = {}) {
       ...s.watch.filter(w => w.plot),
       ...s.inputs.filter(i => i.monitor !== false && !watchNames.has(i.name)),
     ].map(({ name }) => seriesName(name, s)));
+    const previousSettings = waveform.getState().signalSettings;
     const carry = new Map<string, boolean>();
     for (const [name, key] of series) {
       const oldKey = syncedSeries.get(name);
-      // 初めて使う系列の設定は YAML などから引き継ぐ。監視で使った系列の再割り当てでは plot を優先する。
+      // 初めて使う系列の設定は YAML などから引き継ぐ。改名時、入力だけの監視は旧系列の checked を使う。
       if (oldKey !== key && (oldKey !== undefined || usedSeries.has(key))) {
-        carry.set(key, plotted.has(key));
+        const previousChecked = oldKey !== undefined && !watchNames.has(name)
+          ? previousSettings[oldKey]?.checked
+          : undefined;
+        carry.set(key, previousChecked ?? plotted.has(key));
       }
       usedSeries.add(key);
     }
