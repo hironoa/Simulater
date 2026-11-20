@@ -19,6 +19,7 @@ export interface LiveStoreState {
   serverWatch: string[];
   watchErrors: Record<string, string>;
   inputs: InputItem[];
+  layoutRevision: number;
   watch: WatchItem[];
   windowSize: number;
   maxSamples: number;
@@ -35,6 +36,7 @@ export const initialLiveState: LiveStoreState = {
   serverWatch: [],
   watchErrors: {},
   inputs: DEFAULT_LAYOUT.inputs,
+  layoutRevision: 0,
   watch: DEFAULT_LAYOUT.watch,
   windowSize: DEFAULT_LAYOUT.windowSize,
   maxSamples: DEFAULT_LAYOUT.maxSamples,

@@ -1,8 +1,7 @@
-import { useVariantsStore } from "../live/variantsStore";
+import { persistLiveLayout, useVariantsStore } from "../live/variantsStore";
 import { emptyDefs, emptyView, readSignalDocument, readDefs, legacyView, effectiveMappings, writeEffective, defFromMappings, dumpSignals, unique, type DefOverride, type SignalDefs, type SignalView } from "./signalDefs";
 import { useLiveStore } from "../live/liveStore";
 import { listedSignals } from "../utils/displaySignalName";
-import { saveLayout } from "../live/persist";
 import { create } from "zustand";
 import {
   AppState,
@@ -1670,5 +1669,5 @@ useWaveformStore.subscribe((state, prev) => {
     ? { ...w, plot: state.signalSettings[w.name].checked } : w);
   if (!watch.some((w, i) => w !== live.watch[i])) return;
   useLiveStore.setState({ watch });
-  saveLayout({ inputs: live.inputs, watch, windowSize: live.windowSize, maxSamples: live.maxSamples });
+  persistLiveLayout({ inputs: live.inputs, watch, windowSize: live.windowSize, maxSamples: live.maxSamples });
 });

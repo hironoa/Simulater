@@ -18,11 +18,11 @@
 
 | 項目 | 内容 |
 | --- | --- |
-| ビルド元 | `c9b866c`（信号情報 YAML の「ファイル名/信号名」を、読み込むときに信号名にそろえる修正を、PR #67 までの main に足したもの。PR #69） |
+| ビルド元 | `d026bce`（仕向ごとの入力パネルと監視一覧。仕向ファイルの各仕向に `inputs`・`watch` を持たせ、仕向の切り替えで入れ替え、変更を仕向ファイルへ自動保存する GUI の変更と、そのレビューの修正（値が未設定の固定入力へ切り替えるときに前の固定を解除する、切り替え中に外した固定入力を遅れて固定し直さない）を、PR #67 までの main に足したもの。sim 本体の C のソースは PR #67 の main と同じ） |
 | ビルドした日 | 2026-11-20 |
-| ビルド方法 | GitHub Actions の `windows` ジョブ（run 44670604344、windows-2025、MinGW-Builds の gcc 15.2.0、x86_64、posix-seh、UCRT。`build.bat` の `CC=gcc`）の成果物 `sim-windows-x64` から `sim.exe` を取った。テキストのファイル（`sim_gui.html`、`README.md`、`sim.cfg.example`、`native_ram_clear.c`、`xlate/`、`native/`）は、成果物と改行コード以外が同じであることを確かめて、リポジトリのソースの写し（LF）を置いた |
+| ビルド方法 | Windows 11 の PC で `tools\build_dist.bat`（`CC=gcc`。WinLibs の MinGW-w64 gcc 16.2.0、x86_64、posix-seh、UCRT） |
 | 依存する DLL | Windows 標準のものだけ（KERNEL32、SHELL32、WS2_32、UCRT）。MinGW の DLL は要らない |
-| 確認 | CI の同じ run で、windows ジョブの `tests\run_tests.bat` 927 件と、コア単体の試験（`rl78\tests\run_tests.bat`）、clang でのビルドが成功し、macos ジョブの `tests/run_tests.sh` 1186 件がすべて成功。Windows の上では GUI の `npx vitest run` 391 件と `npx tsc --noEmit` が成功。`sim.exe` そのものは Windows で実行していない |
+| 確認 | 同じ PC で GUI の `npm test` 395 件と `npm run lint` が成功。模擬サーバ（`npm run mock`）で、仕向の切り替えによる入力・固定・監視の入れ替えと自動保存を確かめた。`tests\run_tests.bat` は 922 件中 799 件が成功し、123 件（clang で DLL を作る xlate と native の項目）が失敗したが、PR #67 の main でも同じ 123 件が同じく失敗するこの PC の環境の問題で、今回の変更によるものではない |
 
 普段の配布物は CI（GitHub Actions の `windows` ジョブの成果物 `sim-windows-x64`）が作ります。
 このフォルダは、CI を使えなかったときの代わりに置いたものです。ソースを変えても自動では作り直されないので、

@@ -503,7 +503,7 @@ footer a{color:var(--ch2)}
       <ul class="ticks2">
         <li><span>書いた値は、止まっているときも含めて<b>次の周期の初め</b>に反映されます。それまでは「反映待ち: 値」と表示します。</span></li>
         <li><span>LSB・オフセットを設定した変数は、入力も表示も<b>物理値</b>で行えます（書き込むのは生の値）。</span></li>
-        <li><span>入力パネルと監視の一覧は、ブラウザが覚えていて次に開いたときに戻ります。</span></li>
+        <li><span>入力パネルと監視一覧は、仕向を選んでいるときは仕向ファイルに、「選択なし」のときはブラウザに保存します。表示点数と記録の上限はブラウザに保存します。</span></li>
         <li><span><kbd class="kbd">テスト CSV 再生</kbd> で、WinAMS のテスト CSV の入力を周期ごとに流せます。</span></li>
       </ul>
     </div>
@@ -512,7 +512,7 @@ footer a{color:var(--ch2)}
   <div class="frame" style="margin-top:28px"><div class="bar"><i></i><i></i><i></i><span>一時停止したところ</span></div><img src="docs/guide/live_paused.jpg" alt="一時停止して記録の全体を表示した画面。走行モードの状態名が帯で表示されている" loading="lazy"></div>
   <p class="cap">一時停止すると、記録の全体が状態名や単位つきで表示されます。カーソル計測や画像コピーは、この状態で行います。</p>
 
-  <h3 id="variants-panel">仕向（初期化の値）</h3>
+  <h3 id="variants-panel">仕向（初期値と入力・監視の構成）</h3>
   <div class="split side">
     <div><div class="frame"><img src="docs/guide/variants_panel.png" alt="右側の仕向パネル。仕向の選択欄、追加・名前変更・削除・CSV から取り込み、初期化の値の表" loading="lazy"></div></div>
     <div style="--c:var(--ch4)">
@@ -522,6 +522,12 @@ footer a{color:var(--ch2)}
         <li><span>「変数名で検索」から変数を足し、値と書き方（<b>最初だけ</b>／<b>毎回</b>）を決めます。</span></li>
         <li><span>使う仕向を選び、<kbd class="kbd">リセットして反映</kbd> を押します。</span></li>
       </ol>
+      <ul>
+        <li>仕向を選ぶと、その仕向の入力パネルと監視一覧に切り替わります。初めて選ぶ仕向は今の構成を引き継ぎ、「選択なし」に戻すとブラウザに保存した構成に戻ります。</li>
+        <li>仕向を選んだ状態で入力パネルや監視一覧を変えると、連続操作をまとめて約 0.5 秒後に仕向ファイルへ自動保存します。未保存の初期値の変更も一緒に保存されます。初期値だけを変えたときは <kbd class="kbd">ファイルに保存</kbd> を押します。</li>
+        <li>同名の仕向に CSV を取り込んでも、入力パネルと監視一覧は引き継ぎます。仕向ファイルの読み込みに失敗した場合は、自動保存を止めます。</li>
+        <li>古い <code>sim_gui.html</code> で同じ仕向ファイルを保存すると、仕向ごとの入力パネルと監視一覧（<code>inputs</code>・<code>watch</code>）が消えます。</li>
+      </ul>
       <div class="callout" style="--c:var(--ch1)"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l10 18H2z"/><path d="M12 10v5M12 18v.5"/></svg><span>仕向を選んでいないと初期化の値を書かないので、入力が効かないことがあります。そのときは上のバーに「仕向が選ばれていません」と出ます。選んだ仕向は <code>sim.cfg</code> と同じフォルダの <code>sim_gui_variants.json</code> に保存され、次に起動したときも使われます。</span></div>
     </div>
   </div>

@@ -42,6 +42,7 @@ interface InputCardProps {
 }
 
 function InputCard({ item, names, current, pending, held, base }: InputCardProps) {
+  const revision = useLiveStore(s => s.layoutRevision);
   const live = liveController();
   const { attributes, listeners, setNodeRef, setActivatorNodeRef, transform, transition } = useSortable({ id: item.name });
   const { lsb, offset, unit, mapping } = useWaveformStore(useShallow(s => ({
@@ -96,6 +97,7 @@ function InputCard({ item, names, current, pending, held, base }: InputCardProps
 
   // 書式の検証はサーバに任せ、400 ならそのメッセージを出す（'文字列' や 1|2|3 も書ける）。空欄は送らない
   const writeDisplay = async (value: string | number, hold?: boolean) => {
+    if (revision !== useLiveStore.getState().layoutRevision) return;
     if (!physical) { await live.write(item.name, value, hold); return; }
     // 応答を待つ間に利用者が欄やスライダを動かしていたら、その値を古い書き込みで上書きしない
     // スライダから送ったときは今回の値そのものと比べる（setSlider がまだ描画に反映されていないことがある）
@@ -133,15 +135,15 @@ function InputCard({ item, names, current, pending, held, base }: InputCardProps
     restoreValue: () => buttonRestoreValue(live.inputBaseValue(item.name)),
     write: () => {
       const { needReset, func } = useLiveStore.getState().sim;
-      return needReset || !func ? Promise.resolve(false) : live.write(item.name, 1, true);
+      return needReset || !func || revision !== useLiveStore.getState().layoutRevision ? Promise.resolve(false) : live.write(item.name, 1, true, true);
     },
-    release: (restore) => live.releaseButton(item.name, restore),
+    release: (restore) => live.releaseButton(item.name, restore, revision),
     minimumMs: () => {
       const { periodMs, speed } = useLiveStore.getState().sim;
       return Math.max(100, speed > 0 ? (3 * periodMs) / speed : 0);
     },
     changed: setPressed,
-  }), [live, item.name]);
+  }), [live, item.name, revision]);
   useEffect(() => {
     const cancel = () => { void button.cancel(); };
     const unsubscribe = useLiveStore.subscribe((s, previous) => {
@@ -275,6 +277,7 @@ function heldValue(holds: { name: string; value: number | string }[], name: stri
 }
 
 export function InputPanel() {
+  const revision = useLiveStore(s => s.layoutRevision);
   const live = liveController();
   const { inputs, values, pending, holds, needReset } = useLiveStore(useShallow((s) => ({
     inputs: s.inputs, values: s.values, pending: s.sim.pending, holds: s.sim.holds, needReset: s.sim.needReset,
@@ -291,7 +294,7 @@ export function InputPanel() {
       }}>
       <SortableContext items={names} strategy={verticalListSortingStrategy}>
       {inputs.map((item) => (
-        <InputCard key={item.name} item={item} names={names} current={values[item.name]}
+        <InputCard key={`${revision}:${item.name}`} item={item} names={names} current={values[item.name]}
           pending={pending.find((p) => p.name === item.name)?.value}
           held={heldValue(holds, item.name)}
           base={inputValue(item.name, { pending, holds }, values[item.name])} />
