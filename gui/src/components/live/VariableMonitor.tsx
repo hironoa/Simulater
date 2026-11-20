@@ -12,14 +12,14 @@ import { cn } from "../../utils/helpers";
 /** 変数モニタ: 監視変数の現在値（10 進/16 進）、追加・削除、波形に出すかの切り替え。 */
 export function VariableMonitor() {
   const live = liveController();
-  const { watch, values, errors, serverWatch } = useLiveStore(useShallow((s) => ({
-    watch: s.watch, values: s.values, errors: s.watchErrors, serverWatch: s.serverWatch,
+  const { watch, inputs, values, errors, serverWatch } = useLiveStore(useShallow((s) => ({
+    watch: s.watch, inputs: s.inputs, values: s.values, errors: s.watchErrors, serverWatch: s.serverWatch,
   })));
-  const colors = useWaveformStore(useShallow((s) => Object.fromEntries(watch.map((w) => [w.name, s.signalSettings[w.name]?.color ?? "#999"]))));
   const settings = useWaveformStore(s => s.signalSettings);
+  const settingFor = (name: string) => settings[live.seriesName(name, { watch, inputs })];
   const names = watch.map(w => w.name);
   const watched = new Set(serverWatch);
-  const allPlot = watch.length > 0 && watch.every((w) => settings[w.name]?.checked ?? false);
+  const allPlot = watch.length > 0 && watch.every((w) => settingFor(w.name)?.checked);
 
   return (
     <div className="flex flex-col gap-1.5">
@@ -43,12 +43,13 @@ export function VariableMonitor() {
           <tbody>
             {watch.map((w) => {
               const err = errors[w.name];
+              const setting = settingFor(w.name);
               return (
                 <tr key={w.name} className="border-b border-gray-100 dark:border-slate-800 hover:bg-gray-50 dark:hover:bg-slate-800/60">
                   <td className="py-0.5 w-10">
                     <label className="flex items-center gap-1">
-                      <input type="checkbox" checked={settings[w.name]?.checked ?? false} onChange={(e) => live.updateWatch(w.name, { plot: e.target.checked })} />
-                      <span className="inline-block w-2.5 h-2.5 rounded-sm" style={{ background: colors[w.name] }} />
+                      <input type="checkbox" checked={setting?.checked ?? false} onChange={(e) => live.updateWatch(w.name, { plot: e.target.checked })} />
+                      <span className="inline-block w-2.5 h-2.5 rounded-sm" style={{ background: setting?.color ?? "#999" }} />
                     </label>
                   </td>
                   <td className={cn("font-mono truncate max-w-[120px]", err && "text-red-500")} title={err ? `${w.name}: ${err}` : w.name}>

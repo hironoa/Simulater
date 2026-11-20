@@ -21,6 +21,11 @@ function render(input: InputItem, current = 651, pending: string | undefined = u
 }
 
 describe("入力カードの表示", () => {
+  it("完全名の入力カードに系列名で設定した単位を表示する", () => {
+    Object.assign(wave, { unitMapping: { s_cnt: "rpm" } });
+    expect(render(item({ name: "engine.c/s_cnt" }))).toContain(">rpm</span>");
+  });
+
   it("保存したraw651を物理値25.1で表示し、単位と生の値の案内を付ける", () => {
     Object.assign(wave, { lsbMapping: { temperature: "0.1" }, offsetMapping: { temperature: "-40" }, unitMapping: { temperature: "℃" } });
     const html = render(item({ value: 651 }), 650, "652", "651");

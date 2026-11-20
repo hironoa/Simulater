@@ -43,7 +43,7 @@ function pickColumns(
  * パスを除いた名前（最後の `/` 以降）を系列名にする。それが他の列と衝突する列だけ、
  * 区別がつく最短の末尾（`engine.c/s_cnt` など）を系列名にする。
  */
-function seriesNames(fullNames: string[]): string[] {
+export function seriesNames(fullNames: readonly string[]): string[] {
   const segments = fullNames.map((name) => name.split("/"));
   const suffix = (segs: string[], k: number) => segs.slice(Math.max(0, segs.length - k)).join("/");
   const shortCount = new Map<string, number>();

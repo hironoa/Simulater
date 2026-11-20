@@ -1,6 +1,7 @@
 import { persistLiveLayout, useVariantsStore } from "../live/variantsStore";
 import { emptyDefs, emptyView, readSignalDocument, readDefs, legacyView, effectiveMappings, writeEffective, defFromMappings, dumpSignals, unique, type DefOverride, type SignalDefs, type SignalView } from "./signalDefs";
 import { useLiveStore } from "../live/liveStore";
+import { shortSeriesName, watchedSeriesNames } from "../live/seriesNames";
 import { listedSignals } from "../utils/displaySignalName";
 import { create } from "zustand";
 import {
@@ -1665,8 +1666,12 @@ useWaveformStore.subscribe((state, previous) => {
 useWaveformStore.subscribe((state, prev) => {
   if (state.signalSettings === prev.signalSettings) return;
   const live = useLiveStore.getState();
-  const watch = live.watch.map(w => state.signalSettings[w.name] && w.plot !== state.signalSettings[w.name].checked
-    ? { ...w, plot: state.signalSettings[w.name].checked } : w);
+  if (live.watch.length === 0) return;
+  const series = watchedSeriesNames(live);
+  const watch = live.watch.map(w => {
+    const setting = state.signalSettings[series.get(w.name) ?? shortSeriesName(w.name)];
+    return setting && w.plot !== setting.checked ? { ...w, plot: setting.checked } : w;
+  });
   if (!watch.some((w, i) => w !== live.watch[i])) return;
   useLiveStore.setState({ watch });
   persistLiveLayout({ inputs: live.inputs, watch, windowSize: live.windowSize, maxSamples: live.maxSamples });

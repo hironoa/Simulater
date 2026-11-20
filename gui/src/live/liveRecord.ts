@@ -76,6 +76,17 @@ export class LiveRecord {
     return col;
   }
 
+  /** 列バッファを移し、名前が入れ替わる場合もまとめて反映する。 */
+  renameColumns(renames: ReadonlyMap<string, string>) {
+    if (!this.order.some(name => renames.has(name))) return false;
+    const order = this.order.map(name => renames.get(name) ?? name);
+    this.cols = new Map(this.order.map((name, i) => [order[i], this.cols.get(name)!]));
+    this.order = order;
+    this.revision++;
+    this.nameListeners.forEach(listener => listener());
+    return true;
+  }
+
   private grow(need: number) {
     if (need <= this.cap) return;
     let cap = this.cap;
