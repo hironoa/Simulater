@@ -404,6 +404,40 @@ describe("ライブ制御（SSE の取り込み）", () => {
         expect(useLiveStore.getState().inputs[0]).toMatchObject({ name: "x", hold: true, holdPending: true });
       } finally { live.stop(); }
     });
+    it("前の固定の解除を待つ間に外した入力は書き込まない", async () => {
+      const doc: VariantsDoc = { version: 1, selected: "A", variants: [
+        { name: "A", values: [], inputs: [input("x")] },
+        { name: "B", values: [], inputs: [input("y")] },
+      ] };
+      const live = makeController({
+        getVariants: vi.fn().mockResolvedValue({ path: "variants.json", exists: true, doc, error: "" }),
+      });
+      let finishRelease!: () => void;
+      const releasePending = new Promise<void>(resolve => { finishRelease = resolve; });
+      try {
+        expect(await live.start()).toBe(true);
+        const release = live.api.release;
+        vi.spyOn(live.api, "release").mockImplementationOnce(async name => {
+          const result = await release(name);
+          await releasePending;
+          return result;
+        });
+        const beforeSwitch = posted.length;
+        const switching = select(live, "B");
+        expect(posted.slice(beforeSwitch)).toContainEqual({ url: "/api/write", body: { name: "x", release: true } });
+        expect(useLiveStore.getState().inputs).toEqual([input("y")]);
+        live.removeInput("y");
+        expect(posted.slice(beforeSwitch)).toContainEqual({ url: "/api/write", body: { name: "y", release: true } });
+        finishRelease();
+        await switching;
+        expect(posted.slice(beforeSwitch)).not.toContainEqual({
+          url: "/api/write", body: expect.objectContaining({ name: "y", hold: true }),
+        });
+      } finally {
+        finishRelease();
+        live.stop();
+      }
+    });
     it("初めて選ぶ仕向は現在の構成を引き継ぎ、選択なしはブラウザの構成に戻す", async () => {
       const { live } = await setup();
       await select(live, "C");

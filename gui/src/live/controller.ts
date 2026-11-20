@@ -180,7 +180,14 @@ export function createLiveController(deps: LiveControllerDeps = {}) {
     })));
     // 解除が終わるまで待つ間も、SSE で新しい入力カードの固定表示を戻さない。
     const writes = inputs.flatMap(({ name, hold, value }) => hold && value !== undefined
-      ? [changeHold(name, async () => { await releases; await writeFixed(name, value); })] : []);
+      ? [changeHold(name, async () => {
+        await releases;
+        const state = store.getState();
+        if (state.layoutRevision !== revision) return;
+        const input = state.inputs.find(i => i.name === name);
+        if (input?.hold !== true || input.value !== value) return;
+        await writeFixed(name, value);
+      })] : []);
     await Promise.all([releases, ...writes]);
     await syncWatch();
   }
