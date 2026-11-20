@@ -69,6 +69,7 @@ sim_ref *sim_ref_parse_symbol(sim_ctx *c, const char *text, char *err, size_t er
 /* 対象関数が f だったものとして式を解決する（引数 @x を f の引数として解く）。文脈の対象関数と引数は変えない */
 sim_ref *sim_ref_parse_for(sim_ctx *c, const sim_func *f, const char *text, char *err, size_t errlen);
 void sim_ref_free(sim_ref *r);
+int sim_ref_same(const sim_ref *a, const sim_ref *b);
 const char *sim_ref_text(const sim_ref *r);
 int sim_ref_prefix(const sim_ref *r);           /* '$' '&' '*' または 0 */
 int sim_ref_is_multi(const sim_ref *r);         /* 複数要素（&arr、*ptr、配列） */

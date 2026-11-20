@@ -1042,6 +1042,12 @@ data: {"periodMs":2,"func":"TEST_cycle","names":["P2_bit.no0","g_eng.state"]}'
     check "同じ名前の入力列で 400 なら関数・再生・記録・固定・監視を変えない" sh -c "cmp -s '$WORK/dup_info0.json' '$WORK/dup_info1.json' && cmp -s '$WORK/dup_export0.csv' '$WORK/dup_export1.csv' && grep -q '\"playback\":false' '$WORK/dup_info1.json'"
     post release_p1.json rdup.out /api/write > /dev/null
 
+    post watch_csv_same.json csv_same_watch.json /api/watch > /dev/null
+    CODE=$(post play_watch_same.csv csv_same.json /api/load-csv)
+    check "CSV の same は一意な static の短い監視名を返す" sh -c '[ "$1" = 200 ] && grep -F -q "\"same\":[{\"name\":\"engine.c/s_log_idx\",\"existing\":\"s_log_idx\"}" "$2"' sh "$CODE" "$WORK/csv_same.json"
+    check "別ファイルの同名 static は same に含めない" sh -c 'grep -F -q "\"names\":[\"engine.c/s_log_idx\",\"sensor.c/s_cnt\"]" "$1" && ! grep -F -q "\"existing\":\"engine.c/s_cnt\"" "$1"' sh "$WORK/csv_same.json"
+    post watch_p1only.json wdup.out /api/watch > /dev/null
+
     # 表記が違うだけで同じメモリを指す入力列（P1 と P1_bit.no0、a[0] と a[ 0 ]、g.x と g .x）は別の列として列順に書く。
     # 出力列の同名・入力と出力の同名は受け付ける
     CODE=$(curl -s -o "$WORK/al.out" -w '%{http_code}' -X POST --data-binary "@$T/gui/play_alias.csv" "$U/api/load-csv")

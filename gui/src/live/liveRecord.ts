@@ -76,12 +76,24 @@ export class LiveRecord {
     return col;
   }
 
-  /** 列バッファを移し、名前が入れ替わる場合もまとめて反映する。 */
+  /** 列バッファを移す。同じ列への改名では、値があるセルをまとめる。 */
   renameColumns(renames: ReadonlyMap<string, string>) {
     if (!this.order.some(name => renames.has(name))) return false;
-    const order = this.order.map(name => renames.get(name) ?? name);
-    this.cols = new Map(this.order.map((name, i) => [order[i], this.cols.get(name)!]));
-    this.order = order;
+    const cols = new Map<string, Float64Array>();
+    for (const name of this.order) {
+      const target = renames.get(name) ?? name;
+      const source = this.cols.get(name)!;
+      const existing = cols.get(target);
+      if (existing) {
+        for (let i = 0; i < this.len; i++) {
+          if (!Number.isNaN(source[i])) existing[i] = source[i];
+        }
+      } else {
+        cols.set(target, source);
+      }
+    }
+    this.cols = cols;
+    this.order = [...cols.keys()];
     this.revision++;
     this.nameListeners.forEach(listener => listener());
     return true;

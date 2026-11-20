@@ -67,6 +67,11 @@ for (let i = 0; i < 40; i++) leaf(`g_table_${String(i).padStart(2, "0")}`, "uint
 const leaves = symbols.filter((s) => !s.members);
 const leafIndex = new Map(leaves.map((s, i) => [s.name, i]));
 const byName = new Map(symbols.map((s) => [s.name, s]));
+function leafName(name) {
+  if (leafIndex.has(name) || name.includes("/")) return name;
+  const matches = leaves.filter(s => s.name.endsWith("/" + name));
+  return matches.length === 1 ? matches[0].name : name;
+}
 let values = new Float64Array(leaves.length);
 const resetValues = () => { values = new Float64Array(leaves.map((s) => s.init ?? 0)); };
 resetValues();
@@ -75,11 +80,11 @@ let argValues = new Map();
 const argSym = (name) => ({ name, type: "int16_t", size: 2, kind: "int", writable: true, init: 0 });
 const isArg = (n) => FUNC_ARGS[func].includes(n);
 /** 今の関数で解決できる値の名前か */
-const resolvable = (n) => leafIndex.has(n) || isArg(n);
-const symOf = (n) => (isArg(n) ? argSym(n) : byName.get(n));
+const resolvable = (n) => leafIndex.has(leafName(n)) || isArg(n);
+const symOf = (n) => (isArg(n) ? argSym(n) : byName.get(leafName(n)));
 const unresolvedMessage = (n) => (n.startsWith("@") ? `引数 '${n}' は関数 ${func} にありません` : `変数 '${n}' が見つかりません`);
-const get = (n) => (isArg(n) ? argValues.get(n) ?? 0 : values[leafIndex.get(n)]);
-const put = (n, v) => { if (isArg(n)) argValues.set(n, v); else values[leafIndex.get(n)] = v; };
+const get = (n) => (isArg(n) ? argValues.get(n) ?? 0 : values[leafIndex.get(leafName(n))]);
+const put = (n, v) => { if (isArg(n)) argValues.set(n, v); else values[leafIndex.get(leafName(n))] = v; };
 
 // ---- 実行状態 ----
 let variantsDoc = null;
@@ -473,9 +478,13 @@ const server = http.createServer(async (req, res) => {
       parsed.names.slice(0, parsed.nIn).forEach((n) => inputNames.add(n));
       csvPlay = { ...parsed, index: 0 };
       const names = [...new Set(parsed.names)];
+      const same = names.filter(name => resolvable(name) && !watch.includes(name)).flatMap(name =>
+        watch.filter(existing => leafName(existing) === leafName(name)).map(existing => ({ name, existing })),
+      );
       setWatch([...new Set([...watch, ...names.filter(resolvable)])]);
       running = true; rebase(); broadcastState();
       const out = { rows: parsed.rows.length, names };
+      if (same.length) Object.assign(out, { same });
       if (parsed.blocks > 1) {
         // 2 つ目以降の mod ブロックは再生しない。黙って一部だけ再生しないように応答で知らせる
         Object.assign(out, {

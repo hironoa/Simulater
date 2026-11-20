@@ -1711,12 +1711,8 @@ static void api_load_csv(sim_sock s, req_t *r)
         for (j = 0; j < nwatch && strcmp(watch[j], t.names[i]) != 0; j++) {}
         if (j == nwatch) watch[nwatch++] = t.names[i];
     }
+    int previous_watches = G.nwatch;
     set_watch_locked(watch, nwatch, 1, NULL);
-    G.play_active = 1;
-    reset_locked();   /* 列番号（play_col_ids）は記録の列を組み直すときに CSV の入力列の順で振る */
-    G.play_pos = 0;
-    G.running = 1;
-    state_changed();
     sim_buf_init(&b);
     sim_buf_printf(&b, "{\"rows\":%d,\"names\":[", t.nrows);
     for (i = 0; i < nwatch; i++) {
@@ -1725,6 +1721,21 @@ static void api_load_csv(sim_sock s, req_t *r)
     }
     free(watch);
     sim_buf_addc(&b, ']');
+    /* 今回追加できた参照を、読み込み前からある監視と比べる。 */
+    int same = 0;
+    for (i = previous_watches; i < G.nwatch; i++) {
+        int j;
+        for (j = 0; j < previous_watches; j++) {
+            if (!sim_ref_same(G.watch[i].ref, G.watch[j].ref)) continue;
+            sim_buf_adds(&b, same++ ? "," : ",\"same\":[");
+            sim_buf_adds(&b, "{\"name\":");
+            sim_buf_json_str(&b, G.watch[i].name);
+            sim_buf_adds(&b, ",\"existing\":");
+            sim_buf_json_str(&b, G.watch[j].name);
+            sim_buf_addc(&b, '}');
+        }
+    }
+    if (same) sim_buf_addc(&b, ']');
     /* 2 つ目以降の mod ブロックは再生しない。黙って一部だけ再生しないように応答で知らせる */
     if (t.nblocks > 1) {
         char m[512];
@@ -1737,6 +1748,11 @@ static void api_load_csv(sim_sock s, req_t *r)
     }
     if (t.warning) { sim_buf_adds(&b, ",\"initWarning\":"); sim_buf_json_str(&b, t.warning); }
     sim_buf_addc(&b, '}');
+    G.play_active = 1;
+    reset_locked();   /* 列番号（play_col_ids）は記録の列を組み直すときに CSV の入力列の順で振る */
+    G.play_pos = 0;
+    G.running = 1;
+    state_changed();
     sim_mutex_unlock(G.mu);
     send_json(s, 200, &b);
     sim_buf_free(&b);

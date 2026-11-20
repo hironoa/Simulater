@@ -443,6 +443,22 @@ struct sim_ref {
     uint32_t count;           /* 複数要素の上限（0 = 不明） */
 };
 
+/* 表記が違っても、解決した参照とアクセス方法が同じかを調べる。 */
+int sim_ref_same(const sim_ref *a, const sim_ref *b)
+{
+    int i;
+    if (a->prefix != b->prefix || a->base != b->base || a->addr != b->addr ||
+        a->argi != b->argi || a->nsteps != b->nsteps ||
+        a->bit_off != b->bit_off || a->bit_size != b->bit_size ||
+        a->type != b->type || a->is_const != b->is_const ||
+        a->multi != b->multi || a->elem != b->elem || a->count != b->count) return 0;
+    for (i = 0; i < a->nsteps; i++) {
+        if (a->steps[i].op != b->steps[i].op || a->steps[i].v != b->steps[i].v ||
+            a->steps[i].pt != b->steps[i].pt) return 0;
+    }
+    return 1;
+}
+
 const char *sim_ref_text(const sim_ref *r) { return r->text; }
 int sim_ref_prefix(const sim_ref *r) { return r->prefix; }
 int sim_ref_is_multi(const sim_ref *r) { return r->multi; }
