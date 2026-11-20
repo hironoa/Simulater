@@ -2,6 +2,32 @@ import { describe, expect, it } from "vitest";
 import yaml from "js-yaml";
 import { dumpSignals, effectiveDef, readDefs, readSignalDocument } from "./signalDefs";
 
+describe("信号名の正規化", () => {
+  it("末尾名が一意なら順序と設定を保持し、曖昧な名前は保持する", () => {
+    const definition = { unit: "V", variants: { EU: { unit: "mV" } } };
+    const view = { group: "path/group" };
+    const doc = readSignalDocument(yaml.dump({
+      version: 2,
+      signals: { first: {}, "path/file/y": definition, "a.c/x": {}, "b.c/x": {} },
+      view: { signals: { first: {}, "path/file/y": view } },
+    }));
+    expect(Object.keys(doc.signals)).toEqual(["first", "y", "a.c/x", "b.c/x"]);
+    expect(doc.signals.y).toEqual(definition);
+    expect(Object.keys(doc.view.signals)).toEqual(["first", "y"]);
+    expect(doc.view.signals.y).toEqual(view);
+  });
+
+  const rule = { signal: "path/x", when: [0], label: "path/x" };
+  const normalized = { ...rule, signal: "x" };
+  it.each([
+    ["単独", rule, normalized],
+    ["配列", [rule], [normalized]],
+    ["rules 付き", { show: false, rules: [rule] }, { show: false, rules: [normalized] }],
+  ])("inactive の信号名を正規化する（%s）", (_shape, inactive, expected) => {
+    expect(readSignalDocument(yaml.dump({ inactive })).inactive).toEqual(expected);
+  });
+});
+
 describe("dumpSignals", () => {
   it("数値に見える名前を保持し、状態名のキーだけ引用符を外す", () => {
     const doc = {

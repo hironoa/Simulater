@@ -602,6 +602,7 @@ footer a{color:var(--ch2)}
     <div class="panel mini-card" style="--c:var(--ch1)"><h4>読めないとき</h4><p>起動時に信号情報ファイルが読めない（壊れているなど）と、上のバーに理由とパスを出し、<b>自動保存を止めます</b>（壊れたファイルを上書きしないため）。直してから起動し直してください。</p></div>
     <div class="panel mini-card" style="--c:var(--ch2)"><h4>ほかの CSV の信号も残る</h4><p>ファイルは全部のテストで共有します。今開いている CSV にない信号やグループの設定も、消さずに残します。</p></div>
     <div class="panel mini-card" style="--c:var(--ch5)"><h4>古い形の YAML</h4><p>信号名がいちばん上に並ぶ古い形も、CSV の対応表も読めます。保存は新しい形になります。読めない YAML は「YAML を読めません」と出して何も変えません。</p></div>
+    <div class="panel mini-card" style="--c:var(--ch3)"><h4>ファイル名つきの信号名</h4><p>前の版が保存した <code>Sample/EngineSpeed</code> は、読み込むときに <code>EngineSpeed</code> にそろえ、次の保存でファイルからも消えます。両方あるときは <code>EngineSpeed</code> の設定を使います。<code>a.c/s_cnt</code> と <code>b.c/s_cnt</code> のように区別が要るものは、そのまま残します。</p></div>
   </div>
 </section>
 

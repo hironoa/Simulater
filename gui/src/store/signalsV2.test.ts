@@ -40,6 +40,29 @@ beforeEach(() => {
 });
 
 describe("信号情報 v2", () => {
+  it("同じ表では短い信号名の設定を優先し、別の表では最初の設定を採用する", () => {
+    read(`version: 2
+signals:
+  a.c/X: {unit: mV}
+  X: {unit: V}
+  b.c/X: {unit: A}
+  a.c/Y: {unit: A}
+view:
+  signals:
+    b.c/X: {weight: 2}
+    a.c/X: {weight: 3}
+    a.c/Y: {weight: 4}
+    Y: {weight: 5}
+inactive: {signal: a.c/X, when: [0]}
+`);
+    const doc = output();
+    expect(doc.signals).toEqual({ X: { unit: "V" }, Y: { unit: "A" } });
+    expect(Object.keys(doc.view.signals)).toEqual(["X", "Y"]);
+    expect(doc.view.signals.X.weight).toBe(2);
+    expect(doc.view.signals.Y.weight).toBe(5);
+    expect(doc.inactive[0].signal).toBe("X");
+  });
+
   it("追加読込で base の項目と states の数値キーを重ねる", () => {
     read("version: 2\nsignals:\n  X: {lsb: 0.1, unit: V}\n  Y: {states: {0: A, 1: B}}\n");
     const previous = state().signalDefs;
