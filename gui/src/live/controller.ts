@@ -133,14 +133,33 @@ export function createLiveController(deps: LiveControllerDeps = {}) {
     return names.map(name => recordNames.get(name)!);
   }
 
+  let syncedSeries = new Map<string, string>();
+  const usedSeries = new Set<string>();
+
   function syncSignals() {
     const s = store.getState();
+    const series = watchedSeries(s);
     const watchNames = new Set(s.watch.map(w => w.name));
     const plotted = new Set([
       ...s.watch.filter(w => w.plot),
       ...s.inputs.filter(i => i.monitor !== false && !watchNames.has(i.name)),
     ].map(({ name }) => seriesName(name, s)));
-    waveform.getState().ensureLiveSignals([...watchedSeries(s).values()], plotted);
+    const carry = new Map<string, boolean>();
+    for (const [name, key] of series) {
+      const oldKey = syncedSeries.get(name);
+      // 初めて使う系列の設定は YAML などから引き継ぐ。監視で使った系列の再割り当てでは plot を優先する。
+      if (oldKey !== key && (oldKey !== undefined || usedSeries.has(key))) {
+        carry.set(key, plotted.has(key));
+      }
+      usedSeries.add(key);
+    }
+    syncedSeries = series;
+    waveform.getState().ensureLiveSignals([...series.values()], plotted);
+    // ensureLiveSignals は既存の checked を保持し、新規設定には YAML を適用することがある。
+    for (const [key, checked] of carry) {
+      const state = waveform.getState();
+      if (state.signalSettings[key].checked !== checked) state.toggleSignalCheck(key);
+    }
     recordSeries([]);
     const current = store.getState();
     const settings = waveform.getState().signalSettings;

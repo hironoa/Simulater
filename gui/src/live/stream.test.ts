@@ -206,6 +206,35 @@ describe("ライブ制御（SSE の取り込み）", () => {
       live.handlers.samples({ step0: 3, names: ["a.c/x", "b.c/x"], rows: [[13, 23]] });
       expect(record.toChartData().seriesMap).toEqual({ "a.c/x": [11, 12, 13], x: [null, 22, 23] });
     });
+
+    it("同名の監視を削除して短い系列名に戻っても非表示を保つ", () => {
+      const live = makeController();
+      live.addWatch("a.c/x");
+      expect(useWaveformStore.getState().signalSettings.x.checked).toBe(true);
+      live.addWatch("b.c/x");
+      useWaveformStore.getState().toggleSignalCheck("a.c/x");
+      expect(useLiveStore.getState().watch[0].plot).toBe(false);
+
+      live.removeWatch("b.c/x");
+
+      expect(useLiveStore.getState().watch).toMatchObject([{ name: "a.c/x", plot: false }]);
+      expect(loadLayout().watch).toMatchObject([{ name: "a.c/x", plot: false }]);
+      expect(useWaveformStore.getState().signalSettings.x.checked).toBe(false);
+    });
+
+    it("新しく監視する変数の表示には YAML の checked を使う", () => {
+      const live = makeController();
+      const state = useWaveformStore.getState();
+      try {
+        state.parseMappingData("version: 2\nsignals: {x: {unit: rpm}}\nview: {signals: {x: {checked: false}}}\n", "yaml", false);
+        live.addWatch("a.c/x");
+
+        expect(useLiveStore.getState().watch).toMatchObject([{ name: "a.c/x", plot: false }]);
+        expect(useWaveformStore.getState().signalSettings.x.checked).toBe(false);
+      } finally {
+        useWaveformStore.setState(state);
+      }
+    });
   });
 
   describe("入力パネルの並び・新規固定・物理値・状態", () => {
