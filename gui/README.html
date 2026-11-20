@@ -608,7 +608,7 @@ footer a{color:var(--ch2)}
     <div class="panel mini-card" style="--c:var(--ch1)"><h4>読めないとき</h4><p>起動時に信号情報ファイルが読めない（壊れているなど）と、上のバーに理由とパスを出し、<b>自動保存を止めます</b>（壊れたファイルを上書きしないため）。直してから起動し直してください。</p></div>
     <div class="panel mini-card" style="--c:var(--ch2)"><h4>ほかの CSV の信号も残る</h4><p>ファイルは全部のテストで共有します。今開いている CSV にない信号やグループの設定も、消さずに残します。</p></div>
     <div class="panel mini-card" style="--c:var(--ch5)"><h4>古い形の YAML</h4><p>信号名がいちばん上に並ぶ古い形も、CSV の対応表も読めます。保存は新しい形になります。読めない YAML は「YAML を読めません」と出して何も変えません。</p></div>
-    <div class="panel mini-card" style="--c:var(--ch3)"><h4>ファイル名つきの信号名</h4><p>前の版が保存した <code>Sample/EngineSpeed</code> は、読み込むときに <code>EngineSpeed</code> にそろえ、次の保存でファイルからも消えます。両方あるときは <code>EngineSpeed</code> の設定を使います。<code>a.c/s_cnt</code> と <code>b.c/s_cnt</code> のように、ファイルだけが違う同名の信号が 2 つ以上あるときは、区別のためすべてそのまま残します。ライブで監視している <code>engine.c/s_cnt</code> も、CSV の列と同じく <code>s_cnt</code> の設定を使います（sim とのやり取りには完全な名前を使います）。</p></div>
+    <div class="panel mini-card" style="--c:var(--ch3)"><h4>ファイル名つきの信号名</h4><p>前の版が保存した <code>Sample/EngineSpeed</code> は、読み込むときに <code>EngineSpeed</code> にそろえ、次の保存でファイルからも消えます。両方あるときは <code>EngineSpeed</code> の設定を使います。<code>a.c/s_cnt</code> と <code>b.c/s_cnt</code> のように、ファイルだけが違う同名の信号が 2 つ以上あるときは、区別のためすべてそのまま残します。ライブで監視している <code>engine.c/s_cnt</code> も、CSV の列と同じく <code>s_cnt</code> の設定を使います（sim とのやり取りには完全な名前を使います）。<code>s_cnt</code> を監視中にテスト CSV 再生で <code>sensor.c/s_cnt</code> を読み込んでも、sim が同じ変数と判断すれば、監視を置き換えて <code>s_cnt</code> の 1 行のままにします。別の変数なら 2 行に分けます。</p></div>
   </div>
 </section>
 

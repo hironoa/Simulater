@@ -143,6 +143,8 @@ export interface WatchResult {
 export interface LoadCsvResult {
   rows: number;
   names: string[];
+  /** CSV の列名と、同じ変数を指す既存の監視名の組 */
+  same?: { name: string; existing: string }[];
   /** CSV の `mod` ブロックの数（2 つ以上のときだけサーバが付ける。再生するのは先頭のブロックだけ） */
   blocks?: number;
   /** 読み込みは成功したが利用者に知らせること（複数ブロックのうち先頭だけを再生する、など） */
@@ -161,6 +163,14 @@ export function parseLoadCsvResult(res: unknown): LoadCsvResult {
   };
   if (typeof r.blocks === "number" && Number.isInteger(r.blocks) && r.blocks >= 1) out.blocks = r.blocks;
   if (typeof r.warning === "string" && r.warning.trim()) out.warning = r.warning;
+  if (Array.isArray(r.same)) {
+    const same = r.same.flatMap(pair =>
+      isObject(pair) && typeof pair.name === "string" && pair.name.trim()
+        && typeof pair.existing === "string" && pair.existing.trim() && pair.name !== pair.existing
+        ? [{ name: pair.name, existing: pair.existing }] : [],
+    );
+    if (same.length) out.same = same;
+  }
   return out;
 }
 

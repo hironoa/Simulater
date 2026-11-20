@@ -52,6 +52,14 @@ describe("createApi", () => {
     expect(parseLoadCsvResult(null)).toEqual({ rows: 0, names: [] });
   });
 
+  it("load-csv の same は有効な名前の組だけを返す", () => {
+    const pair = { name: "sensor.c/s_cnt", existing: "s_cnt" };
+    expect(parseLoadCsvResult({ same: [pair, null, { name: 1, existing: "s_cnt" }, { name: " " }, { name: "x", existing: "x" }] }).same)
+      .toEqual([pair]);
+    expect(parseLoadCsvResult({ same: [null, { name: "s_cnt", existing: 1 }] }).same).toBeUndefined();
+    expect(parseLoadCsvResult({ same: pair }).same).toBeUndefined();
+  });
+
   it("load-csv の 400 はサーバのメッセージをそのまま ApiError にする", async () => {
     const message = "入力 2 列目と 4 列目が同じ名前 'P1' です。";
     const f = fakeFetch(() => ({ status: 400, body: { error: message } }));

@@ -1128,6 +1128,96 @@ describe("ライブ制御（SSE の取り込み）", () => {
   });
 
   describe("テスト CSV の読み込み", () => {
+    const csvName = "sensor.c/s_cnt";
+    const same = [{ name: csvName, existing: "s_cnt" }];
+
+    it.each([false, true])("入力パネル %s で再生直後の別名を同じ系列に記録する", async (inputPanel) => {
+      const live = makeController();
+      const short = "s_tick";
+      const full = "drv.c/s_tick";
+      const gain = { name: "g_gain", plot: true, radix: "dec" as const };
+      const tick = { name: short, plot: true, radix: "hex" as const };
+      const output = { name: "g_output", plot: true, radix: "dec" as const };
+      await live.start();
+      useLiveStore.setState({ watch: inputPanel ? [gain] : [gain, tick], inputs: [] });
+      if (inputPanel) live.addInput(short);
+      await live.syncWatch();
+
+      const es = FakeEventSource.last!;
+      let release!: () => void;
+      responseGate = new Promise<void>(resolve => { release = resolve; });
+      loadCsvResponse = { status: 200, body: {
+        rows: 3, names: [gain.name, full, output.name], same: [{ name: full, existing: short }],
+      } };
+      const pending = live.loadCsv(new Blob(["csv"]));
+      const bothNames = [gain.name, short, full, output.name];
+      es.emit("samples", { step0: 1, names: bothNames, rows: [[2, 10, 10, 4]] });
+      release();
+      await pending;
+      expect(useLiveStore.getState().watch).toEqual(inputPanel ? [gain, output] : [gain, { ...tick, name: full }, output]);
+
+      es.emit("samples", { step0: 2, names: bothNames, rows: [[3, 11, 11, 6]] });
+      const alias = inputPanel ? full : short;
+      const currentName = inputPanel ? short : full;
+      es.emit("samples", { step0: 3, names: [alias], rows: [[12]] });
+      live.flushValues();
+      expect(useLiveStore.getState().values[currentName]).toBe(12);
+      es.emit("values", { step: 3, names: [alias], values: [13] });
+      live.flushValues();
+      expect(useLiveStore.getState().values[currentName]).toBe(13);
+      live.commit();
+      const names = [gain.name, short, output.name];
+      expect(record.names).toEqual(names);
+      const { chartData, signalSettings } = useWaveformStore.getState();
+      expect(chartData?.seriesMap).toEqual({ g_gain: [2, 3, null], s_tick: [10, 11, 12], g_output: [4, 6, null] });
+      expect(Object.keys(signalSettings).sort()).toEqual([...names].sort());
+
+      loadCsvResponse = { status: 200, body: { rows: 1, names: [alias] } };
+      await live.loadCsv(new Blob(["csv"]));
+      es.emit("samples", { step0: 1, names: [short, full], rows: [[21, 22]] });
+      expect(record.toChartData().seriesMap).toEqual({ [short]: [21], [full]: [22] });
+      live.stop();
+    });
+
+    it.each([true, false])("same: %s に従って監視を置き換えるか追加する", async (hasSame) => {
+      const live = makeController();
+      const original = { name: "s_cnt", plot: false, radix: "hex" as const };
+      await live.start();
+      useLiveStore.setState({ watch: [original], inputs: [] });
+      await live.syncWatch();
+      useWaveformStore.getState().updateSignalSetting("s_cnt", { color: "#123456" });
+      loadCsvResponse = { status: 200, body: { rows: 1, names: [csvName], ...(hasSame ? { same } : {}) } };
+      await live.loadCsv(new Blob(["x"]));
+      if (hasSame) {
+        expect(useLiveStore.getState().watch).toEqual([{ ...original, name: csvName }]);
+        const { signalSettings } = useWaveformStore.getState();
+        expect(Object.keys(signalSettings)).toEqual(["s_cnt"]);
+        expect(signalSettings.s_cnt).toMatchObject({ color: "#123456", checked: false });
+        expect(posted.at(-1)).toEqual({ url: "/api/watch", body: { names: [csvName] } });
+      } else {
+        expect(useLiveStore.getState().watch).toEqual([original, { name: csvName, plot: true, radix: "dec" }]);
+      }
+      live.stop();
+    });
+
+    it("入力パネルの監視名と固定を保ち、CSV の別名を追加しない", async () => {
+      const live = makeController();
+      useLiveStore.setState({ watch: [], inputs: [] });
+      await live.start();
+      live.addInput("s_cnt");
+      live.handlers.state({ holds: [{ name: "s_cnt", value: 7 }] });
+      const inputs = useLiveStore.getState().inputs;
+      expect(inputs).toEqual([expect.objectContaining({ name: "s_cnt", hold: true })]);
+      expect(useLiveStore.getState().sim.holds).toEqual([{ name: "s_cnt", value: 7 }]);
+      loadCsvResponse = { status: 200, body: { rows: 1, names: [csvName], same } };
+      await live.loadCsv(new Blob(["x"]));
+      expect(useLiveStore.getState().inputs).toBe(inputs);
+      expect(useLiveStore.getState().watch).toEqual([]);
+      expect(Object.keys(useWaveformStore.getState().signalSettings)).toEqual(["s_cnt"]);
+      expect(posted.at(-1)).toEqual({ url: "/api/watch", body: { names: ["s_cnt"] } });
+      live.stop();
+    });
+
     it("mod ブロックが複数ある応答の warning は、成功とは別に警告で知らせる", async () => {
       const live = makeController();
       useLiveStore.setState({ watch: [] });

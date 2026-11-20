@@ -97,13 +97,23 @@ export function createLiveController(deps: LiveControllerDeps = {}) {
 
   let recordNames = new Map<string, string>();
   let recordWatchSeries: ReadonlyMap<string, string> | undefined;
+  let csvAliases = new Map<string, string>();
 
-  function recordSeries(names: readonly string[]) {
+  // 監視中の名前を優先し、同期前に届く別名だけを監視名に寄せる。
+  function watchedName(name: string, watched: ReadonlyMap<string, string>): string {
+    if (watched.has(name)) return name;
+    const target = csvAliases.get(name);
+    return target !== undefined && watched.has(target) ? target : name;
+  }
+
+  function recordSeries(sourceNames: readonly string[]) {
     const watched = watchedSeries();
+    const names = sourceNames.map(name => watchedName(name, watched));
     if (recordWatchSeries !== watched || names.some(name => !recordNames.has(name))) {
       const next = new Map<string, string>();
       const used = new Set(watched.values());
-      for (const name of new Set([...recordNames.keys(), ...names])) {
+      const previousNames = [...recordNames.keys()].map(name => watchedName(name, watched));
+      for (const name of new Set([...previousNames, ...names])) {
         let series = watched.get(name);
         if (series === undefined) {
           // 監視から外した列や遅れて届いた列は、現行の監視列と混ぜずに保持する。
@@ -116,18 +126,22 @@ export function createLiveController(deps: LiveControllerDeps = {}) {
       }
       const renames = new Map<string, string>();
       for (const [name, old] of recordNames) {
-        const series = next.get(name)!;
+        const series = next.get(watchedName(name, watched))!;
         if (old !== series) renames.set(old, series);
       }
       recordNames = next;
       recordWatchSeries = watched;
       if (record.renameColumns(renames)) {
         const { fileName, chartData } = waveform.getState();
-        if (fileName === LIVE_FILE_NAME && chartData) waveform.setState({
-          chartData: { ...chartData, seriesMap: Object.fromEntries(
-            Object.entries(chartData.seriesMap).map(([name, values]) => [renames.get(name) ?? name, values]),
-          ) },
-        });
+        if (fileName === LIVE_FILE_NAME && chartData) {
+          const series = new Map<string, (number | null)[]>();
+          for (const [name, values] of Object.entries(chartData.seriesMap)) {
+            const target = renames.get(name) ?? name;
+            const existing = series.get(target);
+            series.set(target, existing ? values.map((value, i) => value ?? existing[i]) : values);
+          }
+          waveform.setState({ chartData: { ...chartData, seriesMap: Object.fromEntries(series) } });
+        }
       }
     }
     return names.map(name => recordNames.get(name)!);
@@ -395,7 +409,7 @@ export function createLiveController(deps: LiveControllerDeps = {}) {
       noteFunc(msg.func);
       const sim = store.getState().sim;
       set({
-        serverWatch: msg.names,
+        serverWatch: [...new Set(msg.names.map(name => watchedName(name, watchedSeries())))],
         sim: { ...sim, periodMs: msg.periodMs ?? sim.periodMs, func: msg.func ?? sim.func },
       });
       if (msg.periodMs) waveform.getState().setTaskPeriod(msg.periodMs);
@@ -415,7 +429,8 @@ export function createLiveController(deps: LiveControllerDeps = {}) {
         : record.append(msg.step0, names, msg.rows);
       const last = msg.rows[msg.rows.length - 1];
       if (last) {
-        msg.names.forEach((n, i) => { pendingValues[n] = last[i] ?? null; });
+        const watched = watchedSeries();
+        msg.names.forEach((n, i) => { pendingValues[watchedName(n, watched)] = last[i] ?? null; });
         pendingDirty = true;
         const sim = store.getState().sim;
         const step = msg.step0 + msg.rows.length - 1;
@@ -426,7 +441,8 @@ export function createLiveController(deps: LiveControllerDeps = {}) {
     },
     values: (msg) => {
       // 現在値の表示だけを更新する（記録・波形・ステップ番号は変えない）
-      msg.names.forEach((n, i) => { pendingValues[n] = msg.values[i] ?? null; });
+      const watched = watchedSeries();
+      msg.names.forEach((n, i) => { pendingValues[watchedName(n, watched)] = msg.values[i] ?? null; });
       if (msg.names.length) pendingDirty = true;
     },
     state: (msg) => {
@@ -811,14 +827,41 @@ export function createLiveController(deps: LiveControllerDeps = {}) {
     try {
       const res = await resolvingRequest(() => api.loadCsv(file));
       const s = store.getState();
-      const known = new Set(s.watch.map((w) => w.name));
-      const added = (res.names ?? []).filter((n) => !known.has(n)).map((name) => ({ name, plot: true, radix: "dec" as const }));
-      if (added.length) {
-        set({ watch: [...s.watch, ...added] });
+      const csvNames = new Set(res.names);
+      const monitored = new Set(s.inputs.filter(i => i.monitor !== false).map(i => i.name));
+      const inputAliases = new Map<string, string>();
+      const replacements = new Map<string, string>();
+      const known = new Set([...s.watch.map(w => w.name), ...monitored]);
+      for (const { name, existing } of res.same ?? []) {
+        if (!csvNames.has(name) || !known.has(existing)) continue;
+        if (monitored.has(existing)) {
+          if (!inputAliases.has(name)) inputAliases.set(name, existing);
+        } else if (!replacements.has(existing)) {
+          replacements.set(existing, name);
+        }
+      }
+      const watch: WatchItem[] = [];
+      const watched = new Set<string>();
+      for (const item of s.watch) {
+        const name = replacements.get(item.name) ?? item.name;
+        if (watched.has(name)) continue;
+        watch.push(name === item.name ? item : { ...item, name });
+        watched.add(name);
+      }
+      for (const name of csvNames) {
+        // 入力の登録名は書き込み・固定にも使うため、そのまま監視する。
+        if (watched.has(name) || inputAliases.has(name)) continue;
+        watch.push({ name, plot: true, radix: "dec" });
+      }
+      csvAliases = new Map([...replacements, ...inputAliases]);
+      recordWatchSeries = undefined;
+      if (watch.length !== s.watch.length || watch.some((item, i) => item !== s.watch[i])) {
+        set({ watch });
         persist();
       }
       finishRecordSwitch(change);
-      syncSignals();
+      if (csvAliases.size) await syncWatch();
+      else syncSignals();
       notify.success(`テスト CSV を読み込みました（${res.rows} 行、${(res.names ?? []).length} 変数）`);
       // 一部だけを再生する（複数の mod ブロックのうち先頭だけ）などは、成功とは別に長く残る警告で知らせる
       if (res.warning) (notify.warn ?? notify.error)(`テスト CSV の警告: ${res.warning}`);

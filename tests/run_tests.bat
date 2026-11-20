@@ -608,6 +608,17 @@ if errorlevel 1 (call :ng "a rejected CSV with same-name inputs changes nothing 
 fc /b "%WORK%\dup_export0.csv" "%WORK%\dup_export1.csv" >nul
 if errorlevel 1 (call :ng "a rejected CSV with same-name inputs changes nothing (record)") else (call :ok "a rejected CSV with same-name inputs changes nothing (record)")
 curl -s -X POST --data-binary "@%T%\gui\release_p1.json" "%U%/api/write" > nul
+curl -s -X POST --data-binary "@%T%\gui\watch_csv_same.json" "%U%/api/watch" > nul
+set "CODE="
+for /f "usebackq delims=" %%C in (`curl -s -o "%WORK%\csv_same.json" -w "%%{http_code}" -X POST --data-binary "@%T%\gui\play_watch_same.csv" "%U%/api/load-csv"`) do set "CODE=%%C"
+"%HAS%" /l /c:"\"same\":[{\"name\":\"engine.c/s_log_idx\",\"existing\":\"s_log_idx\"}" "%WORK%\csv_same.json" >nul
+if errorlevel 1 (call :ng "CSV same reports the short name of a unique static") else if "%CODE%"=="200" (call :ok "CSV same reports the short name of a unique static") else (call :ng "CSV watch aliases: 200 expected, got %CODE%")
+"%HAS%" /l /c:"\"names\":[\"engine.c/s_log_idx\",\"sensor.c/s_cnt\"]" "%WORK%\csv_same.json" >nul
+if errorlevel 1 (call :ng "CSV watch aliases preserve both CSV names") else (
+    "%HAS%" /l /c:"\"existing\":\"engine.c/s_cnt\"" "%WORK%\csv_same.json" >nul
+    if errorlevel 1 (call :ok "CSV same excludes distinct file statics with the same name") else (call :ng "CSV same excludes distinct file statics with the same name")
+)
+curl -s -X POST --data-binary "@%T%\gui\watch_p1only.json" "%U%/api/watch" > nul
 rem input columns spelled differently for the same memory (P1 and P1_bit.no0, a[0] and a[ 0 ], g.x and g .x) are separate
 rem columns written in column order; same-name outputs and an input with the name of an output are accepted
 set "CODE="
