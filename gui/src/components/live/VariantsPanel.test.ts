@@ -7,7 +7,9 @@ import { useVariantsStore } from "../../live/variantsStore";
 import { useLiveStore } from "../../live/liveStore";
 
 const { setInit } = vi.hoisted(() => ({ setInit: vi.fn() }));
-vi.mock("../../live/controller", () => ({ liveController: () => ({ api: { setInit } }) }));
+vi.mock("../../live/controller", () => ({ liveController: () => ({
+  api: { setInit }, selectVariant: async (doc: ReturnType<typeof useVariantsStore.getState>["doc"]) => useVariantsStore.setState({ doc }),
+}) }));
 vi.mock("zustand", async importOriginal => {
   const actual = await importOriginal<typeof import("zustand")>();
   return { ...actual, create: (initializer: StateCreator<unknown>) => {
@@ -47,8 +49,17 @@ async function click(label: string) {
 }
 describe("仕向パネルの名前変更", () => {
   it("反映成功時に仕向と信号情報の名前・選択を同時に移す", async () => {
+    const inputs = [{ name: "X", widget: "slider", min: 0, max: 10, step: 1, hold: false }] as const;
+    const watch = [{ name: "Y", plot: false, radix: "hex" }] as const;
+    const values = [{ name: "Z", value: "7", mode: "once" }] as const;
+    useVariantsStore.setState({ doc: { version: 1, selected: "EU", variants: [
+      { name: "EU", inputs: [...inputs], watch: [...watch], values: [...values] },
+    ] } });
     await click("名前変更");
-    expect(useVariantsStore.getState().doc.selected).toBe("EU2");
+    expect(setInit).toHaveBeenCalledExactlyOnceWith(values);
+    expect(useVariantsStore.getState().doc).toEqual({ version: 1, selected: "EU2", variants: [
+      { name: "EU2", inputs, watch, values },
+    ] });
     expect(useWaveformStore.getState().selectedVariant).toBe("EU2");
     expect(useWaveformStore.getState().lsbMapping.X).toBe("0.1");
     expect(useWaveformStore.getState().signalDefs.variants).toEqual({ EU2: { X: { lsb: 0.1 } } });

@@ -732,7 +732,7 @@ RL78 の命令は再現しない。目的は速さで、解釈実行・変換方
 
 起動時の `/api/init` の失敗は、404（未対応の旧 sim）だけ無視する。それ以外は全体と名前ごとの反映エラーを仕向パネルに表示し、ファイル読み込みエラーとは分ける。
 
-仕向のファイル（`GET`/`POST /api/variants`）は `{"version":1,"selected":名前,"variants":[{"name","values":[{"name","value","mode"}]}]}`。
+仕向のファイル（`GET`/`POST /api/variants`）は `{"version":1,"selected":名前,"variants":[{"name","values":[{"name","value","mode"}],"inputs":[…],"watch":[…]}]}`。各仕向の `inputs`（入力パネル）と `watch`（監視一覧）は任意。
 保存先はサーバが起動時に決めた 1 か所だけで（sim.cfg の `gui_variants`、既定は sim.cfg と同じフォルダの `sim_gui_variants.json`）、
 要求からパスを受け取らない。一時ファイルに書いてから置き換える。中身の検査は `variants` が配列であることまでで、残りは GUI が読むときに捨てる。
 

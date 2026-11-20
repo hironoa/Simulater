@@ -4,7 +4,7 @@ import { useRef, useState } from "react";
 import { liveController } from "../../live/controller";
 import { useLiveStore } from "../../live/liveStore";
 import { decodeVariantsCsv, parseInitFromCsv, type VariantsDoc, type InitValue } from "../../live/variants";
-import { setVariantsApplyError, useVariantsStore, variantWarning } from "../../live/variantsStore";
+import { saveVariants, setVariantsApplyError, useVariantsStore, variantWarning } from "../../live/variantsStore";
 import { SymbolSearch } from "./SymbolSearch";
 
 const field = "px-1.5 py-0.5 text-xs rounded border border-gray-300 dark:border-slate-600 bg-white dark:bg-slate-900";
@@ -20,7 +20,8 @@ export function VariantsPanel() {
   const [busy, setBusy] = useState(false);
   const file = useRef<HTMLInputElement>(null);
   const current = doc.variants.find(v => v.name === doc.selected);
-  const api = liveController().api;
+  const live = liveController();
+  const api = live.api;
   async function apply(next: VariantsDoc, onApplied?: () => void) {
     if (!onApplied) useVariantsStore.setState({ doc: next });
     setBusy(true);
@@ -28,7 +29,9 @@ export function VariantsPanel() {
       await api.setInit(next.variants.find(v => v.name === next.selected)?.values ?? []);
       if (onApplied) {
         onApplied();
-        useVariantsStore.setState({ doc: next });
+        useVariantsStore.setState(state => ({ doc: {
+          ...next, variants: state.doc.variants.map(v => v.name === doc.selected ? { ...v, name: next.selected } : v),
+        } }));
       }
       setErrors({});
     }
@@ -39,32 +42,44 @@ export function VariantsPanel() {
    * 仕向を選んだら、反映して、選択をファイルにも保存する（保存しないと、次の起動で選んでいない状態に戻る）。
    * 仕向ファイルを読めなかったときは、壊れたファイルを上書きしないよう保存しない。
    */
-  async function select(name: string) {
-    const next = { ...doc, selected: name, variants: name && !doc.variants.some(v => v.name === name) ? [...doc.variants, { name, values: [] }] : doc.variants };
-    await apply(next);
-    if (error || useVariantsStore.getState().errors[""]) return;
-    try { await api.saveVariants(next); useVariantsStore.setState({ saved: JSON.stringify(next) }); }
-    catch (e) { setErrors({ "": `選択をファイルに保存できませんでした: ${(e as Error).message}` }); }
+  async function select(next: VariantsDoc, saveSelection = true) {
+    setBusy(true);
+    try {
+      await api.setInit(next.variants.find(v => v.name === next.selected)?.values ?? []);
+      setErrors({});
+      await live.selectVariant(next);
+      if (saveSelection) await saveVariants(api, "selection");
+    } catch (e) { setVariantsApplyError(e); }
+    finally { setBusy(false); }
   }
   const warning = variantWarning({ doc, loaded, error });
   const update = (values: InitValue[]) => apply({ ...doc, variants: doc.variants.map(v => v.name === doc.selected ? { ...v, values } : v) });
   const rename = (adding: boolean) => {
     const name = window.prompt(adding ? "仕向の名前" : "新しい名前", adding ? "" : doc.selected)?.trim();
     if (!name || (adding ? doc.variants.some(v => v.name === name) : names.includes(name))) return;
-    void apply({ ...doc, selected: name, variants: adding ? [...doc.variants, { name, values: [] }] : doc.variants.map(v => v.name === doc.selected ? { ...v, name } : v) }, adding ? undefined : () => useWaveformStore.getState().renameVariant(doc.selected, name));
+    if (adding) {
+      void select({ ...doc, selected: name, variants: [...doc.variants, { name, values: [] }] });
+    } else {
+      void apply({ ...doc, selected: name, variants: doc.variants.map(v => v.name === doc.selected ? { ...v, name } : v) },
+        () => useWaveformStore.getState().renameVariant(doc.selected, name));
+    }
   };
   return <div className="text-xs flex flex-col gap-2">
     {error && <p role="alert" className="text-red-500">{error}（自動保存しません）</p>}
     {warning && <p role="alert" className="font-bold text-amber-800 dark:text-amber-300">{warning}。入力が効かないときは、仕向を選んでください。</p>}
-    <select className={field} aria-label="仕向" value={doc.selected} disabled={!loaded || busy} onChange={e => void select(e.target.value)}>
+    <select className={field} aria-label="仕向" value={doc.selected} disabled={!loaded || busy} onChange={e => {
+      const name = e.target.value;
+      const variants = name && !doc.variants.some(v => v.name === name) ? [...doc.variants, { name, values: [] }] : doc.variants;
+      void select({ ...doc, selected: name, variants });
+    }}>
       <option value="">選択なし</option>{names.map(name => <option key={name}>{name}</option>)}
     </select>
-    <div className="flex items-center gap-1 whitespace-nowrap"><button className={button} disabled={busy} onClick={() => rename(true)}>追加</button><button className={button} disabled={!current || busy} onClick={() => rename(false)}>名前変更</button><button className={button} disabled={!current || busy} onClick={() => { if (window.confirm("この仕向を削除しますか？")) void apply({ ...doc, selected: "", variants: doc.variants.filter(v => v !== current) }); }}>削除</button><button className={button} disabled={busy} onClick={() => file.current?.click()}>CSV から取り込み</button></div>
+    <div className="flex items-center gap-1 whitespace-nowrap"><button className={button} disabled={busy} onClick={() => rename(true)}>追加</button><button className={button} disabled={!current || busy} onClick={() => rename(false)}>名前変更</button><button className={button} disabled={!current || busy} onClick={() => { if (window.confirm("この仕向を削除しますか？")) void select({ ...doc, selected: "", variants: doc.variants.filter(v => v !== current) }, false); }}>削除</button><button className={button} disabled={busy} onClick={() => file.current?.click()}>CSV から取り込み</button></div>
     <div className="flex flex-col gap-1">
     <button className={`${primaryButton} self-start`} disabled={!loaded || busy} onClick={async () => {
       if (error && !window.confirm("読めなかった仕向ファイルを上書きしますか？")) return;
       setBusy(true);
-      try { await api.saveVariants(doc); useVariantsStore.setState({ saved: JSON.stringify(doc), error: "" }); } catch (e) { setErrors({ "": (e as Error).message }); } finally { setBusy(false); }
+      try { await saveVariants(api, "manual"); } finally { setBusy(false); }
     }}>ファイルに保存{JSON.stringify(doc) !== saved ? " *" : ""}</button>
     <small className="break-all text-gray-500">{path}</small>
     </div>
@@ -85,8 +100,14 @@ export function VariantsPanel() {
         const name = picked.name.replace(/\.[^.]+$/, "");
         const values = parseInitFromCsv(decodeVariantsCsv(await picked.arrayBuffer()));
         if (!values.length) { setErrors({ "": "#Init の初期値が見つかりません" }); return; }
-        if (doc.variants.some(v => v.name === name) && !window.confirm(`${name} を上書きしますか？`)) return;
-        await apply({ ...doc, selected: name, variants: [...doc.variants.filter(v => v.name !== name), { name, values }] });
+        const latest = useVariantsStore.getState().doc;
+        const existing = latest.variants.find(v => v.name === name);
+        if (existing && !window.confirm(`${name} を上書きしますか？`)) return;
+        const next = { ...latest, selected: name, variants: existing
+          ? latest.variants.map(v => v === existing ? { ...v, values } : v)
+          : [...latest.variants, { name, values }] };
+        if (latest.selected === name) await apply(next);
+        else await select(next);
       } catch (err) { setErrors({ "": (err as Error).message }); }
     }} />
   </div>;

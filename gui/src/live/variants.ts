@@ -1,7 +1,8 @@
 import Papa from "papaparse";
+import { sanitizeInputs, sanitizeWatch, type InputItem, type WatchItem } from "./persist";
 
 export interface InitValue { name: string; value: string; mode: "once" | "every" }
-export interface Variant { name: string; values: InitValue[] }
+export interface Variant { name: string; values: InitValue[]; inputs?: InputItem[]; watch?: WatchItem[] }
 export interface VariantsDoc { version: 1; selected: string; variants: Variant[] }
 export interface VariantsResult { path: string; exists: boolean; doc: unknown; error: string }
 
@@ -20,7 +21,11 @@ export function sanitizeVariants(raw: unknown): VariantsDoc {
       seen.add(row.name);
       values.push({ name: row.name, value: row.value, mode: row.mode });
     }
-    doc.variants.push({ name: v.name, values });
+    doc.variants.push({
+      name: v.name, values,
+      ...(Array.isArray(v.inputs) ? { inputs: sanitizeInputs(v.inputs) } : {}),
+      ...(Array.isArray(v.watch) ? { watch: sanitizeWatch(v.watch) } : {}),
+    });
   }
   if (typeof raw.selected === "string" && names.has(raw.selected)) doc.selected = raw.selected;
   return doc;

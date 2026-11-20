@@ -7,6 +7,7 @@ RL78 向け組み込みソフトを、CC-RL の `.abs` または CA78K0R の `.l
 - 機械語をそのまま解釈実行するので、`int` 16 ビット、ポインタ幅、SFR のアドレス、アセンブラで書かれた処理は実機と同じに動く
 
 仕様の詳細は [docs/DESIGN.md](docs/DESIGN.md)。
+画像と動画で手順を追える HTML 版は [README.html](README.html)（ブラウザで開く）。
 
 ## 用意するもの
 
@@ -468,3 +469,6 @@ docs/      設計書
 `tests/run_tests.sh`（Windows は `tests\run_tests.bat`）と `rl78/tests/run_tests.sh`。
 ルネサス公式サンプル（BSD-3-Clause）の CC-RL 製 `.abs` と、`tests/tools/mkabs.c` が作るテスト用 `.abs` で確かめる。
 GUI は `gui` フォルダで `npm test`。
+
+README.html の画像と動画（`docs/readme/`）は、`./build.sh` の後に `node tools/readme_media/capture.mjs` で撮り直せる
+（macOS / Linux。Google Chrome と ffmpeg を使う）。
