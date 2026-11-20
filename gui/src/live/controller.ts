@@ -1,6 +1,6 @@
 import { createSignalsPersistence } from "../store/signalsPersist";
-import { sanitizeVariants, type InitValue } from "./variants";
-import { setVariantsApplyError, useVariantsStore } from "./variantsStore";
+import { sanitizeVariants, type Variant, type VariantsDoc } from "./variants";
+import { persistLayoutLimits, persistLiveLayout, setVariantsApplyError, useVariantsStore, variantLayout } from "./variantsStore";
 // ライブモードの制御。サーバ検出、SSE の取り込み、監視一覧・入力の同期、構成の保存をまとめて持つ。
 
 import { getConversion } from "../utils/helpers";
@@ -11,7 +11,7 @@ import { ApiError, createApi, detectServer, type ControlRequest, type DroppedIte
 import { dropPending, physicalInputValue, inputValue, restoreHoldText, upsertPending, type InputValue } from "./inputValue";
 import { liveRecord, type LiveRecord } from "./liveRecord";
 import { useLiveStore, type LiveStoreState } from "./liveStore";
-import { loadLayout, saveLayout, type InputItem, type InputWidget, type WatchItem } from "./persist";
+import { loadLayout, type InputItem, type InputWidget, type WatchItem } from "./persist";
 import { openStream, type EventSourceLike, type StreamHandlers } from "./stream";
 
 export interface LiveControllerDeps {
@@ -64,6 +64,7 @@ export function createLiveController(deps: LiveControllerDeps = {}) {
   let resolving = 0;
   /** 固定の切り替え・書き込みが応答待ちの名前（その間は state.holds に合わせない）。 */
   const holdBusy = new Map<string, number>();
+  const holdRequests = new Set<Promise<unknown>>();
   /** 押している間だけ 1 のボタンで一時的に固定している名前（固定 ON とは表示しない）。 */
   const momentary = new Set<string>();
   /**
@@ -76,7 +77,7 @@ export function createLiveController(deps: LiveControllerDeps = {}) {
 
   function persist() {
     const s = store.getState();
-    saveLayout({ inputs: s.inputs, watch: s.watch, windowSize: s.windowSize, maxSamples: s.maxSamples });
+    persistLiveLayout({ inputs: s.inputs, watch: s.watch, windowSize: s.windowSize, maxSamples: s.maxSamples }, api);
   }
 
   function watchedNames() {
@@ -94,8 +95,12 @@ export function createLiveController(deps: LiveControllerDeps = {}) {
     waveform.getState().ensureLiveSignals(watchedNames(), plotted);
     const current = store.getState();
     const settings = waveform.getState().signalSettings;
-    set({ watch: current.watch.map(w => ({ ...w, plot: settings[w.name]?.checked ?? w.plot })) });
-    persist();
+    const watch = current.watch.map(w => settings[w.name] && settings[w.name].checked !== w.plot
+      ? { ...w, plot: settings[w.name].checked } : w);
+    if (watch.some((w, i) => w !== current.watch[i])) {
+      set({ watch });
+      persist();
+    }
   }
 
   async function syncWatch() {
@@ -139,12 +144,62 @@ export function createLiveController(deps: LiveControllerDeps = {}) {
 
   async function trackHold<T>(name: string, fn: () => Promise<T>): Promise<T> {
     holdBusy.set(name, (holdBusy.get(name) ?? 0) + 1);
+    let request: Promise<T> | undefined;
     try {
-      return await fn();
+      request = fn();
+      holdRequests.add(request);
+      return await request;
     } finally {
+      if (request) holdRequests.delete(request);
       const n = (holdBusy.get(name) ?? 1) - 1;
       if (n > 0) holdBusy.set(name, n); else holdBusy.delete(name);
     }
+  }
+
+  async function applyVariantLayout(inputs: InputItem[], watch: WatchItem[], previousHolds: string[]) {
+    const nextHolds = new Set(inputs.filter(i => i.hold).map(i => i.name));
+    const released = new Set([...previousHolds.filter(name => !nextHolds.has(name)), ...momentary]);
+    momentary.clear();
+    const revision = store.getState().layoutRevision + 1;
+    set({ inputs: inputs.map(i => i.hold && i.value === undefined ? { ...i, holdPending: true } : i), watch, layoutRevision: revision });
+    const settings = waveform.getState().signalSettings;
+    const checked = watch.filter(w => settings[w.name] && settings[w.name].checked !== w.plot);
+    if (checked.length) waveform.setState({ signalSettings: {
+      ...settings, ...Object.fromEntries(checked.map(w => [w.name, { ...settings[w.name], checked: w.plot }])),
+    } });
+    const changeHold = (name: string, change: () => Promise<void>) => trackHold(name, async () => {
+      try {
+        await change();
+      } catch (e) {
+        notify.error(`固定を切り替えられませんでした: ${(e as Error).message}`);
+      }
+    });
+    const releases = Promise.all([...released].map(name => changeHold(name, async () => {
+      await api.release(name);
+      noteReleased(name);
+    })));
+    // 解除が終わるまで待つ間も、SSE で新しい入力カードの固定表示を戻さない。
+    const writes = inputs.flatMap(({ name, hold, value }) => hold && value !== undefined
+      ? [changeHold(name, async () => { await releases; await writeFixed(name, value); })] : []);
+    await Promise.all([releases, ...writes]);
+    await syncWatch();
+  }
+
+  async function selectVariant(next: VariantsDoc) {
+    while (holdRequests.size) await Promise.allSettled(holdRequests);
+    const { doc } = useVariantsStore.getState();
+    const current = store.getState();
+    const layout = variantLayout(current);
+    const variants = next.variants.map(v => {
+      const latest = doc.variants.find(old => old.name === v.name);
+      const updated = v.name === doc.selected ? { ...v, ...layout }
+        : latest ? { ...latest, values: v.values } : v;
+      return v.name === next.selected ? { ...updated, inputs: updated.inputs ?? layout.inputs, watch: updated.watch ?? layout.watch } : updated;
+    });
+    useVariantsStore.setState({ doc: { ...next, variants } });
+    if (doc.selected === next.selected) return;
+    const target = variants.find(v => v.name === next.selected) ?? loadLayout();
+    await applyVariantLayout(target.inputs ?? layout.inputs, target.watch ?? layout.watch, current.inputs.filter(i => i.hold).map(i => i.name));
   }
 
   /** 入力パネルの固定表示をサーバの state.holds に合わせる（切り替え中・ボタンを押している間の名前は除く）。 */
@@ -305,18 +360,20 @@ export function createLiveController(deps: LiveControllerDeps = {}) {
       await signalsPersistence.start("offline");
       return false;
     }
-    let initValues: InitValue[] = [];
+    let selected: Variant | undefined;
     try {
       const result = await api.getVariants();
       const doc = sanitizeVariants(result.doc);
       const error = result.error || (result.exists && (!result.doc || typeof result.doc !== "object" || !Array.isArray((result.doc as Record<string, unknown>).variants)) ? "仕向ファイルの形式が不正です" : "");
       useVariantsStore.setState({ doc, saved: JSON.stringify(doc), path: result.path, error, loaded: true });
-      if (!error) initValues = doc.variants.find(v => v.name === doc.selected)?.values ?? [];
-    } catch (e) { useVariantsStore.setState({ loaded: true, error: (e as Error).message }); }
+      if (!error) selected = doc.variants.find(v => v.name === doc.selected);
+    } catch (e) {
+      useVariantsStore.setState({ ...useVariantsStore.getInitialState(), loaded: true, error: (e as Error).message });
+    }
     await signalsPersistence.start("live");
     // 選択なし・取得失敗でも、サーバに残った仕向の初期化を解除する。
     useVariantsStore.setState({ errors: {} });
-    try { await api.setInit(initValues); }
+    try { await api.setInit(selected?.values ?? []); }
     catch (e) { if (!(e instanceof ApiError && e.status === 404)) setVariantsApplyError(e); }
     const layout = loadLayout();
     record.setMaxSamples(layout.maxSamples);
@@ -349,12 +406,17 @@ export function createLiveController(deps: LiveControllerDeps = {}) {
     });
     waveform.getState().setTaskPeriod(info.periodMs);
     // 前に外された分を保存した構成にも反映する（通知は関数を変えたときだけ）
+    const hasVariantLayout = selected && (selected.inputs || selected.watch);
     if (info.state.dropped?.length) {
       droppedKey = JSON.stringify(info.state.dropped);
-      applyDropped(info.state.dropped, false);
+      if (!hasVariantLayout) applyDropped(info.state.dropped, false);
     }
-    reconcileHolds(info.state.holds ?? []);
-    await syncWatch();
+    if (selected && hasVariantLayout) {
+      await applyVariantLayout(selected.inputs ?? layout.inputs, selected.watch ?? layout.watch, (info.state.holds ?? []).map(h => h.name));
+    } else {
+      reconcileHolds(info.state.holds ?? []);
+      await syncWatch();
+    }
     closeStream = openStream(api.streamUrl(), {
       ...handlers,
       open: () => set({ connected: true }),
@@ -521,17 +583,18 @@ export function createLiveController(deps: LiveControllerDeps = {}) {
   /**
    * 値を書く。hold を省くと、固定中の入力は固定値の更新（hold:true）、そうでなければ単発（次のステップの開始時に反映）。
    */
-  async function write(name: string, value: number | string, hold?: boolean) {
+  async function write(name: string, value: number | string, hold?: boolean, pressingButton = false) {
     const item = store.getState().inputs.find((i) => i.name === name);
     const h = hold ?? item?.hold ?? false;
     // 固定 OFF の入力を一時的に固定する（押している間だけ 1 のボタン）。固定 ON の表示にはしない
-    if (h && item && !item.hold) momentary.add(name);
+    const temporary = h && (pressingButton || item?.widget === "button" && !item.hold);
+    if (h && item && (!item.hold || temporary)) momentary.add(name);
     try {
       await trackHold(name, () => api.write(name, value, h));
       noteWritten(name, value, h);
       if (!h) momentary.delete(name);
       // 数値入力の文字列は書いたまま残す（構成の保存・復元でも丸めない）
-      if (item) updateInput(name, { value, holdPending: undefined });
+      if (item && !temporary) updateInput(name, { value, holdPending: undefined });
       remonitor(name);
       return true;
     } catch (e) {
@@ -546,6 +609,7 @@ export function createLiveController(deps: LiveControllerDeps = {}) {
   async function writePhysical(name: string, value: number | string, hold?: boolean): Promise<number | null> {
     try {
       const func = store.getState().sim.func;
+      const revision = store.getState().layoutRevision;
       const removed = removals.get(name) ?? 0;
       // 換算は入力したときの設定で行う（型を待つ間に yaml などで設定が変わっても、利用者が見ていた換算のまま送る）
       const settings = waveform.getState();
@@ -561,7 +625,7 @@ export function createLiveController(deps: LiveControllerDeps = {}) {
       // 型を待つ間に対象関数が変わったら、前の関数の型で換算した値を新しい関数へ書かない
       if (store.getState().sim.func !== func) throw new Error("型を調べている間に対象関数が変わったため、書き込みを取り消しました");
       // 型を待つ間にカードを外した（足し直した）ら書かない。外したカードの固定が残り、以後の実験に入り続けるため
-      if ((removals.get(name) ?? 0) !== removed || !store.getState().inputs.some(i => i.name === name)) {
+      if (store.getState().layoutRevision !== revision || (removals.get(name) ?? 0) !== removed || !store.getState().inputs.some(i => i.name === name)) {
         throw new Error("型を調べている間に入力から外したため、書き込みを取り消しました");
       }
       if (!symbol) { symbolKinds.delete(key); throw new Error("型を取得できません"); }
@@ -580,7 +644,8 @@ export function createLiveController(deps: LiveControllerDeps = {}) {
    * 押している間だけ 1 のボタンを離した: 一時的な固定を解き、押す前の値（restore。無ければ 0）を書く
    * （固定 ON の項目はその値で固定し直す）。restore が null（押す前の値が丸められていて正確に分からない）なら書かない。
    */
-  async function releaseButton(name: string, restore: number | string | null = 0) {
+  async function releaseButton(name: string, restore: number | string | null = 0, revision = store.getState().layoutRevision) {
+    if (revision !== store.getState().layoutRevision) return;
     await trackHold(name, async () => {
       await api.release(name).then(() => noteReleased(name), () => undefined);
       momentary.delete(name);
@@ -591,6 +656,11 @@ export function createLiveController(deps: LiveControllerDeps = {}) {
       }
       await write(name, restore, item?.hold ?? false);
     });
+  }
+
+  async function writeFixed(name: string, value: number | string) {
+    await api.write(name, value, true);
+    noteWritten(name, value, true);
   }
 
   /**
@@ -613,8 +683,7 @@ export function createLiveController(deps: LiveControllerDeps = {}) {
     try {
       await trackHold(name, async () => {
         if (hold) {
-          await api.write(name, v!, true);
-          noteWritten(name, v!, true);
+          await writeFixed(name, v!);
           updateInput(name, { value: v! });
         } else {
           // 固定を外すと、その名前の反映待ちも捨てられる
@@ -633,14 +702,14 @@ export function createLiveController(deps: LiveControllerDeps = {}) {
   // ---- 表示 ----
   function setWindowSize(n: number) {
     set({ windowSize: Math.max(50, Math.floor(n)) });
-    persist();
+    persistLayoutLimits(store.getState());
   }
 
   function setMaxSamples(n: number) {
     const max = Math.max(1000, Math.floor(n));
     record.setMaxSamples(max);
     set({ maxSamples: max });
-    persist();
+    persistLayoutLimits(store.getState());
   }
 
   // ---- CSV ----
@@ -679,7 +748,7 @@ export function createLiveController(deps: LiveControllerDeps = {}) {
   }
 
   return {
-    api, record, handlers, start, stop, control, commit, syncWatch,
+    api, record, handlers, start, stop, control, commit, syncWatch, selectVariant,
     addWatch, removeWatch, updateWatch, addInput, moveInput, removeInput, updateInput, write, writePhysical, releaseButton, setHold, inputBase, inputBaseValue,
     setWindowSize, setMaxSamples, loadCsv, exportCsv,
     /** テスト用: 保留中の最新値を即座に反映する */

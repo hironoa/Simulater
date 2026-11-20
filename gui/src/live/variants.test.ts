@@ -9,6 +9,23 @@ describe("sanitizeVariants", () => {
     expect(sanitizeVariants({ selected: "国内", variants: [null, { name: "国内", values: [null, { name: "a", value: "0x20", mode: "once" }, { name: "a", value: "9", mode: "every" }, { name: "b", value: 3, mode: "once" }, { name: "c", value: "1", mode: "bad" }] }, { name: "国内", values: [] }] })).toEqual({ version: 1, selected: "国内", variants: [{ name: "国内", values: [{ name: "a", value: "0x20", mode: "once" }] }] });
   });
   it("存在しない選択を解除する", () => expect(sanitizeVariants({ selected: "海外", variants: [] }).selected).toBe(""));
+  it("入力と監視を検査して残し、項目がない仕向と空の構成を区別する", () => {
+    const doc = sanitizeVariants({ variants: [
+      { name: "A", values: [], inputs: [null, { name: "", widget: "button" },
+        { name: "x", widget: "slider", step: -1, hold: true, value: " 0x20000000000001 ", holdPending: true },
+        { name: "x" }, { name: "y", hold: true, holdPending: true, value: "1\n2" }],
+      watch: [0, { name: "z", plot: false, radix: "hex" }, { name: "z" }, { name: "q", radix: "invalid" }] },
+      { name: "B", values: [] },
+      { name: "C", values: [], inputs: [], watch: [] },
+    ] });
+    expect(doc.variants[0]).toEqual({ name: "A", values: [], inputs: [
+      { name: "x", widget: "slider", min: 0, max: 100, step: 1, hold: true, value: "0x20000000000001" },
+      { name: "y", widget: "number", min: 0, max: 100, step: 1, hold: true },
+    ], watch: [{ name: "z", plot: false, radix: "hex" }, { name: "q", plot: true, radix: "dec" }] });
+    expect(doc.variants[1].inputs).toBeUndefined();
+    expect(doc.variants[1].watch).toBeUndefined();
+    expect(doc.variants[2]).toMatchObject({ inputs: [], watch: [] });
+  });
 });
 describe("parseInitFromCsv", () => {
   it("BOM・大小文字・引用・カンマ・引用符を読む", () => {

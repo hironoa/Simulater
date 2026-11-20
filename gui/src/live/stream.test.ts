@@ -2,7 +2,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { dispatchStreamEvent, type EventSourceLike, type StreamHandlers } from "./stream";
 import { ApiError, createApi, type SimApi } from "./api";
 import { createLiveController } from "./controller";
-import { useVariantsStore } from "./variantsStore";
+import { saveVariants as saveVariantFile, useVariantsStore } from "./variantsStore";
+import { DEFAULT_LAYOUT, loadLayout, saveLayout, type InputItem, type WatchItem } from "./persist";
+import type { VariantsDoc } from "./variants";
 import { LiveRecord } from "./liveRecord";
 import { initialLiveState, useLiveStore } from "./liveStore";
 import { useWaveformStore, LIVE_FILE_NAME } from "../store/useWaveformStore";
@@ -98,7 +100,7 @@ describe("ライブ制御（SSE の取り込み）", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     useLiveStore.setState({ ...initialLiveState });
-    useVariantsStore.setState({ errors: {} });
+    useVariantsStore.setState(useVariantsStore.getInitialState());
     useWaveformStore.setState({ chartData: null, signalSettings: {}, unassignedSignals: [], signalGroups: [], cursors: [], fileName: null });
     posted = [];
     record = new LiveRecord();
@@ -330,6 +332,126 @@ describe("ライブ制御（SSE の取り込み）", () => {
         expect(setInit).toHaveBeenCalledExactlyOnceWith([]);
         expect(useLiveStore.getState().mode).toBe("live");
       } finally { live.stop(); }
+    });
+  });
+
+  describe("仕向ごとの入力パネルと監視一覧", () => {
+    const input = (name: string, hold = true): InputItem => ({ name, widget: "number", min: 0, max: 100, step: 1, hold, value: "7" });
+    const watch = (name: string, plot = true): WatchItem => ({ name, plot, radix: "hex" });
+    const layoutDoc: VariantsDoc = { version: 1, selected: "A", variants: [
+      { name: "A", values: [], inputs: [input("a")], watch: [watch("shared")] },
+      { name: "B", values: [], inputs: [input("b")], watch: [watch("shared", false), watch("w")] },
+      { name: "C", values: [] },
+    ] };
+    async function setup(error = "", saveVariants = vi.fn().mockResolvedValue({ ok: true })) {
+      saveLayout({ ...DEFAULT_LAYOUT, inputs: [input("local", false)], watch: [watch("local-watch")], windowSize: 300, maxSamples: 4000 });
+      const live = makeController({
+        getVariants: vi.fn().mockResolvedValue({ path: "variants.json", exists: true, doc: layoutDoc, error }),
+        saveVariants,
+      });
+      await live.start();
+      return { live, saveVariants };
+    }
+    function select(live: ReturnType<typeof makeController>, selected: string) {
+      return live.selectVariant({ ...useVariantsStore.getState().doc, selected });
+    }
+    it("起動時は選択中の仕向の構成とブラウザの表示・記録上限を使う", async () => {
+      const { live, saveVariants } = await setup();
+      expect(useLiveStore.getState()).toMatchObject({
+        inputs: [input("a")], watch: [watch("shared")], windowSize: 300, maxSamples: 4000,
+      });
+      expect(posted).toContainEqual({ url: "/api/write", body: { name: "a", value: "7", hold: true } });
+      await vi.advanceTimersByTimeAsync(500);
+      expect(saveVariants).not.toHaveBeenCalled();
+      live.stop();
+    });
+    it("A の現在の構成を残し、固定と監視を B に切り替える", async () => {
+      const { live } = await setup();
+      live.updateInput("a", { widget: "slider" });
+      live.addInput("push", "button");
+      await live.write("push", 1, true);
+      const revision = useLiveStore.getState().layoutRevision;
+      await select(live, "B");
+      await live.releaseButton("push", 0, revision);
+      expect(useLiveStore.getState()).toMatchObject({ inputs: [input("b")], watch: [watch("shared", false), watch("w")] });
+      expect(useVariantsStore.getState().doc.variants[0]).toMatchObject({
+        inputs: [{ name: "a", widget: "slider" }, { name: "push", hold: false }], watch: [watch("shared")],
+      });
+      expect(posted.filter(p => p.url === "/api/write").slice(-3).map(p => p.body)).toEqual([
+        { name: "a", release: true }, { name: "push", release: true }, { name: "b", hold: true, value: "7" },
+      ]);
+      expect(posted.filter(p => p.url === "/api/watch").at(-1)?.body).toEqual({ names: ["shared", "w", "b"] });
+      live.stop();
+    });
+    it("初めて選ぶ仕向は現在の構成を引き継ぎ、選択なしはブラウザの構成に戻す", async () => {
+      const { live } = await setup();
+      await select(live, "C");
+      expect(useVariantsStore.getState().doc.variants[2]).toMatchObject({ inputs: [input("a")], watch: [watch("shared")] });
+      expect(useLiveStore.getState().inputs).toEqual([input("a")]);
+      await select(live, "");
+      expect(useLiveStore.getState()).toMatchObject({ inputs: [input("local", false)], watch: [watch("local-watch")] });
+      live.addWatch("extra");
+      expect(loadLayout().watch.map(w => w.name)).toEqual(["local-watch", "extra"]);
+      live.stop();
+    });
+    it("連続変更をまとめ、送信時の初期値と入力・監視を一度だけ保存する", async () => {
+      const { live, saveVariants } = await setup();
+      live.addInput("new");
+      live.updateInput("a", { value: "8" });
+      await vi.advanceTimersByTimeAsync(300);
+      live.updateInput("a", { value: "9" });
+      live.addWatch("extra", false);
+      const { doc } = useVariantsStore.getState();
+      const values = [{ name: "init", value: "3", mode: "once" as const }];
+      useVariantsStore.setState({ doc: { ...doc, variants: doc.variants.map(v => v.name === "A" ? { ...v, values } : v) } });
+      await vi.advanceTimersByTimeAsync(499);
+      expect(saveVariants).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      const saved = useVariantsStore.getState();
+      expect(saveVariants).toHaveBeenCalledExactlyOnceWith(saved.doc);
+      expect(saved.doc.variants[0]).toMatchObject({ values, inputs: [{ name: "a", value: "9" }, { name: "new", hold: true }],
+        watch: [{ name: "shared" }, { name: "extra", plot: false }] });
+      expect(saved.doc.variants[0].inputs?.[1]).not.toHaveProperty("holdPending");
+      expect(saved.saved).toBe(JSON.stringify(saved.doc));
+      live.stop();
+    });
+    it("仕向の読み込みエラー時はブラウザの構成で起動し、自動保存を止める", async () => {
+      const { live, saveVariants } = await setup("読めません");
+      expect(useLiveStore.getState().inputs).toEqual([input("local", false)]);
+      live.addInput("extra");
+      await vi.advanceTimersByTimeAsync(500);
+      expect(saveVariants).not.toHaveBeenCalled();
+      live.stop();
+    });
+    it("自動保存に失敗するとエラーを出し、次の変更で再試行する", async () => {
+      const { live, saveVariants } = await setup("", vi.fn().mockRejectedValueOnce(new Error("書き込み失敗")).mockResolvedValue({ ok: true }));
+      live.updateInput("a", { value: "8" });
+      await vi.advanceTimersByTimeAsync(500);
+      expect(useVariantsStore.getState().errors[""]).toBe("入力パネルを仕向ファイルに保存できませんでした: 書き込み失敗");
+      live.updateInput("a", { value: "9" });
+      await vi.advanceTimersByTimeAsync(500);
+      expect(saveVariants).toHaveBeenCalledTimes(2);
+      expect(useVariantsStore.getState().errors[""]).toBeUndefined();
+      live.stop();
+    });
+    it("自動保存が応答待ちなら、手動保存は最新の内容で後から送る", async () => {
+      let release!: () => void;
+      const first = new Promise<void>(resolve => { release = resolve; });
+      const { live, saveVariants } = await setup("", vi.fn().mockReturnValueOnce(first).mockResolvedValue({ ok: true }));
+      live.updateInput("a", { value: "8" });
+      await vi.advanceTimersByTimeAsync(500);
+      live.updateInput("a", { value: "9" });
+      const manual = saveVariantFile(live.api, "manual");
+      expect(saveVariants).toHaveBeenCalledTimes(1);
+      release();
+      await manual;
+      await vi.advanceTimersByTimeAsync(500);
+      expect(saveVariants).toHaveBeenCalledTimes(2);
+      const { doc, saved } = useVariantsStore.getState();
+      expect(doc.variants[0].inputs?.[0].value).toBe("9");
+      expect(saveVariants).toHaveBeenLastCalledWith(doc);
+      expect(saved).toBe(JSON.stringify(doc));
+      live.stop();
     });
   });
 
