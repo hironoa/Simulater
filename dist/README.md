@@ -22,7 +22,7 @@
 | ビルドした日 | 2026-11-20 |
 | ビルド方法 | GitHub Actions の `windows` ジョブ（run 44672158978、windows-2025、MinGW-Builds の gcc 15.2.0、x86_64、posix-seh、UCRT。`build.bat` の `CC=gcc`）の成果物 `sim-windows-x64` から `sim.exe` を取った。テキストのファイル（`sim_gui.html`、`README.md`、`sim.cfg.example`、`native_ram_clear.c`、`xlate/`、`native/`）は、成果物と改行コード以外が同じであることを確かめて、リポジトリのソースの写し（LF）を置いた |
 | 依存する DLL | Windows 標準のものだけ（KERNEL32、SHELL32、WS2_32、UCRT）。MinGW の DLL は要らない |
-| 確認 | CI の同じ run で、windows ジョブの `testsun_tests.bat` 927 件と、コア単体の試験（`rl78	estsun_tests.bat`）、clang でのビルドが成功し、macos ジョブの `tests/run_tests.sh` 1186 件がすべて成功。Windows の上では GUI の `npx vitest run` 404 件と `npx tsc --noEmit` が成功。`sim.exe` そのものは Windows で実行していない |
+| 確認 | CI の同じ run で、windows ジョブの `tests\run_tests.bat` 927 件と、コア単体の試験（`rl78\tests\run_tests.bat`）、clang でのビルドが成功し、macos ジョブの `tests/run_tests.sh` 1186 件がすべて成功。Windows の上では GUI の `npx vitest run` 404 件と `npx tsc --noEmit` が成功。`sim.exe` そのものは Windows で実行していない |
 
 普段の配布物は CI（GitHub Actions の `windows` ジョブの成果物 `sim-windows-x64`）が作ります。
 このフォルダは、CI を使えなかったときの代わりに置いたものです。ソースを変えても自動では作り直されないので、
