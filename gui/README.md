@@ -387,7 +387,7 @@ view:                           # 表示の設定（仕向に関係なく共通�
   - `Sample/EngineSpeed` と `EngineSpeed` が両方あるときは、`EngineSpeed` の設定を使い、`Sample/EngineSpeed` は捨てます。
   - `Sample/EngineSpeed` だけのときは、設定をそのまま `EngineSpeed` に移します。無効区間の条件信号も同じようにそろえます。
   - `a.c/s_cnt` と `b.c/s_cnt` のように、ファイルだけが違う同名の信号が 2 つ以上あるときは、`s_cnt` があってもなくても、すべてそのまま残します（同じ CSV に同名の列があると、GUI はこの形で区別して表示するため）。
-  - 信号名が `inactive` や `groups` のような設定の名前になるもの（古い形の `old.c/inactive` など）も、そのまま残します。
+  - 信号名が `inactive` や `groups` のような設定の名前になるもの（`old.c/inactive` など）も、そのまま残します。
 - `.wcp` には表示の状態（拡大範囲・カーソル・選んでいる仕向など）も入ります。
 
 - 信号名に `exp` または `期待値` を含む信号は、線の種類を指定しなければ破線で描きます。

@@ -79,7 +79,7 @@ function normalizeSignalNames(doc: Record<string, any>): Record<string, any> {
   const canonical = (name: string) => {
     if (!name.includes("/")) return name;
     const short = shortName(name);
-    if (short === "" || (!v2 && metadata.has(short))) return name;
+    if (short === "" || metadata.has(short)) return name;
     return qualifiedCounts.get(short) === 1 ? short : name;
   };
 

@@ -40,6 +40,19 @@ beforeEach(() => {
 });
 
 describe("信号情報 v2", () => {
+  it("パス付き信号 old.c/inactive と inactive 条件を保存する", () => {
+    read(`version: 2
+signals:
+  old.c/inactive: {unit: V}
+inactive: {signal: X, when: [0]}
+`);
+    const doc = yaml.load(state().getConfigYAML(false)) as any;
+    expect(doc).toMatchObject({
+      signals: { "old.c/inactive": { unit: "V" } },
+      inactive: [{ signal: "X", when: [0] }],
+    });
+  });
+
   it("パス付き信号の末尾が重複する場合はそれぞれの設定を保持する", () => {
     read(`version: 2
 signals:
