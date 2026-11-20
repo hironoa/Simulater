@@ -145,6 +145,21 @@ describe("ライブ制御（SSE の取り込み）", () => {
   }
 
   describe("ライブの系列名", () => {
+    it.each(["波形側", "変数モニタ側"])("%sで短い系列名の波形を非表示にすると監視設定に保存する", (source) => {
+      const live = makeController();
+      const name = "engine.c/s_cnt";
+      live.addWatch(name);
+      expect(useWaveformStore.getState().signalSettings.s_cnt.checked).toBe(true);
+      expect(loadLayout().watch).toMatchObject([{ name, plot: true }]);
+
+      if (source === "波形側") useWaveformStore.getState().toggleSignalCheck("s_cnt");
+      else live.updateWatch(name, { plot: false });
+
+      expect(useWaveformStore.getState().signalSettings.s_cnt.checked).toBe(false);
+      expect(useLiveStore.getState().watch).toMatchObject([{ name, plot: false }]);
+      expect(loadLayout().watch).toMatchObject([{ name, plot: false }]);
+    });
+
     it.each(["個別", "共有"])("%sの記録では完全名をサーバに送り、設定と記録に短い系列名を使う", async (kind) => {
       const target = kind === "共有" ? liveRecord : record;
       target.clear();

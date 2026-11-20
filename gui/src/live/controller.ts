@@ -6,6 +6,7 @@ import { persistLayoutLimits, persistLiveLayout, setVariantsApplyError, useVaria
 import { getConversion } from "../utils/helpers";
 import { mappingToRows } from "../utils/stateNames";
 import { seriesNames } from "../utils/waveformCSV";
+import { shortSeriesName, watchedNames, watchedSeriesNames, type WatchLayout } from "./seriesNames";
 import toast from "react-hot-toast";
 import { LIVE_FILE_NAME, useWaveformStore } from "../store/useWaveformStore";
 import { ApiError, createApi, detectServer, type ControlRequest, type DroppedItem, type SimApi, type StateMessage } from "./api";
@@ -26,8 +27,6 @@ export interface LiveControllerDeps {
   commitDelayMs?: number;
   notify?: { error: (m: string) => void; success: (m: string) => void; warn?: (m: string) => void };
 }
-
-const unique = (names: string[]) => [...new Set(names.filter(Boolean))];
 
 export function createLiveController(deps: LiveControllerDeps = {}) {
   const api = deps.api ?? createApi("");
@@ -81,28 +80,19 @@ export function createLiveController(deps: LiveControllerDeps = {}) {
     persistLiveLayout({ inputs: s.inputs, watch: s.watch, windowSize: s.windowSize, maxSamples: s.maxSamples }, api);
   }
 
-  type WatchLayout = Pick<LiveStoreState, "watch" | "inputs">;
-
-  function watchedNames(s: WatchLayout = store.getState()) {
-    return unique([...s.watch.map((w) => w.name), ...s.inputs.filter((i) => i.monitor !== false).map((i) => i.name)]);
-  }
-
-  const shortName = (name: string) => name.slice(name.lastIndexOf("/") + 1) || name;
   let previousLayout: WatchLayout | undefined;
   let watchSeries = new Map<string, string>();
 
   function watchedSeries(s: WatchLayout = store.getState()) {
     if (s.watch !== previousLayout?.watch || s.inputs !== previousLayout.inputs) {
-      const names = watchedNames(s);
-      const series = seriesNames(names);
-      watchSeries = new Map(names.map((name, i) => [name, series[i]]));
+      watchSeries = watchedSeriesNames(s);
       previousLayout = { watch: s.watch, inputs: s.inputs };
     }
     return watchSeries;
   }
 
   function seriesName(name: string, s?: WatchLayout) {
-    return watchedSeries(s).get(name) ?? shortName(name);
+    return watchedSeries(s).get(name) ?? shortSeriesName(name);
   }
 
   let recordNames = new Map<string, string>();
@@ -117,7 +107,7 @@ export function createLiveController(deps: LiveControllerDeps = {}) {
         let series = watched.get(name);
         if (series === undefined) {
           // 監視から外した列や遅れて届いた列は、現行の監視列と混ぜずに保持する。
-          series = shortName(name);
+          series = shortSeriesName(name);
           if (used.has(series)) series = name;
           while (used.has(series)) series = "/" + series;
           used.add(series);
@@ -166,7 +156,7 @@ export function createLiveController(deps: LiveControllerDeps = {}) {
 
   async function syncWatch() {
     syncSignals();
-    const names = watchedNames();
+    const names = watchedNames(store.getState());
     try {
       const res = await api.watch(names);
       const errors: Record<string, string> = {};
@@ -583,7 +573,7 @@ export function createLiveController(deps: LiveControllerDeps = {}) {
       return;
     }
     if (widget === undefined) {
-      const names = unique([...watchedNames(s), name]);
+      const names = [...new Set([...watchedNames(s), name])];
       const series = seriesNames(names)[names.indexOf(name)];
       widget = mappingToRows(waveform.getState().modeMapping[series]).length ? "state" : "number";
     }
