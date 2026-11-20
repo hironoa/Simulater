@@ -42,11 +42,13 @@ interface InputCardProps {
 }
 
 function InputCard({ item, names, current, pending, held, base }: InputCardProps) {
-  const revision = useLiveStore(s => s.layoutRevision);
   const live = liveController();
+  const { revision, series } = useLiveStore(useShallow(s => ({
+    revision: s.layoutRevision, series: live.seriesName(item.name, s),
+  })));
   const { attributes, listeners, setNodeRef, setActivatorNodeRef, transform, transition } = useSortable({ id: item.name });
   const { lsb, offset, unit, mapping } = useWaveformStore(useShallow(s => ({
-    ...getConversion(item.name, s.lsbMapping, s.offsetMapping), unit: s.unitMapping[item.name], mapping: s.modeMapping[item.name],
+    ...getConversion(series, s.lsbMapping, s.offsetMapping), unit: s.unitMapping[series], mapping: s.modeMapping[series],
   })));
   const physical = (item.widget === "number" || item.widget === "slider") && (lsb !== 1 || offset !== 0);
   const display = (value: number | string | null | undefined) => physical ? physicalInputText(value, { lsb, offset }) : value == null ? "—" : String(value);

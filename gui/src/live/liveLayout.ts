@@ -7,6 +7,7 @@ import type { LiveCanvasLane, LiveCanvasSeries } from "./liveCanvas";
 type LiveLayoutSettings = Pick<AppState, "signalSettings" | "signalGroups" | "unassignedSignals" |
   "unassignedGroupConfig" | "layoutMode" | "showSignalNames" | "unitMapping" | "showAlias" | "lsbMapping" | "offsetMapping" | "valueDisplayMode" | "modeMapping">;
 
+// names は LiveRecord の系列名。衝突を区別するために残ったパスも設定キーに含める。
 export function buildLiveLanes(state: LiveLayoutSettings, names: readonly string[], height: number,
   visible?: (sig: string) => boolean): LiveCanvasLane[] {
   const active = activeDisplaySignals(names, state.signalSettings, visible);

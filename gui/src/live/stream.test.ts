@@ -5,7 +5,7 @@ import { createLiveController } from "./controller";
 import { saveVariants as saveVariantFile, useVariantsStore } from "./variantsStore";
 import { DEFAULT_LAYOUT, loadLayout, saveLayout, type InputItem, type WatchItem } from "./persist";
 import type { VariantsDoc } from "./variants";
-import { LiveRecord } from "./liveRecord";
+import { liveRecord, LiveRecord } from "./liveRecord";
 import { initialLiveState, useLiveStore } from "./liveStore";
 import { useWaveformStore, LIVE_FILE_NAME } from "../store/useWaveformStore";
 
@@ -119,7 +119,7 @@ describe("ライブ制御（SSE の取り込み）", () => {
   });
   afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
 
-  function makeController(apiOverrides: Partial<SimApi> = {}) {
+  function makeController(apiOverrides: Partial<SimApi> = {}, targetRecord = record) {
     const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (init?.method === "POST") posted.push({ url, body: url.endsWith("/api/load-csv") ? init.body : JSON.parse(String(init.body)) });
@@ -137,12 +137,61 @@ describe("ライブ制御（SSE の取り込み）", () => {
     });
     return createLiveController({
       api: { ...createApi("", fetchImpl as unknown as typeof fetch), ...apiOverrides },
-      record,
+      record: targetRecord,
       protocol: "http:",
       createEventSource: (u) => new FakeEventSource(u),
       notify,
     });
   }
+
+  describe("ライブの系列名", () => {
+    it.each(["個別", "共有"])("%sの記録では完全名をサーバに送り、設定と記録に短い系列名を使う", async (kind) => {
+      const target = kind === "共有" ? liveRecord : record;
+      target.clear();
+      const live = makeController({}, target);
+      const state = useWaveformStore.getState();
+      const ensure = vi.spyOn(state, "ensureLiveSignals");
+      const name = "engine.c/s_cnt";
+      try {
+        state.parseMappingData("version: 2\nsignals: {s_cnt: {unit: rpm}}\nview: {signals: {s_cnt: {weight: 3}}}\n", "yaml", false);
+        live.addWatch(name);
+        await live.syncWatch();
+        live.handlers.hello({ names: [name] });
+        live.handlers.samples({ step0: 1, names: [name], rows: [[123]] });
+        live.flushValues();
+        expect(posted.filter(p => p.url === "/api/watch").at(-1)?.body).toEqual({ names: [name] });
+        expect(ensure).toHaveBeenCalledWith(["s_cnt"], new Set(["s_cnt"]));
+        expect(useWaveformStore.getState().signalSettings.s_cnt.weight).toBe(3);
+        expect(useWaveformStore.getState().unitMapping[live.seriesName(name)]).toBe("rpm");
+        expect(target.names).toEqual(["s_cnt"]);
+        expect(target.latest("s_cnt")).toBe(123);
+        expect(useLiveStore.getState().values[name]).toBe(123);
+      } finally {
+        target.clear();
+        ensure.mockRestore();
+        useWaveformStore.setState(state);
+      }
+    });
+
+    it("監視の追加と削除で系列名が変わっても、各変数の記録を引き継ぐ", () => {
+      const live = makeController();
+      live.addWatch("a.c/x");
+      live.handlers.samples({ step0: 1, names: ["a.c/x"], rows: [[11]] });
+      live.commit();
+      live.addInput("b.c/x");
+      expect(live.seriesName("a.c/x")).toBe("a.c/x");
+      expect(live.seriesName("b.c/x")).toBe("b.c/x");
+      expect(record.names).toEqual(["a.c/x"]);
+      expect(useWaveformStore.getState().chartData?.seriesMap).toEqual({ "a.c/x": [11] });
+
+      live.handlers.samples({ step0: 2, names: ["a.c/x", "b.c/x"], rows: [[12, 22]] });
+      expect(record.toChartData().seriesMap).toEqual({ "a.c/x": [11, 12], "b.c/x": [null, 22] });
+
+      live.removeWatch("a.c/x");
+      live.handlers.samples({ step0: 3, names: ["a.c/x", "b.c/x"], rows: [[13, 23]] });
+      expect(record.toChartData().seriesMap).toEqual({ "a.c/x": [11, 12, 13], x: [null, 22, 23] });
+    });
+  });
 
   describe("入力パネルの並び・新規固定・物理値・状態", () => {
     it("並べ替えた inputs の順を保存し、読み戻せる", async () => {

@@ -5,6 +5,7 @@ import { persistLayoutLimits, persistLiveLayout, setVariantsApplyError, useVaria
 
 import { getConversion } from "../utils/helpers";
 import { mappingToRows } from "../utils/stateNames";
+import { seriesNames } from "../utils/waveformCSV";
 import toast from "react-hot-toast";
 import { LIVE_FILE_NAME, useWaveformStore } from "../store/useWaveformStore";
 import { ApiError, createApi, detectServer, type ControlRequest, type DroppedItem, type SimApi, type StateMessage } from "./api";
@@ -80,23 +81,83 @@ export function createLiveController(deps: LiveControllerDeps = {}) {
     persistLiveLayout({ inputs: s.inputs, watch: s.watch, windowSize: s.windowSize, maxSamples: s.maxSamples }, api);
   }
 
-  function watchedNames() {
-    const s = store.getState();
+  type WatchLayout = Pick<LiveStoreState, "watch" | "inputs">;
+
+  function watchedNames(s: WatchLayout = store.getState()) {
     return unique([...s.watch.map((w) => w.name), ...s.inputs.filter((i) => i.monitor !== false).map((i) => i.name)]);
+  }
+
+  const shortName = (name: string) => name.slice(name.lastIndexOf("/") + 1) || name;
+  let previousLayout: WatchLayout | undefined;
+  let watchSeries = new Map<string, string>();
+
+  function watchedSeries(s: WatchLayout = store.getState()) {
+    if (s.watch !== previousLayout?.watch || s.inputs !== previousLayout.inputs) {
+      const names = watchedNames(s);
+      const series = seriesNames(names);
+      watchSeries = new Map(names.map((name, i) => [name, series[i]]));
+      previousLayout = { watch: s.watch, inputs: s.inputs };
+    }
+    return watchSeries;
+  }
+
+  function seriesName(name: string, s?: WatchLayout) {
+    return watchedSeries(s).get(name) ?? shortName(name);
+  }
+
+  let recordNames = new Map<string, string>();
+  let recordWatchSeries: ReadonlyMap<string, string> | undefined;
+
+  function recordSeries(names: readonly string[]) {
+    const watched = watchedSeries();
+    if (recordWatchSeries !== watched || names.some(name => !recordNames.has(name))) {
+      const next = new Map<string, string>();
+      const used = new Set(watched.values());
+      for (const name of new Set([...recordNames.keys(), ...names])) {
+        let series = watched.get(name);
+        if (series === undefined) {
+          // 監視から外した列や遅れて届いた列は、現行の監視列と混ぜずに保持する。
+          series = shortName(name);
+          if (used.has(series)) series = name;
+          while (used.has(series)) series = "/" + series;
+          used.add(series);
+        }
+        next.set(name, series);
+      }
+      const renames = new Map<string, string>();
+      for (const [name, old] of recordNames) {
+        const series = next.get(name)!;
+        if (old !== series) renames.set(old, series);
+      }
+      recordNames = next;
+      recordWatchSeries = watched;
+      if (record.renameColumns(renames)) {
+        const { fileName, chartData } = waveform.getState();
+        if (fileName === LIVE_FILE_NAME && chartData) waveform.setState({
+          chartData: { ...chartData, seriesMap: Object.fromEntries(
+            Object.entries(chartData.seriesMap).map(([name, values]) => [renames.get(name) ?? name, values]),
+          ) },
+        });
+      }
+    }
+    return names.map(name => recordNames.get(name)!);
   }
 
   function syncSignals() {
     const s = store.getState();
     const watchNames = new Set(s.watch.map(w => w.name));
     const plotted = new Set([
-      ...s.watch.filter(w => w.plot).map(w => w.name),
-      ...s.inputs.filter(i => i.monitor !== false && !watchNames.has(i.name)).map(i => i.name),
-    ]);
-    waveform.getState().ensureLiveSignals(watchedNames(), plotted);
+      ...s.watch.filter(w => w.plot),
+      ...s.inputs.filter(i => i.monitor !== false && !watchNames.has(i.name)),
+    ].map(({ name }) => seriesName(name, s)));
+    waveform.getState().ensureLiveSignals([...watchedSeries(s).values()], plotted);
+    recordSeries([]);
     const current = store.getState();
     const settings = waveform.getState().signalSettings;
-    const watch = current.watch.map(w => settings[w.name] && settings[w.name].checked !== w.plot
-      ? { ...w, plot: settings[w.name].checked } : w);
+    const watch = current.watch.map(w => {
+      const setting = settings[seriesName(w.name, current)];
+      return setting && setting.checked !== w.plot ? { ...w, plot: setting.checked } : w;
+    });
     if (watch.some((w, i) => w !== current.watch[i])) {
       set({ watch });
       persist();
@@ -131,6 +192,8 @@ export function createLiveController(deps: LiveControllerDeps = {}) {
   function clearLiveRecord() {
     if (commitTimer) { clearTimeout(commitTimer); commitTimer = null; }
     record.clear();
+    recordNames.clear();
+    recordWatchSeries = undefined;
     const live = waveform.getState().fileName === LIVE_FILE_NAME;
     waveform.setState({ cursors: [], hoverCursor: null, ...(live ? { chartData: null, zoomRange: null } : {}) });
   }
@@ -163,7 +226,8 @@ export function createLiveController(deps: LiveControllerDeps = {}) {
     const revision = store.getState().layoutRevision + 1;
     set({ inputs: inputs.map(i => i.hold && i.value === undefined ? { ...i, holdPending: true } : i), watch, layoutRevision: revision });
     const settings = waveform.getState().signalSettings;
-    const checked = watch.filter(w => settings[w.name] && settings[w.name].checked !== w.plot);
+    const checked = watch.map(w => ({ name: seriesName(w.name), plot: w.plot }))
+      .filter(w => settings[w.name] && settings[w.name].checked !== w.plot);
     if (checked.length) waveform.setState({ signalSettings: {
       ...settings, ...Object.fromEntries(checked.map(w => [w.name, { ...settings[w.name], checked: w.plot }])),
     } });
@@ -322,17 +386,20 @@ export function createLiveController(deps: LiveControllerDeps = {}) {
         sim: { ...sim, periodMs: msg.periodMs ?? sim.periodMs, func: msg.func ?? sim.func },
       });
       if (msg.periodMs) waveform.getState().setTaskPeriod(msg.periodMs);
-      for (const n of msg.names) record.ensureColumn(n);
+      for (const n of recordSeries(msg.names)) record.ensureColumn(n);
     },
     samples: (msg) => {
+      const rewinds = msg.rows.length > 0 && record.lastStep !== null && msg.step0 <= record.lastStep;
       if (recordSwitch && msg.rows.length &&
-          (msg.step0 <= 1 || (record.lastStep !== null && msg.step0 <= record.lastStep))) {
+          (msg.step0 <= 1 || rewinds)) {
         recordSwitch.received = true;
       }
+      if (rewinds) recordNames.clear();
       // 既定の record は useWaveformStore.appendSamples が書く共有のライブ記録と同じもの
+      const names = recordSeries(msg.names);
       const res = record === liveRecord
-        ? waveform.getState().appendSamples(msg.step0, msg.names, msg.rows)
-        : record.append(msg.step0, msg.names, msg.rows);
+        ? waveform.getState().appendSamples(msg.step0, names, msg.rows)
+        : record.append(msg.step0, names, msg.rows);
       const last = msg.rows[msg.rows.length - 1];
       if (last) {
         msg.names.forEach((n, i) => { pendingValues[n] = last[i] ?? null; });
@@ -494,7 +561,8 @@ export function createLiveController(deps: LiveControllerDeps = {}) {
     if (patch.plot !== undefined) {
       syncSignals();
       const state = waveform.getState();
-      if (state.signalSettings[name]?.checked !== patch.plot) state.toggleSignalCheck(name);
+      const series = seriesName(name);
+      if (state.signalSettings[series]?.checked !== patch.plot) state.toggleSignalCheck(series);
     }
   }
 
@@ -514,7 +582,11 @@ export function createLiveController(deps: LiveControllerDeps = {}) {
       remonitor(name);
       return;
     }
-    widget ??= mappingToRows(waveform.getState().modeMapping[name]).length ? "state" : "number";
+    if (widget === undefined) {
+      const names = unique([...watchedNames(s), name]);
+      const series = seriesNames(names)[names.indexOf(name)];
+      widget = mappingToRows(waveform.getState().modeMapping[series]).length ? "state" : "number";
+    }
     const item: InputItem = { name, widget, min: 0, max: widget === "toggle" || widget === "button" ? 1 : 100, step: 1, hold: widget !== "button", ...(widget !== "button" ? { holdPending: true } : {}) };
     set({ inputs: [...s.inputs, item] });
     persist();
@@ -620,7 +692,7 @@ export function createLiveController(deps: LiveControllerDeps = {}) {
       const removed = removals.get(name) ?? 0;
       // 換算は入力したときの設定で行う（型を待つ間に yaml などで設定が変わっても、利用者が見ていた換算のまま送る）
       const settings = waveform.getState();
-      const conversion = getConversion(name, settings.lsbMapping, settings.offsetMapping);
+      const conversion = getConversion(seriesName(name), settings.lsbMapping, settings.offsetMapping);
       const key = `${func}:${name}`;
       let request = symbolKinds.get(key);
       if (!request) {
@@ -755,7 +827,7 @@ export function createLiveController(deps: LiveControllerDeps = {}) {
   }
 
   return {
-    api, record, handlers, start, stop, control, commit, syncWatch, selectVariant,
+    api, record, handlers, start, stop, control, commit, syncWatch, selectVariant, seriesName,
     addWatch, removeWatch, updateWatch, addInput, moveInput, removeInput, updateInput, write, writePhysical, releaseButton, setHold, inputBase, inputBaseValue,
     setWindowSize, setMaxSamples, loadCsv, exportCsv,
     /** テスト用: 保留中の最新値を即座に反映する */
