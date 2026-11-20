@@ -383,6 +383,27 @@ describe("ライブ制御（SSE の取り込み）", () => {
       expect(posted.filter(p => p.url === "/api/watch").at(-1)?.body).toEqual({ names: ["shared", "w", "b"] });
       live.stop();
     });
+    it("値が未設定の固定入力に切り替えると前の固定を解除する", async () => {
+      const doc: VariantsDoc = { version: 1, selected: "A", variants: [
+        { name: "A", values: [], inputs: [input("x")] },
+        { name: "B", values: [], inputs: [{ ...input("x"), value: undefined }] },
+      ] };
+      const live = makeController({
+        getVariants: vi.fn().mockResolvedValue({ path: "variants.json", exists: true, doc, error: "" }),
+      });
+      try {
+        expect(await live.start()).toBe(true);
+        expect(posted).toContainEqual({ url: "/api/write", body: { name: "x", value: "7", hold: true } });
+        const beforeSwitch = posted.length;
+
+        await select(live, "B");
+
+        expect(posted.slice(beforeSwitch).filter(p => p.url === "/api/write").map(p => p.body)).toEqual([
+          { name: "x", release: true },
+        ]);
+        expect(useLiveStore.getState().inputs[0]).toMatchObject({ name: "x", hold: true, holdPending: true });
+      } finally { live.stop(); }
+    });
     it("初めて選ぶ仕向は現在の構成を引き継ぎ、選択なしはブラウザの構成に戻す", async () => {
       const { live } = await setup();
       await select(live, "C");

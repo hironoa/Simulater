@@ -157,7 +157,7 @@ export function createLiveController(deps: LiveControllerDeps = {}) {
   }
 
   async function applyVariantLayout(inputs: InputItem[], watch: WatchItem[], previousHolds: string[]) {
-    const nextHolds = new Set(inputs.filter(i => i.hold).map(i => i.name));
+    const nextHolds = new Set(inputs.filter(i => i.hold && i.value !== undefined).map(i => i.name));
     const released = new Set([...previousHolds.filter(name => !nextHolds.has(name)), ...momentary]);
     momentary.clear();
     const revision = store.getState().layoutRevision + 1;
