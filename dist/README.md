@@ -18,11 +18,11 @@
 
 | 項目 | 内容 |
 | --- | --- |
-| ビルド元 | `ee77d47`（仕向ごとの入力パネルと監視一覧。仕向ファイルの各仕向に `inputs`・`watch` を持たせ、仕向の切り替えで入れ替え、変更を仕向ファイルへ自動保存する GUI の変更を、PR #67 までの main に足したもの。sim 本体の C のソースは PR #67 の main と同じ） |
+| ビルド元 | `6651d31`（仕向ごとの入力パネルと監視一覧。仕向ファイルの各仕向に `inputs`・`watch` を持たせ、仕向の切り替えで入れ替え、変更を仕向ファイルへ自動保存する GUI の変更と、そのレビューの修正（値が未設定の固定入力へ切り替えるときに前の固定を解除する）を、PR #67 までの main に足したもの。sim 本体の C のソースは PR #67 の main と同じ） |
 | ビルドした日 | 2026-11-20 |
 | ビルド方法 | Windows 11 の PC で `tools\build_dist.bat`（`CC=gcc`。WinLibs の MinGW-w64 gcc 16.2.0、x86_64、posix-seh、UCRT） |
 | 依存する DLL | Windows 標準のものだけ（KERNEL32、SHELL32、WS2_32、UCRT）。MinGW の DLL は要らない |
-| 確認 | 同じ PC で GUI の `npm test` 393 件と `npm run lint` が成功。模擬サーバ（`npm run mock`）で、仕向の切り替えによる入力・固定・監視の入れ替えと自動保存を確かめた。`tests\run_tests.bat` は 922 件中 799 件が成功し、123 件（clang で DLL を作る xlate と native の項目）が失敗したが、PR #67 の main でも同じ 123 件が同じく失敗するこの PC の環境の問題で、今回の変更によるものではない |
+| 確認 | 同じ PC で GUI の `npm test` 394 件と `npm run lint` が成功。模擬サーバ（`npm run mock`）で、仕向の切り替えによる入力・固定・監視の入れ替えと自動保存を確かめた。`tests\run_tests.bat` は 922 件中 799 件が成功し、123 件（clang で DLL を作る xlate と native の項目）が失敗したが、PR #67 の main でも同じ 123 件が同じく失敗するこの PC の環境の問題で、今回の変更によるものではない |
 
 普段の配布物は CI（GitHub Actions の `windows` ジョブの成果物 `sim-windows-x64`）が作ります。
 このフォルダは、CI を使えなかったときの代わりに置いたものです。ソースを変えても自動では作り直されないので、
