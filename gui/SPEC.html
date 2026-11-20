@@ -566,7 +566,7 @@ footer a{color:var(--ch2)}
       <h3>移行</h3>
       <ul class="ticks2">
         <li><span>古い YAML を起動後に手で読み込むと、v2 で自動保存されて移行できる。</span></li>
-        <li><span>読み込むとき、<code>Sample/EngineSpeed</code> のようなファイル名つきの信号名は信号名だけにそろえる。両方あれば信号名だけの設定を採り、ファイル名つきは捨てる。<code>a.c/s_cnt</code> と <code>b.c/s_cnt</code> のように区別が要るもの（短い名前がない）は残す。無効区間の条件信号も同じ。</span></li>
+        <li><span>読み込むとき、<code>Sample/EngineSpeed</code> のようなファイル名つきの信号名は信号名だけにそろえる。両方あれば信号名だけの設定を採り、ファイル名つきは捨てる。同じ短い名前のファイル名つきが 2 つ以上ある（<code>a.c/s_cnt</code> と <code>b.c/s_cnt</code> など）ときは、短い名前があっても区別のため全部残す。古い形で短い名前が予約語（<code>inactive</code> など）になるものも残す。無効区間の条件信号も同じ。</span></li>
       </ul>
     </div>
   </div>

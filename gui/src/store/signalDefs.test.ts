@@ -17,6 +17,28 @@ describe("信号名の正規化", () => {
     expect(doc.view.signals.y).toEqual(view);
   });
 
+  it("同じ末尾名のパス付き信号が複数あれば短い名前も含めてすべて保持する", () => {
+    const signals = { "a/x/v": { unit: "A" }, "b/x/v": { unit: "mV" }, v: { unit: "V" } };
+    const view = { signals: { "a/x/v": { group: "A" }, "b/x/v": { group: "B" }, v: { group: "C" } } };
+    const inactive = Object.keys(signals).map((signal, index) => ({ signal, when: [index] }));
+    const doc = readSignalDocument(yaml.dump({ version: 2, signals, view, inactive }));
+    expect(doc.signals).toEqual(signals);
+    expect(doc.view.signals).toEqual(view.signals);
+    expect(doc.inactive).toEqual(inactive);
+  });
+
+  it("パス付き信号が一つなら同じ表にある短い名前の設定を優先する", () => {
+    const doc = readSignalDocument(yaml.dump({
+      version: 2,
+      signals: { "Sample/EngineSpeed": { unit: "Hz" }, EngineSpeed: { unit: "rpm" } },
+      view: { signals: { "Sample/EngineSpeed": { group: "A" }, EngineSpeed: { group: "B" } } },
+      inactive: { signal: "Sample/EngineSpeed", when: [0] },
+    }));
+    expect(doc.signals).toEqual({ EngineSpeed: { unit: "rpm" } });
+    expect(doc.view.signals).toEqual({ EngineSpeed: { group: "B" } });
+    expect(doc.inactive).toEqual({ signal: "EngineSpeed", when: [0] });
+  });
+
   const rule = { signal: "path/x", when: [0], label: "path/x" };
   const normalized = { ...rule, signal: "x" };
   it.each([

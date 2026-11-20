@@ -33,6 +33,14 @@ describe("yaml の読み込み", () => {
     expect(Object.keys(doc.signals)).toEqual(["y", "x"]);
   });
 
+  it("v1 で末尾が予約語の信号を元の名前で読み込み、出力する", () => {
+    useWaveformStore.getState().parseMappingData("old.c/inactive: {unit: V}\nold.c/groups: {unit: A}\n", "yaml");
+    const s = useWaveformStore.getState();
+    expect(s.unitMapping).toEqual({ "old.c/inactive": "V", "old.c/groups": "A" });
+    const doc = yaml.load(s.getConfigYAML(false)) as { signals: Record<string, unknown> };
+    expect(doc.signals).toEqual({ "old.c/inactive": { unit: "V" }, "old.c/groups": { unit: "A" } });
+  });
+
   it("viewState を信号の設定にしない", () => {
     useWaveformStore.getState().parseMappingData("viewState:\n  showAlias: true\nx:\n  color: '#00f'\n", "yaml");
     const s = useWaveformStore.getState();

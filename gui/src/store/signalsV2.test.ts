@@ -40,7 +40,7 @@ beforeEach(() => {
 });
 
 describe("信号情報 v2", () => {
-  it("同じ表では短い信号名の設定を優先し、別の表では最初の設定を採用する", () => {
+  it("パス付き信号の末尾が重複する場合はそれぞれの設定を保持する", () => {
     read(`version: 2
 signals:
   a.c/X: {unit: mV}
@@ -56,11 +56,12 @@ view:
 inactive: {signal: a.c/X, when: [0]}
 `);
     const doc = output();
-    expect(doc.signals).toEqual({ X: { unit: "V" }, Y: { unit: "A" } });
-    expect(Object.keys(doc.view.signals)).toEqual(["X", "Y"]);
-    expect(doc.view.signals.X.weight).toBe(2);
+    expect(doc.signals).toEqual({ "a.c/X": { unit: "mV" }, X: { unit: "V" }, "b.c/X": { unit: "A" }, Y: { unit: "A" } });
+    expect(Object.keys(doc.view.signals)).toEqual(["b.c/X", "a.c/X", "Y"]);
+    expect(doc.view.signals["b.c/X"].weight).toBe(2);
+    expect(doc.view.signals["a.c/X"].weight).toBe(3);
     expect(doc.view.signals.Y.weight).toBe(5);
-    expect(doc.inactive[0].signal).toBe("X");
+    expect(doc.inactive[0].signal).toBe("a.c/X");
   });
 
   it("追加読込で base の項目と states の数値キーを重ねる", () => {

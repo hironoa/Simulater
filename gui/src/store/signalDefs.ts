@@ -77,9 +77,10 @@ function normalizeSignalNames(doc: Record<string, any>): Record<string, any> {
     qualifiedCounts.set(short, (qualifiedCounts.get(short) ?? 0) + 1);
   }
   const canonical = (name: string) => {
+    if (!name.includes("/")) return name;
     const short = shortName(name);
-    if (short === "") return name;
-    return names.has(short) || qualifiedCounts.get(short) === 1 ? short : name;
+    if (short === "" || (!v2 && metadata.has(short))) return name;
+    return qualifiedCounts.get(short) === 1 ? short : name;
   };
 
   const renameKeys = (table: Record<string, unknown>, reserved?: Set<string>) => {
