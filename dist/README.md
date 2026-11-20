@@ -18,11 +18,11 @@
 
 | 項目 | 内容 |
 | --- | --- |
-| ビルド元 | `8f79f32`（ライブでも信号の設定を CSV と同じ系列名（`engine.c/s_cnt` → `s_cnt`）で引く修正と、そのレビューの修正を、PR #69 までの main に足したもの。PR #70） |
+| ビルド元 | `c738b98`（テスト CSV 再生で、すでに監視している変数（`s_cnt`）と同じ変数を指す CSV の列（`sensor.c/s_cnt`）を別の信号として足さず、監視を置き換えて 1 行にする修正を、PR #70 までの main に足したもの。PR #71） |
 | ビルドした日 | 2026-11-20 |
-| ビルド方法 | GitHub Actions の `windows` ジョブ（run 44689683519、windows-2025、MinGW-Builds の gcc 15.2.0、x86_64、posix-seh、UCRT。`build.bat` の `CC=gcc`）の成果物 `sim-windows-x64` から `sim.exe` を取った。テキストのファイル（`sim_gui.html`、`README.md`、`sim.cfg.example`、`native_ram_clear.c`、`xlate/`、`native/`）は、成果物と改行コード以外が同じであることを確かめて、リポジトリのソースの写し（LF）を置いた |
+| ビルド方法 | この Windows PC で `tools\build_dist.bat`（WinLibs の MinGW-w64 gcc 16.2.0、x86_64、posix-seh、UCRT。`build.bat` の `CC=gcc`）を実行して作った |
 | 依存する DLL | Windows 標準のものだけ（KERNEL32、SHELL32、WS2_32、UCRT）。MinGW の DLL は要らない |
-| 確認 | CI の同じ run で、windows ジョブの `tests\run_tests.bat` 927 件と、コア単体の試験（`rl78\tests\run_tests.bat`）、clang でのビルドが成功し、macos ジョブの `tests/run_tests.sh` 1186 件がすべて成功。Windows の上では GUI の `npx vitest run` 414 件と `npx tsc --noEmit` が成功し、模擬サーバ（`npm run mock`）でライブの `drv.c/s_tick` に yaml の `s_tick` の色・単位が当たり、再読み込み後も保たれることを確かめた。`sim.exe` そのものは Windows で実行していない |
+| 確認 | 同じソースで、Windows の `tests\run_tests.bat`（`CC=gcc`、clang 18.1.8 を PATH に）928 件がすべて成功。GUI の `npx vitest run` 420 件と `npx tsc --noEmit` が成功し、模擬サーバ（`npm run mock`）で、監視中の `s_tick` と同じ変数の `drv.c/s_tick` を含むテスト CSV を再生しても、信号設定・計測表・変数モニタが `s_tick` の 1 行のままであることを確かめた。`sim.exe` は起動して使い方の表示が出ることだけを確かめた |
 
 普段の配布物は CI（GitHub Actions の `windows` ジョブの成果物 `sim-windows-x64`）が作ります。
 このフォルダは、CI を使えなかったときの代わりに置いたものです。ソースを変えても自動では作り直されないので、
