@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import yaml from "js-yaml";
 import { listedSignals } from "../utils/displaySignalName";
 import { useWaveformStore } from "./useWaveformStore";
 
@@ -18,6 +19,28 @@ describe("listedSignals", () => {
 });
 
 describe("yaml の読み込み", () => {
+  it("v1 の信号名を正規化してから設定と並び順を読み込む", () => {
+    useWaveformStore.getState().parseMappingData(
+      "old.c/x: {unit: mV, 0: OLD}\nold.c/y: {unit: A}\nx: {unit: V, 0: OFF}\ninactive: {signal: old.c/x, when: [0]}\n",
+      "yaml",
+    );
+    const s = useWaveformStore.getState();
+    expect(s.modeMapping.x).toEqual({ 0: "OFF" });
+    expect(s.unitMapping).toEqual({ y: "A", x: "V" });
+    expect(s.signalDefs.order).toEqual(["y", "x"]);
+    expect(s.inactive.rules[0].signal).toBe("x");
+    const doc = yaml.load(s.getConfigYAML(false)) as { signals: Record<string, unknown> };
+    expect(Object.keys(doc.signals)).toEqual(["y", "x"]);
+  });
+
+  it("v1 で末尾が予約語の信号を元の名前で読み込み、出力する", () => {
+    useWaveformStore.getState().parseMappingData("old.c/inactive: {unit: V}\nold.c/groups: {unit: A}\n", "yaml");
+    const s = useWaveformStore.getState();
+    expect(s.unitMapping).toEqual({ "old.c/inactive": "V", "old.c/groups": "A" });
+    const doc = yaml.load(s.getConfigYAML(false)) as { signals: Record<string, unknown> };
+    expect(doc.signals).toEqual({ "old.c/inactive": { unit: "V" }, "old.c/groups": { unit: "A" } });
+  });
+
   it("viewState を信号の設定にしない", () => {
     useWaveformStore.getState().parseMappingData("viewState:\n  showAlias: true\nx:\n  color: '#00f'\n", "yaml");
     const s = useWaveformStore.getState();

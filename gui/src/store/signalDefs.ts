@@ -53,8 +53,60 @@ export function readSignalDocument(text: string): Record<string, any> {
       if (!["layoutMode", "inactive", "viewState"].includes(name) && !object(value)) throw new Error(`${name} は対応表にしてください`);
     }
   }
-  return doc;
+  return normalizeSignalNames(doc);
 }
+
+function normalizeSignalNames(doc: Record<string, any>): Record<string, any> {
+  const v2 = doc.version === 2;
+  const metadata = new Set(["groups", "inactive", "viewState", "layoutMode", "version"]);
+  const inactive = doc.inactive;
+  const rules = Array.isArray(inactive) ? inactive
+    : Array.isArray(inactive?.rules) ? inactive.rules : [inactive];
+  const names = new Set(v2
+    ? [...Object.keys(doc.signals), ...Object.keys(doc.view?.signals ?? {})]
+    : Object.keys(doc).filter(name => !metadata.has(name)));
+  for (const rule of rules) {
+    if (object(rule) && typeof rule.signal === "string") names.add(rule.signal);
+  }
+
+  const shortName = (name: string) => name.slice(name.lastIndexOf("/") + 1);
+  const qualifiedCounts = new Map<string, number>();
+  for (const name of names) {
+    if (!name.includes("/")) continue;
+    const short = shortName(name);
+    qualifiedCounts.set(short, (qualifiedCounts.get(short) ?? 0) + 1);
+  }
+  const canonical = (name: string) => {
+    if (!name.includes("/")) return name;
+    const short = shortName(name);
+    if (short === "" || metadata.has(short)) return name;
+    return qualifiedCounts.get(short) === 1 ? short : name;
+  };
+
+  const renameKeys = (table: Record<string, unknown>, reserved?: Set<string>) => {
+    const entries = new Map<string, unknown>();
+    for (const [name, value] of Object.entries(table)) {
+      const key = reserved?.has(name) ? name : canonical(name);
+      if (key !== name && (Object.prototype.hasOwnProperty.call(table, key) || entries.has(key))) continue;
+      entries.set(key, value);
+    }
+    return Object.fromEntries(entries);
+  };
+  const renameRule = (rule: unknown) =>
+    object(rule) && typeof rule.signal === "string" ? { ...rule, signal: canonical(rule.signal) } : rule;
+
+  const normalized: Record<string, any> = v2
+    ? { ...doc, signals: renameKeys(doc.signals) } : renameKeys(doc, metadata);
+  if (v2 && doc.view?.signals !== undefined) {
+    normalized.view = { ...doc.view, signals: renameKeys(doc.view.signals) };
+  }
+  if (Object.prototype.hasOwnProperty.call(doc, "inactive")) {
+    normalized.inactive = Array.isArray(inactive) ? rules.map(renameRule)
+      : Array.isArray(inactive?.rules) ? { ...inactive, rules: rules.map(renameRule) } : renameRule(inactive);
+  }
+  return normalized;
+}
+
 function validateDef(def: Record<string, any>, override: boolean) {
   for (const key of ["lsb", "offset", "unit"]) if (def[key] !== undefined && typeof def[key] !== "string" && typeof def[key] !== "number") throw new Error(`${key} の形式が不正です`);
   if (def.undefined !== undefined && !(typeof def.undefined === "number" || (Array.isArray(def.undefined) && def.undefined.every((n: unknown) => typeof n === "number" && Number.isFinite(n))))) throw new Error("undefined は数値の配列にしてください");

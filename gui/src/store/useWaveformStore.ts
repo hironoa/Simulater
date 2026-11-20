@@ -640,6 +640,7 @@ export const useWaveformStore = create<WaveformStore>((set, get) => ({
           legacyDefinitions = true;
           importedDefs = emptyDefs();
           importedDefs.order = Object.keys(importedView.signals);
+          text = yaml.dump(original);
         }
       } catch (e) {
         toast.error(`YAML を読めません: ${e instanceof Error ? e.message : String(e)}`);

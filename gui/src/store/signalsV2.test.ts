@@ -40,6 +40,43 @@ beforeEach(() => {
 });
 
 describe("信号情報 v2", () => {
+  it("パス付き信号 old.c/inactive と inactive 条件を保存する", () => {
+    read(`version: 2
+signals:
+  old.c/inactive: {unit: V}
+inactive: {signal: X, when: [0]}
+`);
+    const doc = yaml.load(state().getConfigYAML(false)) as any;
+    expect(doc).toMatchObject({
+      signals: { "old.c/inactive": { unit: "V" } },
+      inactive: [{ signal: "X", when: [0] }],
+    });
+  });
+
+  it("パス付き信号の末尾が重複する場合はそれぞれの設定を保持する", () => {
+    read(`version: 2
+signals:
+  a.c/X: {unit: mV}
+  X: {unit: V}
+  b.c/X: {unit: A}
+  a.c/Y: {unit: A}
+view:
+  signals:
+    b.c/X: {weight: 2}
+    a.c/X: {weight: 3}
+    a.c/Y: {weight: 4}
+    Y: {weight: 5}
+inactive: {signal: a.c/X, when: [0]}
+`);
+    const doc = output();
+    expect(doc.signals).toEqual({ "a.c/X": { unit: "mV" }, X: { unit: "V" }, "b.c/X": { unit: "A" }, Y: { unit: "A" } });
+    expect(Object.keys(doc.view.signals)).toEqual(["b.c/X", "a.c/X", "Y"]);
+    expect(doc.view.signals["b.c/X"].weight).toBe(2);
+    expect(doc.view.signals["a.c/X"].weight).toBe(3);
+    expect(doc.view.signals.Y.weight).toBe(5);
+    expect(doc.inactive[0].signal).toBe("a.c/X");
+  });
+
   it("追加読込で base の項目と states の数値キーを重ねる", () => {
     read("version: 2\nsignals:\n  X: {lsb: 0.1, unit: V}\n  Y: {states: {0: A, 1: B}}\n");
     const previous = state().signalDefs;
