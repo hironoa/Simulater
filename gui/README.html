@@ -485,7 +485,7 @@ footer a{color:var(--ch2)}
     <div class="s" style="--c:var(--ch4)"><div class="n">5</div><h4>確かめる</h4><p>一時停止して拡大・計測、CSV に保存</p></div>
   </div>
   <div class="window"><div class="bar"><i></i><i></i><i></i><span>sim gui — 実行中</span></div><img src="docs/guide/live_running.jpg" alt="ライブモードの実行中の画面。上に接続バー、中央に流れる波形、右に仕向・入力パネル・変数モニタ" loading="lazy"></div>
-  <p class="cap">実行中は、変数モニタで「波形」に印を付けた変数が右から流れます。上の接続バーで実行・一時停止・ステップ実行・リセット、速度と周期を変えられます。</p>
+  <p class="cap">実行中は、変数モニタで「波形」に印を付けた変数が右から流れます。上の接続バーで実行・一時停止・ステップ実行・リセット、速度と周期を変えられます。実行中も波形にマウスを置くと、縦線と時刻、その位置の各信号の値を見られます。値と状態名はツールバーのカーソルラベル設定に従います。</p>
 
   <div class="split" style="margin-top:28px">
     <div style="--c:var(--ch4)">
@@ -494,7 +494,7 @@ footer a{color:var(--ch2)}
         <li><span>右の<b>変数モニタ</b>で、見たい変数を検索して追加します。「波形」の印を付けた変数が波形に出ます。</span></li>
         <li><span>上の <kbd class="kbd">実行</kbd> を押します。波形が流れ始めます。</span></li>
         <li><span>右の<b>入力パネル</b>で変数を追加し、数値・スライダ・トグル・ボタン・状態（一覧から選ぶ）のどれかで値を書き込みます。<b>固定</b>を ON にすると毎周期その値を書き続けます。</span></li>
-        <li><span><kbd class="kbd">一時停止</kbd> を押すと、残した記録の全体を、ふだんのビューアと同じようにズーム・カーソル計測できます。</span></li>
+        <li><span><kbd class="kbd">一時停止</kbd> を押すと、直後に残した記録の全体を表示し、ふだんのビューアと同じようにズーム・カーソル計測できます。ステップ実行・テスト CSV 再生の終了・エラー停止の直後も、記録の全体を表示します。</span></li>
         <li><span><kbd class="kbd">記録を CSV 保存</kbd> で、開始からの記録を WinAMS 形式の CSV に保存できます（<code>sim run</code> で実行し直せます）。</span></li>
       </ol>
     </div>

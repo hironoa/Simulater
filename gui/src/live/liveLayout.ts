@@ -1,6 +1,6 @@
 import type { AppState } from "../types";
 import { activeDisplaySignals, buildDisplayBlocks, layoutBlocks } from "../utils/displayBlocks";
-import { getConversion, getDisplayConversion } from "../utils/helpers";
+import { getConversion, getDisplayConversion, getDisplayUnit } from "../utils/helpers";
 import { signalTitle, signalLineType, getTextWidth, maxTitleWidth, truncateTitle } from "../utils/laneLabels";
 import type { LiveCanvasLane, LiveCanvasSeries } from "./liveCanvas";
 
@@ -26,6 +26,7 @@ export function buildLiveLanes(state: LiveLayoutSettings, names: readonly string
       // yaml の信号は状態名がなくても空の表を持つので、空なら状態名なしとする（重ね表示で状態の系列を選び違えないため）
       modeMapping: Object.keys(state.modeMapping[sig] ?? {}).length ? state.modeMapping[sig] : undefined,
       sig, color: set.color, label: state.showSignalNames ? signalTitle(sig, active, set, state) : "",
+      unit: getDisplayUnit(sig, state.unitMapping, state.modeMapping, state.valueDisplayMode),
       conv: getDisplayConversion(sig, state.lsbMapping, state.offsetMapping, state.valueDisplayMode),
       yMin: set.yAuto ? null : raw && conv.lsb < 0 ? max : min,
       yMax: set.yAuto ? null : raw && conv.lsb < 0 ? min : max,

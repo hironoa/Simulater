@@ -18,11 +18,11 @@
 
 | 項目 | 内容 |
 | --- | --- |
-| ビルド元 | `c738b98`（テスト CSV 再生で、すでに監視している変数（`s_cnt`）と同じ変数を指す CSV の列（`sensor.c/s_cnt`）を別の信号として足さず、監視を置き換えて 1 行にする修正を、PR #70 までの main に足したもの。PR #71） |
-| ビルドした日 | 2026-11-20 |
-| ビルド方法 | この Windows PC で `tools\build_dist.bat`（WinLibs の MinGW-w64 gcc 16.2.0、x86_64、posix-seh、UCRT。`build.bat` の `CC=gcc`）を実行して作った |
+| ビルド元 | `sim.exe` は `c738b98`（PR #71）のまま。`sim_gui.html` だけ `a8f1ad7` のもの（ライブ実行中もマウスの位置の値を表示し、止まったら記録の全体を表示する変更。C のソースは変えていないので `sim.exe` は作り直していない） |
+| ビルドした日 | `sim.exe` は 2026-11-20、`sim_gui.html` は 2026-11-25 |
+| ビルド方法 | この Windows PC で `tools\build_dist.bat`（WinLibs の MinGW-w64 gcc 16.2.0、x86_64、posix-seh、UCRT。`build.bat` の `CC=gcc`）を実行して作った。`sim_gui.html` は Mac の `npm run build`（`gui/dist/sim_gui.html`）の写し |
 | 依存する DLL | Windows 標準のものだけ（KERNEL32、SHELL32、WS2_32、UCRT）。MinGW の DLL は要らない |
-| 確認 | 同じソースで、Windows の `tests\run_tests.bat`（`CC=gcc`、clang 18.1.8 を PATH に）928 件がすべて成功。GUI の `npx vitest run` 420 件と `npx tsc --noEmit` が成功し、模擬サーバ（`npm run mock`）で、監視中の `s_tick` と同じ変数の `drv.c/s_tick` を含むテスト CSV を再生しても、信号設定・計測表・変数モニタが `s_tick` の 1 行のままであることを確かめた。`sim.exe` は起動して使い方の表示が出ることだけを確かめた |
+| 確認 | 同じソースで、Windows の `tests\run_tests.bat`（`CC=gcc`、clang 18.1.8 を PATH に）928 件がすべて成功。GUI の `npx vitest run` 420 件と `npx tsc --noEmit` が成功し、模擬サーバ（`npm run mock`）で、監視中の `s_tick` と同じ変数の `drv.c/s_tick` を含むテスト CSV を再生しても、信号設定・計測表・変数モニタが `s_tick` の 1 行のままであることを確かめた。`sim.exe` は起動して使い方の表示が出ることだけを確かめた。`sim_gui.html` の差し替えでは、GUI の `npm test` 439 件と `npm run lint` が成功し、模擬サーバ（`npm run mock`）で、実行中の波形にマウスを置くと縦線・時刻・各信号の値が出ること、一時停止すると記録の全体（4,945 点）が表示されることを確かめた |
 
 普段の配布物は CI（GitHub Actions の `windows` ジョブの成果物 `sim-windows-x64`）が作ります。
 このフォルダは、CI を使えなかったときの代わりに置いたものです。ソースを変えても自動では作り直されないので、

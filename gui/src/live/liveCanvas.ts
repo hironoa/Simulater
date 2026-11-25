@@ -1,6 +1,6 @@
 import { FONT_MONO, RIGHT_AXIS_WIDTH, laneLabelTop, laneSplitNumber, signalLineType } from "../utils/laneLabels";
 import { fitLabel } from "../utils/fitLabel";
-import { getDarkerColor } from "../utils/helpers";
+import { formatPhysical, toPhysical, getDarkerColor } from "../utils/helpers";
 import type { AppState, SignalSetting } from "../types";
 import { getStateColor, type StateMapping } from "../utils/stateNames";
 import type { LiveRecord } from "./liveRecord";
@@ -26,6 +26,7 @@ export interface LiveCanvasSeries {
   lineWidth: number;
   lineType?: SignalSetting["lineType"];
   modeMapping?: StateMapping;
+  unit?: string;
 }
 
 export interface LiveCanvasLane {
@@ -229,6 +230,33 @@ export function traceStepLine(
   return segs;
 }
 
+export interface LiveHoverPoint { x: number; y: number }
+
+/** 階段表示と同じく、窓内で指定時刻以前の最後の標本を1回の二分探索で選ぶ。 */
+export function liveHoverData(
+  record: LiveRecord, lanes: readonly LiveCanvasLane[], start: number, end: number,
+  timeMs: number, periodMs: number, showCursorLabels: AppState["showCursorLabels"],
+) {
+  const steps = record.steps();
+  let lo = start, hi = end;
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1;
+    if (steps[mid] * periodMs <= timeMs) lo = mid + 1; else hi = mid;
+  }
+  const index = lo - 1;
+  if (index < start) return null;
+  const labels = lanes.map(lane => showCursorLabels === "off" ? [] : lane.series.flatMap((series, seriesIndex) => {
+    const raw = record.column(series.sig)?.[index];
+    if (raw === undefined || Number.isNaN(raw)) return [];
+    const physical = toPhysical(raw, series.conv);
+    let text = String(formatPhysical(physical, series.conv)) + (series.unit ? " " + series.unit : "");
+    const state = series.modeMapping?.[raw];
+    if (showCursorLabels === "full" && state !== undefined) text += ` : ${state}`;
+    return [{ seriesIndex, physical, text }];
+  }));
+  return { index, timeMs: steps[index] * periodMs, labels };
+}
+
 export interface LiveDrawResult { points: number; xMin: number; xMax: number; maxTickCharacters: number; maxRightTickCharacters: number }
 
 /**
@@ -239,6 +267,8 @@ export function drawLive(
   ctx: LiveCanvasContext, width: number, height: number, dpr: number,
   record: LiveRecord, lanes: readonly LiveCanvasLane[], n: number, periodMs: number, style: LiveCanvasStyle,
   showMode: AppState["showMode"] = "off",
+  hover?: LiveHoverPoint | null,
+  showCursorLabels: AppState["showCursorLabels"] = "full",
 ): LiveDrawResult {
   const { start, end } = record.window(n);
   const steps = record.steps();
@@ -249,6 +279,15 @@ export function drawLive(
   const plotW = plotR - plotL;
   const xSpan = xMax > xMin ? xMax - xMin : 1;
   const xOf = (step: number) => plotL + ((step * periodMs - xMin) / xSpan) * plotW;
+
+  // ホバーがなければ追加の標本探索・範囲走査は行わない。
+  const plotTop = hover && lanes.length ? Math.min(...lanes.map(lane => lane.top)) : 0;
+  const plotBottom = hover && lanes.length ? Math.max(...lanes.map(lane => lane.top + lane.height)) : 0;
+  const activeHover = hover && lanes.length && hover.x >= plotL && hover.x <= plotR && hover.y >= plotTop && hover.y <= plotBottom
+    ? hover : null;
+  const cursor = activeHover ? liveHoverData(record, lanes, start, end,
+    xMin + (activeHover.x - plotL) / plotW * xSpan, periodMs, showCursorLabels) : null;
+  const cursorLabels: { text: string; y: number; color: string }[][] = [];
 
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, width, height);
@@ -279,6 +318,13 @@ export function drawLive(
     // 範囲は軸と波形で使い回し、同期しない系列も 1 回だけ走査する。
     const ranges = lane.series.map((series, k) => perSeries && k > 0
       ? liveSeriesRange(record, series, start, end) : range);
+    if (cursor) {
+      cursorLabels[li] = cursor.labels[li].map(label => ({
+        text: label.text,
+        y: toY(ranges[label.seriesIndex])(label.physical),
+        color: lane.series[label.seriesIndex].color,
+      }));
+    }
     ctx.setLineDash([]);
     ctx.globalAlpha = 1;
     ctx.strokeStyle = style.axisColor;
@@ -417,5 +463,53 @@ export function drawLive(
       points += count;
     }
   });
+  if (cursor && activeHover) {
+    ctx.save();
+    ctx.globalAlpha = 1;
+    ctx.strokeStyle = style.axisColor;
+    ctx.lineWidth = 1;
+    ctx.setLineDash([3, 3]);
+    ctx.beginPath();
+    ctx.moveTo(activeHover.x, plotTop);
+    ctx.lineTo(activeHover.x, plotBottom);
+    ctx.stroke();
+    ctx.font = `11px ${FONT_MONO}`;
+    ctx.textAlign = "left";
+    ctx.textBaseline = "middle";
+    const background = style.dark ? "rgba(30, 41, 59, 0.9)" : "rgba(255, 255, 255, 0.9)";
+    const label = (text: string, y: number, color: string, centered = false) => {
+      const fitted = fitText(ctx, text, Math.max(0, plotW - 8));
+      const w = ctx.measureText(fitted).width + 8;
+      const wanted = centered ? activeHover.x - w / 2
+        : activeHover.x + 4 + w <= plotR ? activeHover.x + 4 : activeHover.x - 4 - w;
+      const x = Math.max(plotL, Math.min(plotR - w, wanted));
+      ctx.fillStyle = background;
+      ctx.fillRect(x, y - 7.5, w, 15);
+      ctx.fillStyle = color;
+      ctx.fillText(fitted, x + 4, y);
+    };
+    cursorLabels.forEach((labels, li) => {
+      const lane = lanes[li];
+      // ラベルだけをy順に並べ、前進・後退で衝突を避ける（記録は読み直さない）。
+      // 多数の系列では間隔を詰め、レーン内に収める。
+      labels.sort((a, b) => a.y - b.y);
+      const padding = Math.min(7.5, lane.height / 2);
+      const top = lane.top + padding, bottom = lane.top + lane.height - padding;
+      const gap = labels.length > 1 ? Math.min(15, (bottom - top) / (labels.length - 1)) : 0;
+      let previous = top - gap;
+      for (const item of labels) {
+        item.y = Math.max(previous + gap, Math.min(bottom, Math.max(top, item.y)));
+        previous = item.y;
+      }
+      let next = bottom + gap;
+      for (let i = labels.length - 1; i >= 0; i--) {
+        labels[i].y = Math.min(labels[i].y, next - gap);
+        next = labels[i].y;
+      }
+      for (const item of labels) label(item.text, item.y, style.dark ? item.color : getDarkerColor(item.color));
+    });
+    label(`${cursor.timeMs} ms`, plotBottom + 11.5, style.axisColor, true);
+    ctx.restore();
+  }
   return { points, xMin, xMax, maxTickCharacters, maxRightTickCharacters };
 }
