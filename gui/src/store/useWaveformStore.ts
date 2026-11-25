@@ -109,7 +109,7 @@ interface WaveformStore extends AppState {
   /** `samples` を記録に追記する。描画の更新は記録の revision を見て間引いて行う（ここでは状態を変えない）。 */
   appendSamples: (step0: number, names: readonly string[], rows: readonly (readonly unknown[])[]) => AppendResult;
   /** 記録の全区間を chartData に載せ、従来の Viewer で操作できるようにする。 */
-  commitLiveRecord: (options?: { windowSize?: number; record?: LiveRecord }) => void;
+  commitLiveRecord: (options?: { record?: LiveRecord }) => void;
   /** 監視変数の信号設定を用意する。既存の checked は保持する。 */
   ensureLiveSignals: (names: readonly string[], plotted: ReadonlySet<string>) => void;
 
@@ -488,10 +488,7 @@ export const useWaveformStore = create<WaveformStore>((set, get) => ({
     const names = record.names;
     const chartData = record.toChartData(names);
     const len = chartData.steps.length;
-    const win = options?.windowSize ? Math.max(2, options.windowSize) : 0;
-    const zoomRange = win && len > 1 && win < len
-      ? { start: ((len - win) / (len - 1)) * 100, end: 100, startValue: undefined, endValue: undefined }
-      : { start: 0, end: 100, startValue: undefined, endValue: undefined };
+    const zoomRange = { start: 0, end: 100, startValue: undefined, endValue: undefined };
     get().ensureLiveSignals(names, new Set(names.filter((n) => state.signalSettings[n]?.checked ?? true)));
     set({
       chartData,

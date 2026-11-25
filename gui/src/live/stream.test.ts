@@ -1299,10 +1299,10 @@ describe("useWaveformStore.appendSamples", () => {
     expect(res.appended).toBe(2);
     expect(liveRecord.latest("s")).toBe(2);
     useWaveformStore.getState().appendSamples(2, ["s"], [[3], [4], [5]]);
-    useWaveformStore.getState().commitLiveRecord({ windowSize: 3 });
+    useWaveformStore.getState().commitLiveRecord();
     expect(useWaveformStore.getState().chartData?.seriesMap.s).toEqual([1, 2, 3, 4, 5]);
-    // 一時停止した直後は、直前まで見ていた直近の窓（3 点）を表示する
-    expect(useWaveformStore.getState().zoomRange).toMatchObject({ start: 50, end: 100 });
+    // 一時停止した直後は、記録の全区間を表示する
+    expect(useWaveformStore.getState().zoomRange).toEqual({ start: 0, end: 100, startValue: undefined, endValue: undefined });
     liveRecord.clear();
   });
 

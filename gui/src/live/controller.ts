@@ -207,7 +207,7 @@ export function createLiveController(deps: LiveControllerDeps = {}) {
   function commit() {
     if (commitTimer) { clearTimeout(commitTimer); commitTimer = null; }
     if (!record.length) return;
-    waveform.getState().commitLiveRecord({ windowSize: store.getState().windowSize, record });
+    waveform.getState().commitLiveRecord({ record });
   }
 
   function scheduleCommit() {

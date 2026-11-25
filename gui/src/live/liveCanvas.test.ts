@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { niceTicks, formatTick, formatTicks, laneRange, fitText, traceStepLine, drawLive, type LiveCanvasContext, type LiveCanvasLane } from "./liveCanvas";
+import { niceTicks, formatTick, formatTicks, laneRange, fitText, traceStepLine, drawLive, liveHoverData, type LiveCanvasContext, type LiveCanvasLane } from "./liveCanvas";
 import { rightAxisWidth, rightMargin, visibleRightAxes, leftMargin, maxTitleWidth, truncateTitle } from "../utils/laneLabels";
 import { fitLabel } from "../utils/fitLabel";
 import { getStateColor } from "../utils/stateNames";
@@ -119,6 +119,41 @@ describe("traceStepLine", () => {
     const c = rec();
     traceStepLine(c, Float64Array.from([0, 1, 2]), Float64Array.from([1, 2, 3]), 1, 2, (s) => s * 10, (v) => v);
     expect(c.ops).toEqual(["M10,2", "L10,2"]);
+  });
+});
+
+describe("liveHoverData", () => {
+  const lanes: LiveCanvasLane[] = [{ top: 10, height: 100, series: [
+    { sig: "a", label: "a", color: "#f00", conv: { lsb: 0.1, offset: 1 }, unit: "V",
+      yMin: null, yMax: null, lineWidth: 1, modeMapping: { 2: "運転" } },
+    { sig: "missing", label: "missing", color: "#00f", conv: id, yMin: null, yMax: null, lineWidth: 1 },
+  ] }];
+  const record = () => {
+    const r = new LiveRecord();
+    r.append(10, ["a", "missing"], [[1, NaN], [2, NaN], [3, NaN], [4, NaN]]);
+    return r;
+  };
+  it.each([[55, 1], [57, 1], [60, 2]])("時刻%sでは、それ以前の最も近い標本%sを選ぶ", (time, index) => {
+    expect(liveHoverData(record(), lanes, 1, 4, time, 5, "full")).toMatchObject({ index, timeMs: (10 + index) * 5 });
+  });
+  it("窓より前と空の窓では標本を選ばない", () => {
+    expect(liveHoverData(record(), lanes, 1, 4, 54, 5, "full")).toBeNull();
+    expect(liveHoverData(record(), lanes, 2, 2, 60, 5, "full")).toBeNull();
+  });
+  it.each([["off", []], ["value-only", ["1.2 V"]], ["full", ["1.2 V : 運転"]]] as const)(
+    "%s: 物理値・単位・状態名を既存書式で表示し、NaNは除く", (mode, texts) => {
+      const result = liveHoverData(record(), lanes, 0, 4, 55, 5, mode)!;
+      expect(result.labels[0].map(label => label.text)).toEqual(texts);
+      if (mode !== "off") expect(result.labels[0][0]).toMatchObject({ physical: 1.2, seriesIndex: 0 });
+    });
+  it("変換による浮動小数の誤差はformatPhysicalで丸める", () => {
+    const r = new LiveRecord(); r.append(0, ["a"], [[3]]);
+    const lane = { ...lanes[0], series: [{ ...lanes[0].series[0], conv: { lsb: 0.1, offset: 0 } }] };
+    expect(liveHoverData(r, [lane], 0, 1, 0, 1, "full")!.labels[0][0].text).toBe("0.3 V");
+  });
+  it("未定義の状態名は付けず、単位がなければ空白も付けない", () => {
+    const lane = { ...lanes[0], series: [{ ...lanes[0].series[0], conv: id, unit: undefined }] };
+    expect(liveHoverData(record(), [lane], 0, 4, 50, 5, "full")!.labels[0][0].text).toBe("1");
   });
 });
 
@@ -449,6 +484,62 @@ describe("drawLive", () => {
     expect(result.maxRightTickCharacters).toBe(4);
     expect(lineSpans(calls)[2]).toEqual({ min: 10, max: 110 });
     expect(drawLive(ctx, 600, 200, 1, r, [l], 2, 1, { ...style, rightAxes: 0 }).maxRightTickCharacters).toBe(0);
+  });
+
+  it.each([false, true])("マウスのxに全レーンを貫く縦線と時刻・値を描く（dark=%s）", dark => {
+    const { ctx, calls, paints } = fake();
+    const lower = { ...lane("a"), top: 140 };
+    // レーン間の隙間に置き、標本のx（150）と異なる位置で確認する。
+    drawLive(ctx, 600, 280, 2, states(), [lane("a"), lower], 5, 5, { ...style, dark }, "off", { x: 200, y: 125 });
+    expect(calls).toContain("moveTo(200,10)");
+    expect(calls).toContain("lineTo(200,240)");
+    expect(paints.filter(p => p.text === "0" && p.font.startsWith("11px"))).toHaveLength(2);
+    expect(paints.find(p => p.text === "0 ms")).toMatchObject({ y: 251.5, color: style.axisColor });
+    const label = paints.find(p => p.text === "0" && p.font.startsWith("11px"))!;
+    expect(label).toMatchObject({ x: 208, color: dark ? "#f00" : getDarkerColor("#f00") });
+    expect(calls.some(c => c.startsWith("fillRect(204,"))).toBe(true);
+  });
+  it("offでは縦線と時刻だけを描く", () => {
+    const { ctx, paints } = fake();
+    drawLive(ctx, 600, 200, 1, states(), [lane("a")], 5, 5, style, "off", { x: 200, y: 50 }, "off");
+    expect(paints.filter(p => p.font.startsWith("11px")).map(p => p.text)).toEqual(["0 ms"]);
+  });
+  it.each([{ x: 149, y: 50 }, { x: 581, y: 50 }, { x: 200, y: 9 }, { x: 200, y: 111 }])(
+    "波形領域外%sではホバーの線も文字も描かない", hover => {
+      const baseline = fake(), actual = fake();
+      drawLive(baseline.ctx, 600, 200, 1, states(), [lane("a")], 5, 5, style);
+      drawLive(actual.ctx, 600, 200, 1, states(), [lane("a")], 5, 5, style, "off", hover);
+      expect(actual.calls).toEqual(baseline.calls);
+    });
+  it("窓が空ならホバーを描かず、標本のない右側でも最後の値を保つ", () => {
+    const empty = fake();
+    drawLive(empty.ctx, 600, 200, 1, new LiveRecord(), [lane("a")], 5, 5, style, "off", { x: 400, y: 50 });
+    expect(empty.paints.some(p => p.font.startsWith("11px"))).toBe(false);
+    const { ctx, paints } = fake();
+    drawLive(ctx, 600, 200, 1, states([0, 1]), [lane("a")], 5, 5, style, "off", { x: 580, y: 50 });
+    expect(paints.filter(p => p.font.startsWith("11px")).map(p => p.text)).toEqual(["1", "5 ms"]);
+  });
+  it("重なるラベルをレーン内でずらし、右端では縦線の左に置く", () => {
+    const { ctx, paints } = fake();
+    const l: LiveCanvasLane = { ...lane("a"), series: [lane("a").series[0], { ...lane("a").series[0], sig: "b" }] };
+    const r = new LiveRecord(); r.append(0, ["a", "b"], [[1, 1], [1, 1]]);
+    drawLive(ctx, 600, 200, 1, r, [l], 2, 5, style, "off", { x: 579, y: 50 });
+    const labels = paints.filter(p => p.font.startsWith("11px") && p.text === "1");
+    expect(labels).toHaveLength(2);
+    expect(Math.abs(labels[0].y - labels[1].y)).toBeGreaterThanOrEqual(15);
+    expect(labels.every(p => p.y >= 17.5 && p.y <= 102.5 && p.x + 6 <= 575)).toBe(true);
+  });
+  it("非同期の各系列の縦軸でホバーのyを変換する", () => {
+    const { ctx, paints } = fake();
+    const l: LiveCanvasLane = { ...lane("a"), syncRange: false, series: [
+      { ...lane("a").series[0], yMin: 0, yMax: 10 },
+      { ...lane("b").series[0], yMin: 100, yMax: 200 },
+    ] };
+    const r = new LiveRecord(); r.append(0, ["a", "b"], [[2, 180], [2, 180]]);
+    drawLive(ctx, 600, 200, 1, r, [l], 2, 1, style, "off", { x: 200, y: 50 });
+    const labels = paints.filter(p => p.font.startsWith("11px") && !p.text.endsWith("ms"));
+    expect(labels.find(p => p.text === "2")?.y).toBeCloseTo(90);
+    expect(labels.find(p => p.text === "180")?.y).toBeCloseTo(30);
   });
 
   it("記録が空でも落ちない", () => {

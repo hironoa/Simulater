@@ -3,12 +3,12 @@ import { useShallow } from "zustand/react/shallow";
 import { useWaveformStore } from "../../store/useWaveformStore";
 import { useLiveStore } from "../../live/liveStore";
 import { liveRecord } from "../../live/liveRecord";
-import { drawLive } from "../../live/liveCanvas";
+import { drawLive, type LiveHoverPoint } from "../../live/liveCanvas";
 import { leftMargin, rightMargin, rightAxisWidth, visibleRightAxes } from "../../utils/laneLabels";
 import { buildLiveLanes, fitLiveLabels } from "../../live/liveLayout";
 import { useCompareView } from "../../hooks/useCompareView";
 
-/** 描画の上限（fps）。samples は約 50ms ごとに届く。描画は記録が変わったときだけ行う。 */
+/** 描画の上限（fps）。samples は約 50ms ごとに届く。描画は記録・構成・ホバー位置が変わったときに行う。 */
 const MAX_FPS = 30;
 
 export interface LiveDrawStats { fps: number; lastDrawMs: number; points: number }
@@ -20,17 +20,18 @@ export interface LiveDrawStats { fps: number; lastDrawMs: number; points: number
 export function LiveChart() {
   const ref = useRef<HTMLCanvasElement>(null);
   const lastRev = useRef(-1);
+  const hover = useRef<LiveHoverPoint | null>(null);
   const [stats, setStats] = useState<LiveDrawStats>({ fps: 0, lastDrawMs: 0, points: 0 });
   const { windowSize, periodMs } = useLiveStore(useShallow((s) => ({
     windowSize: s.windowSize, periodMs: s.sim.periodMs,
   })));
   const state = useWaveformStore(useShallow(s => ({
-    modeMapping: s.modeMapping, showMode: s.showMode, unitMapping: s.unitMapping, showSignalNames: s.showSignalNames,
+    showCursorLabels: s.showCursorLabels, modeMapping: s.modeMapping, showMode: s.showMode, unitMapping: s.unitMapping, showSignalNames: s.showSignalNames,
     signalSettings: s.signalSettings, theme: s.theme, lsbMapping: s.lsbMapping, offsetMapping: s.offsetMapping,
     valueDisplayMode: s.valueDisplayMode, showAlias: s.showAlias, signalGroups: s.signalGroups,
     unassignedSignals: s.unassignedSignals, unassignedGroupConfig: s.unassignedGroupConfig, layoutMode: s.layoutMode,
   })));
-  const { theme, showMode } = state;
+  const { theme, showMode, showCursorLabels } = state;
   const view = useCompareView();
   const names = useSyncExternalStore(liveRecord.subscribeNames, liveRecord.getNames);
   const [size, setSize] = useState({ w: 0, h: 0 });
@@ -56,8 +57,8 @@ export function LiveChart() {
   const rightTickCharacters = useRef(0);
   const layoutRef = useRef(layout);
   layoutRef.current = layout;
-  const paramsRef = useRef({ windowSize, periodMs, theme, size, showMode, margins, showSignalNames: state.showSignalNames });
-  paramsRef.current = { windowSize, periodMs, theme, size, showMode, margins, showSignalNames: state.showSignalNames };
+  const paramsRef = useRef({ windowSize, periodMs, theme, size, showMode, showCursorLabels, margins, showSignalNames: state.showSignalNames });
+  paramsRef.current = { windowSize, periodMs, theme, size, showMode, showCursorLabels, margins, showSignalNames: state.showSignalNames };
 
   // 構成（レーン・テーマ・大きさ）が変わったら必ず描き直す
   useEffect(() => { lastRev.current = -1; tickCharacters.current = 0; rightTickCharacters.current = 0; }, [layout, theme, showMode, size.w, size.h]);
@@ -97,7 +98,7 @@ export function LiveChart() {
       lastRev.current = liveRecord.revision;
       lastDraw = now;
       const t0 = performance.now();
-      const { windowSize: n, periodMs: p, theme: th, showMode: mode, margins: m, showSignalNames } = paramsRef.current;
+      const { windowSize: n, periodMs: p, theme: th, showMode: mode, showCursorLabels: cursorLabels, margins: m, showSignalNames } = paramsRef.current;
       const dark = th === "dark";
       const axisWidth = rightAxisWidth(rightTickCharacters.current);
       const rightAxes = visibleRightAxes(m.rightAxes, axisWidth, w);
@@ -110,7 +111,7 @@ export function LiveChart() {
         right: rightMargin(rightAxes, rightTickCharacters.current),
         rightAxes,
         rightAxisWidth: axisWidth,
-      }, mode);
+      }, mode, hover.current, cursorLabels);
       if (res.maxTickCharacters > tickCharacters.current) {
         tickCharacters.current = res.maxTickCharacters;
         lastRev.current = -1;
@@ -133,7 +134,13 @@ export function LiveChart() {
 
   return (
     <div className="relative w-full h-full">
-      <canvas ref={ref} className="block w-full h-full rounded bg-white dark:bg-slate-900" />
+      <canvas ref={ref} className="block w-full h-full rounded bg-white dark:bg-slate-900"
+        onPointerMove={event => {
+          const bounds = event.currentTarget.getBoundingClientRect();
+          hover.current = { x: event.clientX - bounds.left, y: event.clientY - bounds.top };
+          lastRev.current = -1;
+        }}
+        onPointerLeave={() => { hover.current = null; lastRev.current = -1; }} />
       {layout.length === 0 && (
         <div className="absolute inset-0 flex items-center justify-center text-sm text-gray-400 pointer-events-none">
           左の信号設定でチェックした信号が、実行中ここに流れます
