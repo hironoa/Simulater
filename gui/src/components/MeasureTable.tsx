@@ -196,7 +196,7 @@ export function MeasureTable({ id = "measure-table", forceTransposed }: { id?: s
     if (label) {
       return <span className="text-gray-400 dark:text-gray-400">— ({label})</span>;
     }
-    let rawVal = chartData.seriesMap[sig][index];
+    let rawVal = chartData.seriesMap[sig]?.[index];
     if (rawVal === null || rawVal === undefined) return "-";
 
     const conv = getDisplayConversion(sig, lsbMapping, offsetMapping, valueDisplayMode);

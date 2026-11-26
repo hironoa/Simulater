@@ -93,18 +93,15 @@ export function SortableSignalItem({ id, sigName }: { id: string; sigName: strin
       showAlias: state.showAlias
     })));
   const setting = signalSettings[sigName];
-  if (!setting) return null;
-
-  const isHovered = hoveredSignal === sigName;
-  const displayName = (showAlias && setting.alias) || displaySignalName(sigName, names);
 
   const autoRange = useMemo(() => {
-    if (!chartData || !chartData.seriesMap[sigName]) return { min: 0, max: 1 };
+    if (!setting || !chartData || !chartData.seriesMap[sigName]) return { min: 0, max: 1 };
     const undefinedVals = detectUndefinedValue(chartData.seriesMap[sigName], undefinedMapping[sigName]);
     return calculateAutoYRange(sigName, chartData.seriesMap[sigName], lsbMapping[sigName], offsetMapping[sigName], undefinedVals || [], setting.yBreak !== false);
-  }, [chartData, sigName, lsbMapping, offsetMapping, undefinedMapping, setting.yBreak]);
+  }, [chartData, sigName, lsbMapping, offsetMapping, undefinedMapping, setting]);
 
   const groupAutoRange = useMemo(() => {
+    if (!setting) return autoRange;
     let targetSignals: string[] = [];
     const group = signalGroups.find((g) => g.signals.includes(sigName));
 
@@ -157,6 +154,11 @@ export function SortableSignalItem({ id, sigName }: { id: string; sigName: strin
 
     return { min: finalMin, max: finalMax, breakStart, breakEnd };
   }, [autoRange, chartData, lsbMapping, offsetMapping, undefinedMapping, signalGroups, unassignedSignals, unassignedGroupConfig, sigName, signalSettings, setting]);
+
+  if (!setting) return null;
+
+  const isHovered = hoveredSignal === sigName;
+  const displayName = (showAlias && setting.alias) || displaySignalName(sigName, names);
 
   return (
     <li ref={setNodeRef} style={style} className={cn("border-b border-gray-100 dark:border-slate-700 bg-white dark:bg-slate-800 transition-colors", isHovered ? "bg-blue-50/80 dark:bg-slate-700" : "")} onMouseEnter={() => setHoveredSignal(sigName)} onMouseLeave={() => setHoveredSignal(null)}>
