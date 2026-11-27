@@ -629,7 +629,8 @@ export function Chart() {
   const containerWidth = containerSize.width;
 
   const activeSignals = useMemo(() => {
-    return activeDisplaySignals(view.signals, view.settings, view.visible);
+    return activeDisplaySignals(view.signals, view.settings, view.visible)
+      .filter((sig) => !!view.chartData?.seriesMap[sig]);
   }, [view]);
 
   // Handle click for cursor addition

@@ -54,9 +54,10 @@ export function buildChartOptions(
 ) {
   const rangeCache = new Map<string, (number | null)[]>();
   const rangeData = (sig: string) => {
-    if (!comparison?.data.seriesMap[sig]) return chartData.seriesMap[sig];
+    const base = chartData.seriesMap[sig] ?? [];
+    if (!comparison?.data.seriesMap[sig]) return base;
     if (!rangeCache.has(sig)) rangeCache.set(sig,
-      [...chartData.seriesMap[sig], ...comparison.data.seriesMap[sig]]);
+      [...base, ...comparison.data.seriesMap[sig]]);
     return rangeCache.get(sig)!;
   };
   const hiddenRanges = (sig: string) =>
@@ -88,6 +89,7 @@ export function buildChartOptions(
   );
 
   // === Layout & Config Calculation ===
+  activeSignals = activeSignals.filter((sig) => !!chartData.seriesMap[sig]);
   const displayBlocks = buildDisplayBlocks(activeSignals, signalGroups, unassignedSignals, unassignedGroupConfig);
   const fixedTopMarginPx = 35;
   const blockLayout = layoutBlocks(displayBlocks, signalSettings, layoutMode, containerHeight);
@@ -371,7 +373,8 @@ export function buildChartOptions(
   activeSignals.forEach((sig, i) => {
     const set = signalSettings[sig];
     const gridIdx = sigToGridIndex[sig];
-    if (gridIdx === undefined) return;
+    const rawSeries = chartData.seriesMap[sig];
+    if (gridIdx === undefined || !rawSeries) return;
 
     const color = set.color;
     const conv = displayConversion(sig);
@@ -379,8 +382,8 @@ export function buildChartOptions(
 
     let rawDataZOH: (number | null)[] = [];
     let lastRaw: number | null = null;
-    for (let i = 0; i < chartData.seriesMap[sig].length; i++) {
-      let v = chartData.seriesMap[sig][i];
+    for (let i = 0; i < rawSeries.length; i++) {
+      let v = rawSeries[i];
       if (i >= (chartData.sourceSampleCount ?? chartData.steps.length)) lastRaw = null;
       if (v !== null) lastRaw = v;
       rawDataZOH.push(lastRaw);
@@ -439,7 +442,7 @@ export function buildChartOptions(
     }
 
     let lastValForDisplay: number | null = null;
-    let displayData = chartData.seriesMap[sig].map((v, index) => {
+    let displayData = rawSeries.map((v, index) => {
       if (index >= (chartData.sourceSampleCount ?? chartData.steps.length)) return null;
       if (v !== null) {
         lastValForDisplay = toPhysical(v, conv);
